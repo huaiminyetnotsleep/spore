@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Spore</title>
+  <desc id="desc">Two paper planes duplicating in motion with sticky golden spore bubbles.</desc>
+  <defs>
+    <linearGradient id="background" x1="120" y1="52" x2="900" y2="970" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#123b76"/>
+      <stop offset="0.46" stop-color="#082554"/>
+      <stop offset="1" stop-color="#020d25"/>
+    </linearGradient>
+    <radialGradient id="backgroundGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(520 475) rotate(90) scale(420)">
+      <stop stop-color="#1c73c9" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#082454" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="trail" x1="128" y1="705" x2="564" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8fddff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#8fddff"/>
+      <stop offset="1" stop-color="#45a9f6" stop-opacity="0.1"/>
+    </linearGradient>
+    <linearGradient id="frontPlane" x1="422" y1="371" x2="764" y2="723" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d5ecff"/>
+    </linearGradient>
+    <linearGradient id="frontFold" x1="460" y1="576" x2="851" y2="243" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4898e3"/>
+      <stop offset="1" stop-color="#9ed7ff"/>
+    </linearGradient>
+    <linearGradient id="copyPlane" x1="199" y1="357" x2="511" y2="572" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c9e8ff"/>
+      <stop offset="1" stop-color="#71b3ec"/>
+    </linearGradient>
+    <linearGradient id="copyFold" x1="310" y1="435" x2="596" y2="253" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4387cd"/>
+      <stop offset="1" stop-color="#8fc9f8"/>
+    </linearGradient>
+    <radialGradient id="bubbleFill" cx="30%" cy="22%" r="82%">
+      <stop stop-color="#fffbd1"/>
+      <stop offset="0.22" stop-color="#fff176"/>
+      <stop offset="0.68" stop-color="#ffc928"/>
+      <stop offset="1" stop-color="#e99a08"/>
+    </radialGradient>
+    <filter id="planeGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="bubbleGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <g id="bubble">
+      <circle r="47" fill="#b97800" opacity="0.34" transform="translate(0 10)"/>
+      <circle r="47" fill="url(#bubbleFill)" stroke="#ffe36b" stroke-width="7"/>
+      <circle r="34" fill="#fff6a5" opacity="0.12"/>
+      <ellipse cx="-15" cy="-18" rx="15" ry="10" fill="#ffffff" opacity="0.86" transform="rotate(-25)"/>
+      <circle cx="20" cy="18" r="7" fill="#ffffff" opacity="0.26"/>
+    </g>
+    <g id="smallBubble">
+      <circle r="24" fill="#b97800" opacity="0.3" transform="translate(0 6)"/>
+      <circle r="24" fill="url(#bubbleFill)" stroke="#ffe36b" stroke-width="5"/>
+      <ellipse cx="-8" cy="-9" rx="8" ry="5" fill="#ffffff" opacity="0.82" transform="rotate(-25)"/>
+      <circle cx="10" cy="10" r="4" fill="#ffffff" opacity="0.24"/>
+    </g>
+    <g id="bubbleCluster">
+      <path d="M-62 25C-35 61 35 64 68 20" fill="none" stroke="#d98e09" stroke-linecap="round" stroke-width="14" opacity="0.5"/>
+      <use href="#bubble"/>
+      <g transform="translate(-47 -13) scale(0.63)"><use href="#smallBubble"/></g>
+      <g transform="translate(-28 43) scale(0.62)"><use href="#smallBubble"/></g>
+      <g transform="translate(36 43) scale(0.72)"><use href="#smallBubble"/></g>
+      <g transform="translate(55 -8) scale(0.52)"><use href="#smallBubble"/></g>
+      <g transform="translate(28 -50) scale(0.45)"><use href="#smallBubble"/></g>
+      <g transform="translate(-8 -58) scale(0.34)"><use href="#smallBubble"/></g>
+      <g transform="translate(65 25) scale(0.3)"><use href="#smallBubble"/></g>
+    </g>
+  </defs>
+
+  <rect width="1024" height="1024" rx="220" fill="url(#background)"/>
+  <circle cx="520" cy="475" r="430" fill="url(#backgroundGlow)"/>
+
+  <!-- Copying motion behind the planes. -->
+  <path d="M153 740C101 637 142 523 246 447c89-65 186-77 279-50" fill="none" stroke="#62c8ff" stroke-linecap="round" stroke-width="22" opacity="0.25" filter="url(#planeGlow)"/>
+  <path d="M153 740C101 637 142 523 246 447c89-65 186-77 279-50" fill="none" stroke="url(#trail)" stroke-linecap="round" stroke-width="11" opacity="0.9"/>
+  <path d="M188 777C145 686 175 590 252 526" fill="none" stroke="#d8f4ff" stroke-linecap="round" stroke-width="5" opacity="0.46"/>
+  <g fill="#ffd33d" filter="url(#bubbleGlow)">
+    <circle cx="186" cy="711" r="9"/>
+    <circle cx="226" cy="758" r="7"/>
+    <circle cx="270" cy="786" r="11"/>
+    <circle cx="317" cy="791" r="6"/>
+  </g>
+
+  <!-- The translucent copy. -->
+  <g opacity="0.82" filter="url(#planeGlow)">
+    <path d="M150 444 594 224 451 604 358 505 287 565 304 470Z" fill="#061a3b" opacity="0.58" transform="translate(0 12)"/>
+    <path d="M150 444 594 224 451 604 358 505 287 565 304 470Z" fill="url(#copyPlane)"/>
+    <path d="m304 470 290-246-239 293Z" fill="url(#copyFold)"/>
+    <path d="m358 505 93 99-23-128Z" fill="#b7ddfb" opacity="0.9"/>
+    <path d="m150 444 154 26 290-246-444 220Z" fill="#ffffff" opacity="0.22"/>
+  </g>
+
+  <!-- The primary plane. -->
+  <g filter="url(#planeGlow)">
+    <path d="M347 501 880 219 703 814 574 648 462 720 484 566Z" fill="#04152f" opacity="0.6" transform="translate(0 17)"/>
+    <path d="M347 501 880 219 703 814 574 648 462 720 484 566Z" fill="url(#frontPlane)"/>
+    <path d="m484 566 396-347-322 429Z" fill="url(#frontFold)"/>
+    <path d="m574 648 129 166-36-213Z" fill="#a8d9ff" opacity="0.94"/>
+    <path d="m347 501 137 65 396-347-533 282Z" fill="#ffffff" opacity="0.2"/>
+    <path d="m462 720 22-154 90 82Z" fill="#c3e7ff"/>
+  </g>
+
+  <!-- Detailed golden spore colonies stuck to both planes. -->
+  <g filter="url(#bubbleGlow)">
+    <g transform="translate(329 405) scale(0.74) rotate(-12)"><use href="#bubbleCluster"/></g>
+    <g transform="translate(392 427) scale(0.42) rotate(17)"><use href="#bubbleCluster"/></g>
+    <g transform="translate(548 463) scale(0.9) rotate(-9)"><use href="#bubbleCluster"/></g>
+    <g transform="translate(629 505) scale(0.48) rotate(14)"><use href="#bubbleCluster"/></g>
+    <g transform="translate(731 652) scale(0.72) rotate(-15)"><use href="#bubbleCluster"/></g>
+  </g>
+
+  <circle cx="347" cy="501" r="9" fill="#ffffff" opacity="0.9"/>
+</svg>

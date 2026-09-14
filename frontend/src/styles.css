@@ -1,0 +1,1051 @@
+:root {
+  color: #1f1f1f;
+  background: #f5f7fa;
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* 应用壳锁定视口高度：侧边栏与头部固定，仅右侧内容区滚动 */
+.app-shell {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-sider {
+  height: 100vh;
+  overflow-y: auto;
+  border-inline-end: 1px solid #f0f0f0;
+}
+
+.app-sider.ant-layout-sider-collapsed {
+  border-inline-end: 0;
+}
+
+.app-sider.ant-layout-sider-collapsed .brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app-sider.ant-layout-sider-collapsed .brand > span:last-child {
+  display: none;
+}
+
+/* 右侧主区（头部 + 内容）：内容区占满剩余高度并自身滚动 */
+.app-main {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  height: 64px;
+  padding: 0 20px;
+  color: #1677ff;
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.brand-mark {
+  display: block;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 7px;
+}
+
+.app-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 64px;
+  min-width: 0;
+  padding: 0 24px;
+  background: #fff;
+  border-block-end: 1px solid #f0f0f0;
+}
+
+.app-header-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header 内的页面路径面包屑：与原标题同级视觉（加粗），超宽省略 */
+.app-header-breadcrumb {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.app-header-breadcrumb a {
+  font-weight: 600;
+}
+
+.mobile-nav-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-inline-end: 8px;
+  padding: 0;
+  color: #1f1f1f;
+  background: transparent;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mobile-nav-toggle .anticon {
+  font-size: 12px;
+}
+
+.mobile-nav-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: rgb(0 0 0 / 35%);
+  border: 0;
+  cursor: pointer;
+}
+
+.app-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.account-avatar-trigger {
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.nav-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: inherit;
+}
+
+.page-content {
+  flex: 1;
+  width: min(1440px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 24px 16px;
+}
+
+.page-card {
+  max-width: 760px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 页面分区卡（shared/SectionCard）：铺满内容区域的分组底板 */
+.section-card {
+  width: 100%;
+  max-width: none;
+}
+
+/* 运行设置页：外层 Space 包装项占满宽度 */
+.settings-page > .ant-space-item {
+  width: 100%;
+}
+
+/* 表单字段网格：桌面多列利用宽度，窄屏自动单列 */
+.settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 24px;
+  width: 100%;
+}
+
+.settings-margin-top-12 {
+  margin-top: 12px;
+}
+
+/* 传输并发调试的生效说明：信息保留，字号缩小 */
+.settings-note {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 表单字段的元信息行（当前生效/当前配置/环境来源）：紧凑小字，格式统一 */
+.settings-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.settings-meta .ant-tag {
+  margin-inline-end: 0;
+  font-size: 12px;
+  line-height: 18px;
+  padding-inline: 5px;
+}
+
+/* 保存操作行：桌面右对齐，窄屏按钮全宽 */
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 底部状态区：生效状态 + 受控重启 双列，窄屏单列 */
+.settings-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.settings-restart-list {
+  margin: 0;
+  padding-inline-start: 18px;
+}
+
+@media (max-width: 575px) {
+  .settings-actions .ant-btn {
+    width: 100%;
+  }
+
+  .settings-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.layout-full-width {
+  width: 100%;
+}
+
+.layout-margin-0 {
+  margin: 0;
+}
+
+/* 总览三块标题统一采用紧凑字号，减少首屏垂直占用。 */
+.overview-page .page-card .ant-card-head {
+  min-height: 48px;
+  padding: 0 16px;
+}
+
+.overview-page .page-card .ant-card-head-title h3 {
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.layout-margin-top-0 {
+  margin-top: 0;
+}
+
+.layout-margin-top-8 {
+  margin-top: 8px;
+}
+
+.layout-margin-top-12 {
+  margin-top: 12px;
+}
+
+.layout-margin-top-16 {
+  margin-top: 16px;
+}
+
+.layout-margin-bottom-0 {
+  margin-bottom: 0;
+}
+
+.layout-margin-bottom-12 {
+  margin-bottom: 12px;
+}
+
+.layout-margin-block-end-0 {
+  margin-block-end: 0;
+}
+
+.layout-margin-block-start-12 {
+  margin-block-start: 12px;
+}
+
+.layout-margin-inline-start-8 {
+  margin-inline-start: 8px;
+}
+
+.layout-max-width-320 {
+  max-width: 320px;
+}
+
+.layout-max-width-480 {
+  max-width: 480px;
+}
+
+.layout-max-width-520 {
+  max-width: 520px;
+}
+
+.field-width-90 {
+  width: 90px;
+}
+
+.field-width-110 {
+  width: 110px;
+}
+
+.field-width-120 {
+  width: 120px;
+}
+
+.field-width-140 {
+  width: 140px;
+}
+
+.field-width-160 {
+  width: 160px;
+}
+
+.field-width-200 {
+  width: 200px;
+}
+
+.field-width-240 {
+  width: 240px;
+}
+
+.field-width-full {
+  width: 100%;
+}
+
+/* 消息记录来源列的完整消息链接：长 URL 在表格内自动换行不撑破布局 */
+.source-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* 审计页展开行：变更前后 JSON 等宽展示，超宽横向滚动不撑破表格 */
+.audit-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.audit-detail > div {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.audit-json {
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+}
+
+.page-card .ant-typography h2,
+.page-card h2 {
+  margin-top: 16px;
+  margin-bottom: 12px;
+}
+
+.page-loading {
+  display: block;
+  margin-top: 20vh;
+  text-align: center;
+}
+
+/* 页内区块（如全时段快照）加载态：局部居中，不占整屏 */
+.section-loading {
+  display: block;
+  margin: 32px auto;
+}
+
+/* 总览系统监控：桌面端两列，窄屏自动堆叠。 */
+.system-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  width: 100%;
+}
+
+/* 图表区块网格：宽屏双列，窄屏由媒体查询切为单列 */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+/* 区块内单个图表面板（无卡片底板，外壳由页面层 PageCard 承担） */
+.chart-panel {
+  min-width: 0;
+  overflow: visible;
+}
+
+.chart-panel__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chart-panel__title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chart-panel__title-content {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+}
+
+.chart-panel__title-content .ant-typography {
+  flex: 0 0 auto;
+}
+
+.chart-panel__desc--inline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.request-dc-cell {
+  white-space: nowrap;
+}
+
+/* 云盘下载页：目的地卡片列表（Radio.Group 容器转为纵向堆叠） */
+.cloud-dest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+/* 单个目的地卡片：浅底描边，内部纵向排布 */
+.cloud-dest-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+/* 卡片头：默认 Radio + 名称输入 + 操作按钮一行排布 */
+.cloud-dest-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.cloud-dest-card__head .ant-form-item {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+}
+
+.cloud-dest-card__head .ant-radio-wrapper {
+  flex: 0 0 auto;
+}
+
+.cloud-dest-card__actions {
+  flex: 0 0 auto;
+}
+
+/* options 键值对编辑器 */
+.cloud-options__label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cloud-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.cloud-option-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.cloud-option-row .ant-form-item {
+  margin: 0;
+}
+
+.cloud-option-row__key {
+  flex: 0 0 240px;
+}
+
+.cloud-option-row__value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 连通性测试的行内结果条 */
+.cloud-dest-test-result {
+  margin-block-start: 0;
+}
+
+/* 空状态引导：说明 + 添加按钮纵向排布 */
+.cloud-dest-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 8px 0;
+}
+
+/* 云盘配置备份：导入控件与候选元数据纵向排布。 */
+.cloud-backup-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cloud-backup-password {
+  width: min(320px, 100%);
+}
+
+.cloud-backup-metadata {
+  margin-top: 8px;
+}
+
+/* 请求列表：批量补存结果摘要的跳过清单 */
+.cloud-batch-summary-list {
+  margin: 0;
+  padding-inline-start: 18px;
+}
+
+/* 请求详情：云盘上传记录区块（Descriptions 下方的附表） */
+.cloud-uploads-table {
+  margin-top: 16px;
+}
+
+/* 远端完整路径可能很长：等宽展示且允许任意断行 */
+.cloud-path-cell {
+  overflow-wrap: anywhere;
+}
+
+.cloud-time-cell {
+  white-space: nowrap;
+}
+
+@media (max-width: 575px) {
+  .cloud-option-row {
+    flex-direction: column;
+  }
+
+  .cloud-option-row__key {
+    flex: none;
+    width: 100%;
+  }
+}
+
+.chart-panel__current-value-row {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 22px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.chart-panel__body {
+  min-width: 0;
+  margin-top: 12px;
+  /* G2 Tooltip 绝对定位在图表 DOM 内；overflow:auto 会把越过画布边缘的浮层裁掉。 */
+  overflow: visible;
+}
+
+.metric-grid--1 { grid-template-columns: minmax(0, 1fr); }
+.metric-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.metric-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.metric-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.metric-grid--5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.metric-grid--6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.metric-grid--7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.metric-grid--8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+
+/* 单行最大列数限制：超出的指标自动换行（快照区等窄容器场景） */
+.metric-grid--max-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.metric-grid--max-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.metric-grid--max-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.metric-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 12px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+}
+
+.metric-card__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgb(0 0 0 / 45%);
+  white-space: nowrap;
+}
+
+/* 标签前语义色圆点（替代原顶部色条：更轻量且不挤压数值区） */
+.metric-card__label::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1677ff;
+}
+
+.metric-card--success .metric-card__label::before {
+  background: #52c41a;
+}
+
+.metric-card--danger .metric-card__label::before {
+  background: #ff4d4f;
+}
+
+.metric-card--warning .metric-card__label::before {
+  background: #fa8c16;
+}
+
+.metric-card__value {
+  margin-top: 4px;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  color: rgb(0 0 0 / 88%);
+}
+
+.metric-card--success .metric-card__value {
+  color: #52c41a;
+}
+
+.metric-card--danger .metric-card__value {
+  color: #ff4d4f;
+}
+
+.metric-card--warning .metric-card__value {
+  color: #d46b08;
+}
+
+.metric-card__suffix {
+  margin-inline-start: 3px;
+  font-size: 14px;
+  font-weight: 400;
+  color: rgb(0 0 0 / 55%);
+}
+
+/* 分段式进度条：格子亮灭表达比例，避免动态内联宽度 */
+.metric-card__bar {
+  display: flex;
+  gap: 3px;
+  margin-top: 10px;
+}
+
+.metric-card__bar-cell {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #f0f0f0;
+}
+
+.metric-card__bar-cell--on {
+  background: #1677ff;
+}
+
+.metric-card--success .metric-card__bar-cell--on {
+  background: #52c41a;
+}
+
+.metric-card--danger .metric-card__bar-cell--on {
+  background: #ff4d4f;
+}
+
+.metric-card--warning .metric-card__bar-cell--on {
+  background: #fa8c16;
+}
+
+/* 多值行（如 成功/失败/未完成 合并卡）：等分铺满，标签弱化 + 语义色数值 */
+.metric-card__stats {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.metric-card__stats--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.metric-card__stats--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.metric-card__stats--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.metric-card__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metric-card__stat-label {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(0 0 0 / 45%);
+  white-space: nowrap;
+}
+
+.metric-card__stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  color: rgb(0 0 0 / 88%);
+}
+
+.metric-card__stat--success .metric-card__stat-value {
+  color: #52c41a;
+}
+
+.metric-card__stat--danger .metric-card__stat-value {
+  color: #ff4d4f;
+}
+
+.metric-card__stat--warning .metric-card__stat-value {
+  color: #d46b08;
+}
+
+.metric-card__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(0 0 0 / 45%);
+}
+
+/* 全时段快照：用户 / 频道加入 双面板（宽屏并排，窄屏自动换行堆叠） */
+.snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 16px;
+}
+
+.snapshot-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+}
+
+.snapshot-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(0 0 0 / 88%);
+}
+
+.snapshot-panel__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1677ff;
+}
+
+.snapshot-panel__dot--green {
+  background: #52c41a;
+}
+
+.snapshot-panel__meta {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: rgb(0 0 0 / 45%);
+  white-space: nowrap;
+}
+
+@media (max-width: 991px) {
+  .system-metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 指标卡窄屏降为 2 列（≥2 项时），单指标保持单列 */
+  .metric-grid--2,
+  .metric-grid--3,
+  .metric-grid--4,
+  .metric-grid--5,
+  .metric-grid--6,
+  .metric-grid--7,
+  .metric-grid--8,
+  .metric-grid--max-2,
+  .metric-grid--max-3,
+  .metric-grid--max-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snapshot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 575px) {
+  .metric-grid--2,
+  .metric-grid--3,
+  .metric-grid--4,
+  .metric-grid--5,
+  .metric-grid--6,
+  .metric-grid--7,
+  .metric-grid--8 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 总览状态一览：彩色状态卡，宽屏 4 列、窄屏 2 列；状态色走左侧色条 */
+.status-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.status-tile {
+  min-width: 0;
+}
+
+.status-tile .ant-card-body {
+  padding: 10px 14px;
+}
+
+.status-tile--ok {
+  border-left: 3px solid #52c41a;
+}
+
+.status-tile--warn {
+  border-left: 3px solid #fa8c16;
+}
+
+.status-tile--error {
+  border-left: 3px solid #ff4d4f;
+}
+
+.status-tile__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+}
+
+.status-tile__value {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.status-tile__value--compact {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.status-tile__meta {
+  font-size: 12px;
+}
+
+.status-tile__meta--warn {
+  color: #d46b08;
+}
+
+@media (max-width: 991px) {
+  .status-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 登录页（/admin/login）：独立于主布局的居中卡片，不渲染侧边栏/头部 */
+.login-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 12px;
+  padding: 16px;
+}
+
+.login-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-brand-mark {
+  display: block;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 16px;
+}
+
+.login-card {
+  width: min(380px, 100%);
+}
+
+.login-error {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.login-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.login-github-link {
+  display: inline-block;
+  margin-top: 8px;
+}
+
+@media (max-width: 991px) {
+  .app-sider {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 1001;
+    height: 100vh;
+    box-shadow: 4px 0 16px rgb(0 0 0 / 12%);
+  }
+
+  .mobile-nav-toggle {
+    display: inline-flex;
+  }
+
+  .app-header {
+    position: relative;
+    z-index: 1002;
+  }
+
+  .app-header,
+  .page-content {
+    margin-inline-start: 0;
+  }
+}
+
+@media (max-width: 575px) {
+  .page-content {
+    padding: 16px;
+  }
+
+  .app-header {
+    padding: 0 16px;
+  }
+}
+
+.stats-error-rate-tooltip {
+  min-width: 148px;
+  padding: 10px 12px;
+  color: rgb(0 0 0 / 88%);
+  background: rgb(255 255 255 / 96%);
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 12%);
+}
+
+.stats-error-rate-tooltip__title {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.stats-error-rate-tooltip__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stats-error-rate-tooltip__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.stats-error-rate-tooltip__value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.stats-error-rate-tooltip__item--ok {
+  color: #52c41a;
+}
+
+.stats-error-rate-tooltip__item--alert {
+  color: #ff4d4f;
+}
+
+/* KPI 指标卡栅格（shared/MetricGrid）：单行等宽（列数修饰类），窄屏才降列 */
+.metric-grid {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}

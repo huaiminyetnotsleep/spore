@@ -1,0 +1,63 @@
+# 构建并发布文档站点（VitePress）到 GitHub Pages。
+# main 的文档变更会自动部署；Pull Request 只构建校验，不修改 Pages。
+name: docs-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "public/**"
+      - ".github/workflows/docs-deploy.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "public/**"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: 构建文档
+        working-directory: docs
+        run: |
+          npm ci
+          npm run build
+
+      - name: 上传 Pages 构建产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: 配置 GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: 发布文档站点
+        id: deployment
+        uses: actions/deploy-pages@v4

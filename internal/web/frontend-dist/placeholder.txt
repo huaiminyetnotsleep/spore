@@ -1,0 +1,1 @@
+此文件仅用于确保未构建前端时 Go embed.FS 仍有可嵌入内容；正式构建会保留它并写入 index.html 与 assets/。

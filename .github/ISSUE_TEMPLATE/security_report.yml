@@ -1,0 +1,16 @@
+name: Security report
+description: 安全问题入口（请勿公开披露细节）
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请不要在公开 Issue 中提交漏洞细节、利用代码、Token、Session 或个人数据。
+        请关闭此页面，并通过 GitHub Security Advisories 的 Report a vulnerability 私下报告；如果入口不可用，请通过维护者 GitHub 个人页的私下联系方式报告。
+  - type: input
+    id: acknowledgement
+    attributes:
+      label: 确认
+      description: 请填写“我会通过私下渠道报告”，此 Issue 不用于提交漏洞细节。
+    validations:
+      required: true

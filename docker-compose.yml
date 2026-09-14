@@ -1,0 +1,51 @@
+# Spore 官方部署形态：仅运行 bot；大文件默认经 Bot 号 MTProto 直传（无需本
+# 文件之外的服务），bot-api profile 是可选的本地服务器备选路线（应急切换用，
+# 见 docs/guide/deployment.md §5）。
+# 公网 HTTPS 由 VPS 宿主机已有的 Caddy、Nginx 或其他反向代理负责。
+# 部署时推荐拉取 GHCR 镜像（docker compose pull）；本机源码构建仍可用 --build。
+# 首次部署前复制 .env.example 为 .env，并填写 Telegram 凭据与管理端域名。
+
+name: spore
+
+services:
+  bot:
+    build: .
+    # 部署时优先拉取 GHCR 镜像（docker compose pull，无需 clone/编译）；
+    # 本机验收仍可 docker compose up -d --build 从源码构建。详见 docs/guide/deployment.md §4。
+    image: ghcr.io/huaiminyetnotsleep/spore:latest
+    container_name: spore
+    env_file:
+      - .env
+    environment:
+      # 容器内需监听所有接口；ports 的宿主绑定限制为 127.0.0.1。
+      WEB_ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: spore-bot-api
+    # 镜像入口脚本只认环境变量（command 参数会被整体忽略，缺 env 即退出）：
+    # TELEGRAM_API_ID/TELEGRAM_API_HASH 必填，TELEGRAM_LOCAL 非空时附加 --local
+    # （大文件上限与本地文件直链的前提）。该服务只在 bigfile profile 中创建，
+    # 作为 MTProto 直传通道异常时的备选路线，默认部署不启动。
+    environment:
+      TELEGRAM_API_ID: ${TG_API_ID:?请在 .env 中设置 TG_API_ID}
+      TELEGRAM_API_HASH: ${TG_API_HASH:?请在 .env 中设置 TG_API_HASH}
+      TELEGRAM_LOCAL: "1"
+    expose:
+      - "8081"
+    volumes:
+      - ./bot-api-data:/var/lib/telegram-bot-api
+    restart: unless-stopped
+    profiles:
+      - bigfile

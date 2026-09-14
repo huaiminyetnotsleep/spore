@@ -1,0 +1,17 @@
+.git
+.claude
+.trellis
+.zcode
+.agents
+data
+bot-api-data
+node_modules
+frontend/dist
+frontend/test-results
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+spore-linux*
+docs

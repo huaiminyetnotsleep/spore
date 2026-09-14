@@ -1,0 +1,35 @@
+name: Bug report
+description: 报告可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请不要在 Issue 中粘贴 Token、Session、OAuth Secret、数据库或真实用户数据。
+        安全漏洞请阅读 SECURITY.md 并私下报告。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 请清楚描述发生了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 请提供最小复现步骤和使用的版本/commit。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 请提供操作系统、部署方式和相关版本，不要提供凭据。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志
+      description: 粘贴已删除凭据和个人数据的日志。
