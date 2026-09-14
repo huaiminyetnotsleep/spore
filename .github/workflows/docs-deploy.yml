@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: 设置 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -43,7 +43,7 @@ jobs:
           npm run build
 
       - name: 上传 Pages 构建产物
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.vitepress/dist
 
@@ -51,13 +51,16 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     permissions:
       pages: write
       id-token: write
     steps:
       - name: 配置 GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: 发布文档站点
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
