@@ -2,6 +2,19 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.5.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.4.0...v1.5.0) (2026-09-15)
+
+
+### Features
+
+* **web:** 服务版本行展示当前与最新版本，手动刷新 toast 提示 ([2110759](https://github.com/huaiminyetnotsleep/spore/commit/2110759729eefa3726305a941742adc77896308c))
+
+
+### Bug Fixes
+
+* **web:** 最新版本标签改用 success 绿色样式 ([71d6953](https://github.com/huaiminyetnotsleep/spore/commit/71d6953ab2539fb3b35b3d33296712d1ffc3c88a))
+* **web:** 版本检查展示不做新旧判断，直接显示当前版本与最新版本 ([90bd75d](https://github.com/huaiminyetnotsleep/spore/commit/90bd75d62063d1337906e9503e17d5d9dbfc7151))
+
 ## [1.4.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.3.2...v1.4.0) (2026-09-15)
 
 
