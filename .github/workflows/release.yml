@@ -16,6 +16,11 @@ permissions:
   contents: write
   pull-requests: write
 
+# 连续 push main 时串行执行：release-please 会读写同一个 release PR，
+# 两个运行重叠可能竞态（重复分析/互相覆盖 PR 内容）
+concurrency:
+  group: release-please
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
