@@ -184,6 +184,16 @@ describe("总览页", () => {
     expect(screen.getByRole("button", { name: "检查更新" })).toBeInTheDocument();
   });
 
+  it("完整 commit SHA 版本号截取为 7 位短哈希展示，悬停可见完整值", async () => {
+    const full = "9c2f7ab4c1e5d67890a1b2c3d4e5f60718293a4b";
+    stubRoutes(overviewRoutes({ ...overviewResponse(), version: full }));
+
+    renderPage();
+
+    const shown = await screen.findByText("9c2f7ab");
+    expect(shown).toHaveAttribute("title", full);
+  });
+
   it("点击检查更新重新查询，落后于上游时展示升级标签并链接发布页", async () => {
     stubRoutes(overviewRoutes(overviewResponse(), { payload: versionCheckResponse() }));
 

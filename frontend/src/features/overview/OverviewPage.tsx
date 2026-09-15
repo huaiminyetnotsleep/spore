@@ -51,6 +51,13 @@ function botIdentityText(bot: OverviewBot | undefined): string {
   return bot.username ? `${bot.name}（@${bot.username}）` : bot.name;
 }
 
+/** 服务版本展示：CI 在 main/PR 构建注入完整 commit SHA，太长难读——
+ * 仅在展示层截取为 7 位短哈希（悬停 title 可见完整值）；版本值本身
+ * 不动，tag 版本号与 dev 等其余取值原样展示。 */
+function displayVersion(v: string): string {
+  return /^[0-9a-f]{40}$/i.test(v) ? v.slice(0, 7) : v;
+}
+
 /** 版本检查结果提示：落后 → 橙色升级标签（链接到发布页）；最新 → 绿色；
  * 无法比较（dev 构建）→ 展示上游最新版；查询失败 → 红色受控文案。 */
 function VersionCheckHint({
@@ -211,7 +218,7 @@ export function OverviewPage() {
         <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
           <Descriptions.Item label="服务版本">
             <Space size={6} wrap>
-              <span>{data.version}</span>
+              <span title={data.version}>{displayVersion(data.version)}</span>
               <Button
                 size="small"
                 type="text"
