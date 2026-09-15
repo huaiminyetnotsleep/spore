@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.3.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.3.1...v1.3.2) (2026-09-15)
+
+
+### Bug Fixes
+
+* **web:** 检查更新支持 force 跳过缓存，手动刷新拿到实时结果 ([a90c53b](https://github.com/huaiminyetnotsleep/spore/commit/a90c53b815e74ce5bbbbfb1a8539e6a17d862dcb))
+
 ## [1.3.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.3.0...v1.3.1) (2026-09-15)
 
 
