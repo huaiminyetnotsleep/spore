@@ -7,7 +7,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button, Form, Input, InputNumber, Modal, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { fetchChannelBindings, type ChannelBindingRow } from "../../api/admin";
 import { bindChannel, unbindChannel } from "../../api/mutations";
@@ -41,12 +42,14 @@ function ownerText(row: ChannelBindingRow): string {
       ? `${row.user_display_name}（@${row.user_username}）`
       : name;
   }
-  return `ID ${row.user_id}`;
+  return "—";
 }
 
 export function BindingsPage() {
   const [bindForm] = Form.useForm<BindFormValues>();
   const [bindOpen, setBindOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const userID = useMemo(() => searchParams.get("user_id")?.trim() || "", [searchParams]);
   const confirm = useConfirmAction();
 
   const bind = useAdminAction({
@@ -67,8 +70,8 @@ export function BindingsPage() {
   });
 
   const { data, isPending, isError, refetch } = useQuery({
-    queryKey: ["channel-bindings", "list"],
-    queryFn: fetchChannelBindings,
+    queryKey: ["channel-bindings", "list", userID],
+    queryFn: () => fetchChannelBindings(userID ? { user_id: userID } : {}),
   });
   const items = data?.items ?? [];
 
@@ -76,7 +79,12 @@ export function BindingsPage() {
     {
       title: "所属用户",
       key: "owner",
-      render: (_, row) => ownerText(row),
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Link to={`/users/${row.user_id}`}>{row.user_id}</Link>
+          <Text type="secondary">{ownerText(row)}</Text>
+        </Space>
+      ),
     },
     {
       title: "频道",
@@ -143,6 +151,12 @@ export function BindingsPage() {
       }
     >
       <Space direction="vertical" size="middle" className="field-width-full">
+        {userID ? (
+          <Space>
+            <Text type="secondary">当前用户 ID：{userID}</Text>
+            <Button size="small" onClick={() => setSearchParams({})}>清除筛选</Button>
+          </Space>
+        ) : null}
         {isError ? (
           <LoadError onRetry={() => void refetch()} />
         ) : (

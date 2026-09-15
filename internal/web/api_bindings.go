@@ -46,7 +46,21 @@ func (s *Server) handleAPIChannelBindingsList(w http.ResponseWriter, r *http.Req
 	if !s.apiRequireBindings(w, r, op) {
 		return
 	}
-	rows, err := s.bindings.ListAll(r.Context())
+	var (
+		rows []store.ChannelBindingWithUser
+		err  error
+	)
+	userIDText := r.URL.Query().Get("user_id")
+	if userIDText != "" {
+		userID, parseErr := strconv.ParseInt(userIDText, 10, 64)
+		if parseErr != nil || userID <= 0 {
+			s.apiBadRequest(w, r, op, "用户 ID 必须为正整数")
+			return
+		}
+		rows, err = s.bindings.ListAllByUser(r.Context(), userID)
+	} else {
+		rows, err = s.bindings.ListAll(r.Context())
+	}
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
 		return

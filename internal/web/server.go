@@ -74,6 +74,7 @@ type ChannelBinder interface {
 	Bind(ctx context.Context, in binding.BindInput) (store.ChannelBinding, error)
 	Unbind(ctx context.Context, userID int64, target string, anyOwner bool) (store.ChannelBinding, error)
 	ListAll(ctx context.Context) ([]store.ChannelBindingWithUser, error)
+	ListAllByUser(ctx context.Context, userID int64) ([]store.ChannelBindingWithUser, error)
 	// VerifyChannel 解析并校验频道目标（缓存频道配置用）：返回数字频道 ID
 	// 与标题；bot 必须在该频道可发帖。
 	VerifyChannel(ctx context.Context, target string) (int64, string, error)

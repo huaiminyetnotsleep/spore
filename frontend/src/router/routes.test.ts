@@ -13,7 +13,7 @@ describe("SPA 导航信息架构", () => {
     expect(navigationGroups.map((group) => group.label)).toEqual([
       "工作台",
       "请求与频道",
-      "受邀频道",
+      "BotUser受邀频道",
       "用户运营",
       "事件与审计",
       "系统运维",

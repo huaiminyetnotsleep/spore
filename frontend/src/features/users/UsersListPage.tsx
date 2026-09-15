@@ -118,9 +118,11 @@ export function UsersListPage() {
       key: "actions",
       // 快捷操作按钮组较宽：右固定 + 表格 max-content，窄屏时横向滚动而非溢出
       fixed: "right",
-      width: 210,
+      width: 300,
       render: (_, row) => (
-        <Space size="small">
+        <Space size="small" wrap>
+          <Link to={`/requests?user_id=${row.id}`}>查看请求记录</Link>
+          <Link to={`/channel-bindings?user_id=${row.id}`}>查看频道绑定</Link>
           {/* owner 身份不能停用/归档（与详情页、服务端规则一致），不提供入口 */}
           {row.status === "enabled" && !row.is_owner ? (
             <Button

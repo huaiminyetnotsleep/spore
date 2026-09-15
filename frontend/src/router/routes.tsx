@@ -288,7 +288,7 @@ export const navigationGroups = [
   },
   {
     key: "channel-invited",
-    label: "受邀频道",
+    label: "BotUser受邀频道",
     routeKeys: ["invite-approvals", "joined-channels", "join-settings"],
   },
   {

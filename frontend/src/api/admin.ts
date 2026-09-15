@@ -344,6 +344,8 @@ export interface RequestProgressData {
 export interface RequestRow {
   id: number;
   user_id: number;
+  username: string;
+  display_name: string;
   /** public | private */
   source_kind: string;
   channel_key: string;
@@ -404,7 +406,6 @@ export interface RequestDetail extends RequestRow {
   channel_link_text: string;
   /** 规范化来源 URL；结构化字段异常时为空串（展示为"链接不可用"）。 */
   message_url: string;
-  username: string;
   error_text: string;
   attempt_max: number;
   file_name: string;
@@ -722,8 +723,8 @@ export interface ChannelBindingRow {
   user_display_name: string;
 }
 
-export function fetchChannelBindings(): Promise<{ items: ChannelBindingRow[] }> {
-  return apiRequest<{ items: ChannelBindingRow[] }>("/api/v1/channel-bindings");
+export function fetchChannelBindings(params: { user_id?: string } = {}): Promise<{ items: ChannelBindingRow[] }> {
+  return apiRequest<{ items: ChannelBindingRow[] }>(`/api/v1/channel-bindings${toQuery(params)}`);
 }
 
 // ---- 频道加入（频道加入管理页） ----

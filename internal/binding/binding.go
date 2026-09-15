@@ -242,6 +242,11 @@ func (s *Service) ListAll(ctx context.Context) ([]store.ChannelBindingWithUser, 
 	return s.store.ListChannelBindingsWithUser(ctx)
 }
 
+// ListAllByUser 返回指定用户的全部绑定（含所属用户资料），供 Web 管理端筛选。
+func (s *Service) ListAllByUser(ctx context.Context, userID int64) ([]store.ChannelBindingWithUser, error) {
+	return s.store.ListChannelBindingsWithUserByUser(ctx, userID)
+}
+
 // ChannelURL 返回绑定的完整跳转链接（/channels 展示与脚注共用）：
 //   - 公开频道：https://t.me/<username>；
 //   - 私有频道：https://t.me/c/<内部ID>/1（Bot API 频道 ID 去掉 -100 前缀

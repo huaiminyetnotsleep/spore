@@ -46,6 +46,16 @@ func (f *fakeChannelBinder) ListAll(context.Context) ([]store.ChannelBindingWith
 	return f.listRows, nil
 }
 
+func (f *fakeChannelBinder) ListAllByUser(_ context.Context, userID int64) ([]store.ChannelBindingWithUser, error) {
+	rows := make([]store.ChannelBindingWithUser, 0)
+	for _, row := range f.listRows {
+		if row.UserID == userID {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
 func (f *fakeChannelBinder) VerifyChannel(_ context.Context, target string) (int64, string, error) {
 	f.verifyTarget = target
 	if f.verifyErr != nil {
@@ -99,6 +109,23 @@ func TestAPIChannelBindingsList(t *testing.T) {
 		row.BoundVia != "bot" || row.CreatedAt != 1757030400000 {
 		t.Fatalf("列表行不符: %+v", row)
 	}
+}
+
+func TestAPIChannelBindingsListByUser(t *testing.T) {
+	e, j, fake, _ := newBindingsEnv(t)
+	fake.listRows = []store.ChannelBindingWithUser{
+		{ChannelBinding: store.ChannelBinding{ChannelID: -1001, UserID: 7}},
+		{ChannelBinding: store.ChannelBinding{ChannelID: -1002, UserID: 8}},
+	}
+	var got struct {
+		Items []apiChannelBindingRow `json:"items"`
+	}
+	getAPIJSON(t, e, j, "/api/v1/channel-bindings?user_id=7", &got)
+	if len(got.Items) != 1 || got.Items[0].UserID != 7 {
+		t.Fatalf("按用户筛选不对: %+v", got.Items)
+	}
+	resp := e.do(j, http.MethodGet, "/api/v1/channel-bindings?user_id=abc", "", "")
+	requireBadRequest(t, resp, "/api/v1/channel-bindings?user_id=abc")
 }
 
 func TestAPIChannelBindingAddValidation(t *testing.T) {

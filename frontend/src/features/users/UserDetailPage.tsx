@@ -194,7 +194,8 @@ export function UserDetailPage() {
                 </Descriptions.Item>
                 <Descriptions.Item label="累计请求数">
                   {detail.total_requests}{" "}
-                  <Link to={`/requests?user_id=${detail.id}`}>查看请求记录</Link>
+                  <Link to={`/requests?user_id=${detail.id}`}>查看请求记录</Link>{" "}
+                  <Link to={`/channel-bindings?user_id=${detail.id}`}>查看频道绑定</Link>
                 </Descriptions.Item>
               </Descriptions>
             </PageCard>

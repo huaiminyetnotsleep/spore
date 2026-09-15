@@ -73,6 +73,13 @@ type Request struct {
 	DurationMs     int64
 }
 
+// RequestWithUser 是管理端请求列表行：请求信息 + 所属用户展示资料。
+type RequestWithUser struct {
+	Request
+	UserUsername    string
+	UserDisplayName string
+}
+
 // RequestResult 是任务结束时 FinishRequest 需要落库的结果。
 type RequestResult struct {
 	Status           string // succeeded | failed（cancelled 由 CancelRequest 写入）
@@ -136,6 +143,44 @@ func scanRequest(row scanner) (Request, error) {
 		return Request{}, wrapDB("解析请求已发送消息", errDecode)
 	}
 	return r, nil
+}
+
+const selectRequestWithUser = `SELECT r.id, r.user_id, COALESCE(r.source_kind, ''), r.channel_key, r.message_id,
+		r.status, r.attempt, COALESCE(r.error_code, ''), COALESCE(r.media_type, ''), r.media_types_json,
+		COALESCE(r.file_size, 0), COALESCE(r.file_name, ''), r.delivery_mode, r.source_media_dc_ids_json,
+		COALESCE(r.parent_request_id, 0), r.cloud_destination,
+		r.sent_chat_id, r.sent_message_ids_json,
+		r.requested_at, COALESCE(r.queued_at, 0), COALESCE(r.started_at, 0),
+		COALESCE(r.finished_at, 0), COALESCE(r.duration_ms, 0),
+		COALESCE(u.username, ''), COALESCE(u.display_name, '')
+	FROM requests r
+	LEFT JOIN users u ON u.id = r.user_id`
+
+func scanRequestWithUser(row scanner) (RequestWithUser, error) {
+	var out RequestWithUser
+	var mediaTypesJSON, dcJSON, sentIDsJSON sql.NullString
+	err := row.Scan(&out.ID, &out.UserID, &out.SourceKind, &out.ChannelKey, &out.MessageID,
+		&out.Status, &out.Attempt, &out.ErrorCode, &out.MediaType, &mediaTypesJSON, &out.FileSize, &out.FileName,
+		&out.DeliveryMode, &dcJSON, &out.ParentRequestID, &out.CloudDestination,
+		&out.SentChatID, &sentIDsJSON, &out.RequestedAt, &out.QueuedAt, &out.StartedAt,
+		&out.FinishedAt, &out.DurationMs, &out.UserUsername, &out.UserDisplayName)
+	if err != nil {
+		return out, err
+	}
+	var errDecode error
+	out.MediaTypes, errDecode = decodeMediaTypes(mediaTypesJSON)
+	if errDecode != nil {
+		return RequestWithUser{}, wrapDB("解析请求媒体类型", errDecode)
+	}
+	out.SourceMediaDCIDs, errDecode = decodeDCIDs(dcJSON)
+	if errDecode != nil {
+		return RequestWithUser{}, wrapDB("解析请求媒体 DC", errDecode)
+	}
+	out.SentMessageIDs, errDecode = decodeSentMessageIDs(sentIDsJSON)
+	if errDecode != nil {
+		return RequestWithUser{}, wrapDB("解析请求已发送消息", errDecode)
+	}
+	return out, nil
 }
 
 func decodeDCIDs(raw sql.NullString) ([]int, error) {
@@ -437,6 +482,32 @@ func (s *Store) ListRequests(ctx context.Context, f RequestFilter) ([]Request, e
 	return out, wrapDB("遍历请求行", rows.Err())
 }
 
+// ListRequestsWithUser 按筛选条件分页查询请求，并一次带出所属用户资料。
+func (s *Store) ListRequestsWithUser(ctx context.Context, f RequestFilter) ([]RequestWithUser, error) {
+	where, args := f.whereWithPrefix("r")
+	limit := f.Limit
+	if limit <= 0 {
+		limit = defaultRequestLimit
+	}
+	args = append(args, limit, f.Offset)
+
+	rows, err := s.ex.QueryContext(ctx, selectRequestWithUser+where+
+		" ORDER BY r.requested_at DESC, r.id DESC LIMIT ? OFFSET ?", args...)
+	if err != nil {
+		return nil, wrapDB("查询请求列表", err)
+	}
+	defer rows.Close()
+	var out []RequestWithUser
+	for rows.Next() {
+		r, err := scanRequestWithUser(rows)
+		if err != nil {
+			return nil, wrapDB("扫描请求行", err)
+		}
+		out = append(out, r)
+	}
+	return out, wrapDB("遍历请求行", rows.Err())
+}
+
 // CountRequests 按同款筛选条件统计请求总数（CSV 导出的上限预判）。
 func (s *Store) CountRequests(ctx context.Context, f RequestFilter) (int, error) {
 	where, args := f.where()
@@ -447,38 +518,48 @@ func (s *Store) CountRequests(ctx context.Context, f RequestFilter) (int, error)
 
 // where 组装筛选条件的 WHERE 片段（含前导空格；无条件时为空串）。
 func (f RequestFilter) where() (string, []any) {
+	return f.whereWithPrefix("")
+}
+
+func (f RequestFilter) whereWithPrefix(prefix string) (string, []any) {
+	col := func(name string) string {
+		if prefix == "" {
+			return name
+		}
+		return prefix + "." + name
+	}
 	var conds []string
 	var args []any
 	if f.UserID > 0 {
-		conds = append(conds, "user_id = ?")
+		conds = append(conds, col("user_id")+" = ?")
 		args = append(args, f.UserID)
 	}
 	if f.Status != "" {
-		conds = append(conds, "status = ?")
+		conds = append(conds, col("status")+" = ?")
 		args = append(args, f.Status)
 	}
 	if f.ChannelKey != "" {
-		conds = append(conds, "channel_key = ?")
+		conds = append(conds, col("channel_key")+" = ?")
 		args = append(args, f.ChannelKey)
 	}
 	if f.MediaType != "" {
-		conds = append(conds, "media_type = ?")
+		conds = append(conds, col("media_type")+" = ?")
 		args = append(args, f.MediaType)
 	}
 	if f.DeliveryMode != "" {
-		conds = append(conds, "delivery_mode = ?")
+		conds = append(conds, col("delivery_mode")+" = ?")
 		args = append(args, f.DeliveryMode)
 	}
 	if f.ErrorCode != "" {
-		conds = append(conds, "error_code = ?")
+		conds = append(conds, col("error_code")+" = ?")
 		args = append(args, f.ErrorCode)
 	}
 	if f.Since > 0 {
-		conds = append(conds, "requested_at >= ?")
+		conds = append(conds, col("requested_at")+" >= ?")
 		args = append(args, f.Since)
 	}
 	if f.Until > 0 {
-		conds = append(conds, "requested_at < ?")
+		conds = append(conds, col("requested_at")+" < ?")
 		args = append(args, f.Until)
 	}
 	if len(conds) == 0 {

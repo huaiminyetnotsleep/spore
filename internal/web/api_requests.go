@@ -30,6 +30,8 @@ type apiRequestProgress struct {
 type apiRequestRow struct {
 	ID               int64               `json:"id"`
 	UserID           int64               `json:"user_id"`
+	Username         string              `json:"username"`
+	DisplayName      string              `json:"display_name"`
 	SourceKind       string              `json:"source_kind"` // public | private
 	ChannelKey       string              `json:"channel_key"`
 	MessageID        int                 `json:"message_id"`
@@ -66,7 +68,8 @@ type apiRequestDetail struct {
 	apiRequestRow
 	ChannelLinkText string `json:"channel_link_text"` // 频道标识#消息ID（与 SSR LinkText 同源）
 	MessageURL      string `json:"message_url"`
-	Username        string `json:"username"` // 所属用户名（可为空）
+	Username        string `json:"username"`     // 所属用户名（可为空）
+	DisplayName     string `json:"display_name"` // 所属显示名（可为空）
 	ErrorText       string `json:"error_text"`
 	AttemptMax      int    `json:"attempt_max"`
 	FileName        string `json:"file_name"`
@@ -100,15 +103,17 @@ func (s *Server) handleAPIRequestsList(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	filter.Limit, filter.Offset = page.PageSize, page.Offset
-	rows, err := s.st.ListRequests(ctx, filter)
+	rows, err := s.st.ListRequestsWithUser(ctx, filter)
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
 		return
 	}
 	items := make([]apiRequestRow, 0, len(rows))
 	for _, rq := range rows {
-		row := requestRowDTO(rq)
-		row.Progress = s.requestProgress(rq)
+		row := requestRowDTO(rq.Request)
+		row.Username = rq.UserUsername
+		row.DisplayName = rq.UserDisplayName
+		row.Progress = s.requestProgress(rq.Request)
 		items = append(items, row)
 	}
 	writeAPIList(w, newAPIListEnvelope(items, page, total))
@@ -142,6 +147,7 @@ func (s *Server) handleAPIRequestDetail(w http.ResponseWriter, r *http.Request, 
 		ChannelLinkText: requestLinkText(rq),
 		MessageURL:      requestLink(rq),
 		Username:        u.Username,
+		DisplayName:     u.DisplayName,
 		AttemptMax:      access.MaxRequestAttempts,
 		FileName:        rq.FileName,
 		FileSize:        rq.FileSize,

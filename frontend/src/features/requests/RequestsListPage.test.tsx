@@ -80,6 +80,8 @@ function requestRow(overrides: Partial<RequestRow>): RequestRow {
   return {
     id: 1,
     user_id: 301,
+    username: "alice",
+    display_name: "Alice",
     source_kind: "public",
     channel_key: "example",
     message_id: 7,

@@ -311,9 +311,16 @@ export function RequestsListPage() {
     },
     {
       title: "用户",
-      dataIndex: "user_id",
-      key: "user_id",
-      render: (userId: number) => <Link to={`/users/${userId}`}>{userId}</Link>,
+      key: "user",
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Link to={`/users/${row.user_id}`}>{row.user_id}</Link>
+          <Text type="secondary">
+            {row.username ? `@${row.username}` : "—"}
+            {row.display_name ? `（${row.display_name}）` : ""}
+          </Text>
+        </Space>
+      ),
     },
     {
       title: "频道",

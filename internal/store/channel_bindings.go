@@ -159,7 +159,16 @@ func (s *Store) ListChannelBindingsByUser(ctx context.Context, userID int64) ([]
 // ListChannelBindingsWithUser 返回全部绑定（含所属用户资料）供 Web 管理端
 // 展示，按绑定时间倒序。
 func (s *Store) ListChannelBindingsWithUser(ctx context.Context) ([]ChannelBindingWithUser, error) {
-	rows, err := s.ex.QueryContext(ctx, selectChannelBindingWithUser+" ORDER BY b.created_at DESC, b.channel_id")
+	return s.listChannelBindingsWithUser(ctx, "", nil)
+}
+
+// ListChannelBindingsWithUserByUser 返回指定用户的全部频道绑定（含用户资料）。
+func (s *Store) ListChannelBindingsWithUserByUser(ctx context.Context, userID int64) ([]ChannelBindingWithUser, error) {
+	return s.listChannelBindingsWithUser(ctx, " WHERE b.user_id = ?", []any{userID})
+}
+
+func (s *Store) listChannelBindingsWithUser(ctx context.Context, where string, args []any) ([]ChannelBindingWithUser, error) {
+	rows, err := s.ex.QueryContext(ctx, selectChannelBindingWithUser+where+" ORDER BY b.created_at DESC, b.channel_id", args...)
 	if err != nil {
 		return nil, wrapDB("列出频道绑定", err)
 	}
