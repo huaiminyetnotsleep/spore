@@ -1,11 +1,12 @@
 /**
  * 总览页（/）：职责 = 系统现在怎么样。第一屏「状态一览」四张彩色状态卡
  * （MTProto 会话 / 数据库 / 队列水位 / 待办提醒），下方紧凑「服务信息」卡。
- * 服务版本支持手动检查更新（点击刷新按钮查询上游最新发布，落后时给出
- * 升级提示图标）。用户计数与频道加入快照已迁至 /stats 的「全时段快照」区。
+ * 服务版本行展示当前版本与上游最新版本：进入页面自动检查一次，落后时
+ * 给出「有新版本」标签；刷新按钮在标签文字后，手动检查跳过缓存，发现
+ * 新版本时经 toast 提示版本号。用户计数与频道加入快照已迁至 /stats。
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Button, Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
+import { App, Button, Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
 import { ArrowUpOutlined, ReloadOutlined } from "@ant-design/icons";
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -79,9 +80,9 @@ function VersionCheckHint({
     );
   }
   if (status === "outdated") {
-    const label = latestVersion ? `可升级 ${latestVersion}` : "可升级";
+    const label = latestVersion ? `有新版本 ${latestVersion}` : "有新版本";
     return (
-      <Tag color="orange" icon={<ArrowUpOutlined />} data-testid="version-upgrade-hint">
+      <Tag color="processing" icon={<ArrowUpOutlined />} data-testid="version-upgrade-hint">
         {releaseUrl ? (
           <a href={releaseUrl} target="_blank" rel="noreferrer">
             {label}
@@ -129,14 +130,23 @@ export function OverviewPage() {
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
   });
+  const { message } = App.useApp();
   // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞）；
-  // 管理员点刷新按钮时强制绕过缓存重查（点了就要最新结果）
+  // 管理员点刷新按钮时强制绕过缓存重查（点了就要最新结果），发现新版本
+  // 时经 toast 提示版本号。
   const versionCheck = useQuery({
     queryKey: ["version-check"],
     queryFn: () => fetchVersionCheck(false),
     retry: false,
   });
-  const forceCheck = useMutation({ mutationFn: () => fetchVersionCheck(true) });
+  const forceCheck = useMutation({
+    mutationFn: () => fetchVersionCheck(true),
+    onSuccess: (data) => {
+      if (data.status === "outdated" && data.latest_version) {
+        void message.info(`有新版本 ${data.latest_version}`);
+      }
+    },
+  });
 
   if (isPending) {
     return (
@@ -217,18 +227,24 @@ export function OverviewPage() {
 
       <PageCard title="服务信息">
         <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
-          <Descriptions.Item label="服务版本">
+          <Descriptions.Item
+            label={
+              <Space size={4}>
+                服务版本
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label="检查更新"
+                  title="检查更新（跳过缓存）"
+                  icon={<ReloadOutlined />}
+                  loading={forceCheck.isPending}
+                  onClick={() => forceCheck.mutate()}
+                />
+              </Space>
+            }
+          >
             <Space size={6} wrap>
               <span title={data.version}>{displayVersion(data.version)}</span>
-              <Button
-                size="small"
-                type="text"
-                aria-label="检查更新"
-                title="检查更新（跳过缓存）"
-                icon={<ReloadOutlined />}
-                loading={forceCheck.isPending}
-                onClick={() => forceCheck.mutate()}
-              />
               {/* 手动刷新结果优先于进入页面的自动检查 */}
               <VersionCheckHint
                 status={forceCheck.data?.status ?? versionCheck.data?.status}

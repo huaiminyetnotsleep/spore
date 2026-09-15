@@ -7,7 +7,8 @@
  * 消费。业务统计图表仍由 /stats 承担。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { App as AntApp } from "antd";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -108,9 +109,12 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/"]}>
-        <OverviewPage />
-      </MemoryRouter>
+      {/* antd App 上下文：message 实例来自它（生产由 App.tsx 挂载） */}
+      <AntApp>
+        <MemoryRouter initialEntries={["/"]}>
+          <OverviewPage />
+        </MemoryRouter>
+      </AntApp>
     </QueryClientProvider>,
   );
 }
@@ -194,17 +198,18 @@ describe("总览页", () => {
     expect(shown).toHaveAttribute("title", full);
   });
 
-  it("点击检查更新重新查询，落后于上游时展示升级标签并链接发布页", async () => {
+  it("点击检查更新重新查询，落后于上游时展示有新版本标签并弹 toast", async () => {
     stubRoutes(overviewRoutes(overviewResponse(), { payload: versionCheckResponse() }));
 
     renderPage();
 
-    // 自动检查已给出升级提示
+    // 自动检查已给出「有新版本」提示（蓝色标签，链接发布页）
     const hint = await screen.findByTestId("version-upgrade-hint");
     expect(hint).toBeInTheDocument();
-    // 手动点击刷新按钮重查，请求带 force=1（跳过服务端缓存），结果保持
+    // 手动点击刷新按钮重查：请求带 force=1（跳过服务端缓存），结果保持，
+    // 且经 toast 再次提示新版本号（标签 + toast 两处同文案）
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
-    const link = await screen.findByRole("link", { name: "可升级 v1.2.0" });
+    const link = await screen.findByRole("link", { name: "有新版本 v1.2.0" });
     expect(link).toHaveAttribute(
       "href",
       "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
@@ -212,6 +217,9 @@ describe("总览页", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("force=1"))).toBe(true);
+    await waitFor(() =>
+      expect(screen.getAllByText("有新版本 v1.2.0").length).toBeGreaterThanOrEqual(2),
+    );
   });
 
   it("点击检查更新后仍是最新时展示绿色标签", async () => {
