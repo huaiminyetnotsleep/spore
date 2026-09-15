@@ -40,19 +40,19 @@
 
 | 子命令 | 作用 | 等价的原始操作 |
 | --- | --- | --- |
-| `spore install` | 首次安装（含凭据交互、数据目录授权） | [deployment.md §4.2](../guide/deployment.md) 全流程 |
-| `spore upgrade` | 拉新镜像并滚动更新，不动配置（同时刷新 spore 命令自身） | `docker compose pull && docker compose up -d` |
-| `spore verify` | 升级后验证：探针 + 容器健康 + MTProto 通道登录 | 本节 §2.4 验证序列 |
-| `spore status` | 容器状态 + `/healthz` 探活 | `docker compose ps` + curl |
-| `spore logs` | 跟踪 bot 日志（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
-| `spore show-key` | 从日志查首次访问密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
-| `spore reset-key` | 重置管理端访问密钥（新密钥只打印一次） | `docker compose exec bot spore admin reset-key`（见 §6.3） |
-| `spore clean-tmp` | 清空临时媒体目录 `data/tmp`（先停机） | §6.5 磁盘满处理的第一步 |
-| `spore diskcheck` | 磁盘容量、数据文件、`.env` 权限体检 | §3.1 数据边界的人工检查 |
+| `spore install` | 首次安装：凭据、端口、数据目录、可选启动 | [deployment.md §4.2](../guide/deployment.md) |
+| `spore upgrade` | 升级：拉取新镜像并滚动更新（不改配置） | `docker compose pull && docker compose up -d` |
+| `spore verify` | 升级后验证：探针、容器健康、MTProto 通道 | §2.4 |
+| `spore status` | 查看状态：容器列表与 `/healthz` 探活 | `docker compose ps` |
+| `spore logs` | 查看日志：跟踪 bot 输出（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
+| `spore show-key` | 查看访问密钥：从日志检索首启密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
+| `spore reset-key` | 重置访问密钥（新密钥仅打印一次） | `docker compose exec bot spore admin reset-key` |
+| `spore clean-tmp` | 清理临时文件：停机清空 `data/tmp` | §6.5 |
+| `spore diskcheck` | 体检磁盘：容量、数据文件、`.env` 权限 | §3.1 |
 | `spore restart` | 重启应用（未运行则直接启动） | `docker compose restart bot` |
 | `spore stop` | 停止服务（保留容器与数据） | `docker compose stop` |
-| `spore uninstall` | 卸载容器与 spore 命令（数据/配置按提示决定去留） | §5 卸载与停用 |
-| `spore exit` | 退出脚本（等价菜单 13） | —（仅结束脚本自身） |
+| `spore uninstall` | 卸载 Spore（数据与配置按提示保留/删除） | §5 |
+| `spore exit` | 退出脚本（等价菜单 13） | — |
 
 `spore` 命令等价于部署目录内的 `install-spore.sh`（如 `~/spore/install-spore.sh status`）。
 软链被误删时恢复：`sudo ln -sf ~/spore/install-spore.sh /usr/local/bin/spore`。
@@ -109,7 +109,13 @@ Compose 按新镜像重新创建需要更新的容器。
 
 ### 2.2 GHCR 镜像更新（推荐）
 
-适用于 [deployment.md §4.2](../guide/deployment.md) 的 GHCR 镜像部署。在部署目录执行：
+适用于 [deployment.md §4.2](../guide/deployment.md) 的 GHCR 镜像部署。
+
+**一键脚本部署**：直接执行 `spore upgrade`（服务器任意目录可用）。它不改任何配置，
+自动拉取新镜像、滚动更新并做容器健康检查；`.env` 启用了 `bigfile` profile 时会连带
+更新 `bot-api` 服务，同时刷新 `spore` 命令自身。
+
+**手动命令**：在部署目录执行：
 
 ```bash
 cd ~/spore
@@ -164,7 +170,7 @@ docker compose up -d
 ### 2.4 更新后验证
 
 应用启动时会根据 SQLite 的 `PRAGMA user_version` 自动执行只增不改的数据库迁移。更新
-完成后依次检查：
+完成后依次检查（一键脚本部署可直接运行 `spore verify`，自动完成其中前四项）：
 
 ```bash
 docker compose ps
@@ -298,12 +304,7 @@ docker compose pull bot
 docker compose up -d
 ```
 
-一键脚本部署的目录，重跑安装命令后在菜单选 **2 升级** 即可（不改任何配置，等价于
-上面的 pull + up）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh | bash
-```
+一键脚本部署的目录直接执行 `spore upgrade`（不改任何配置，等价于上面的 pull + up）。
 
 源码构建部署执行：
 
