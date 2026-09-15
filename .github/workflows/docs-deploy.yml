@@ -8,11 +8,14 @@ on:
     paths:
       - "docs/**"
       - "public/**"
+      # 每次发版 release-please 会更新 CHANGELOG.md，文档站的更新日志页随之重新部署
+      - "CHANGELOG.md"
       - ".github/workflows/docs-deploy.yml"
   pull_request:
     paths:
       - "docs/**"
       - "public/**"
+      - "CHANGELOG.md"
       - ".github/workflows/docs-deploy.yml"
   workflow_dispatch:
 

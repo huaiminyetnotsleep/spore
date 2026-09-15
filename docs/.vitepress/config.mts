@@ -24,7 +24,8 @@ export default defineConfig({
       { text: '使用指南', link: '/guide/usage', activeMatch: '/guide/(usage|download)' },
       { text: '配置参考', link: '/reference/configuration', activeMatch: '/reference/' },
       { text: '运维手册', link: '/ops/operations', activeMatch: '/ops/' },
-      { text: '开发', link: '/guide/development', activeMatch: '/guide/development' }
+      { text: '开发', link: '/guide/development', activeMatch: '/guide/development' },
+      { text: '更新日志', link: '/reference/changelog', activeMatch: '/reference/changelog' }
     ],
     sidebar: {
       '/guide/': [
@@ -64,6 +65,7 @@ export default defineConfig({
             { text: 'SPA 管理端验收契约', link: '/reference/admin-acceptance' }
           ]
         },
+        { text: '更新日志', link: '/reference/changelog' },
       ],
       '/ops/': [
         {
