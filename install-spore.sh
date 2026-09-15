@@ -12,6 +12,8 @@
 #   SPORE_DIR      部署目录，默认 ~/spore（管道形式：curl ... | SPORE_DIR=/opt/spore bash）
 #   SPORE_RAW_BASE 配置文件下载基址，默认仓库 main 分支 raw 地址（fork 或镜像加速时覆盖）
 #
+# 安装流程含交互：Telegram 凭据（可留空跳过，稍后补进 .env）、宿主端口（默认 8080，
+# 实时探测占用）以及是否立即启动（可选择只完成配置、稍后手动启动）。
 # 首次扫码登录是固有人工环节：安装后在管理端「MTProto」页面完成，
 # 见 docs/guide/deployment.md §4.4。
 set -euo pipefail
@@ -192,6 +194,48 @@ is_running() {
   [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" = "true" ]
 }
 
+# port_in_use <port>：TCP 探测 127.0.0.1 端口是否已被监听（bash 内建 /dev/tcp，无外部依赖）
+port_in_use() {
+  (exec 6<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+# prompt_port：安装时询问宿主访问端口，默认取 .env 现值（否则 8080）；被占用时要求更换
+prompt_port() {
+  local current default
+  current="$(env_get WEB_HOST_PORT)"
+  current="${current:-8080}"
+  default="$current"
+  echo
+  echo "宿主访问端口（管理端仅绑定 127.0.0.1，公网入口由宿主机反向代理转发）："
+  while true; do
+    if ! prompt_value "WEB_HOST_PORT（1-65535，留空回车默认 ${default}）" '^[0-9]{1,5}$' \
+      "端口应为 1-65535 的数字" skip; then
+      REPLY="$default"
+    fi
+    REPLY=$((10#$REPLY))
+    if [ "$REPLY" -lt 1 ] || [ "$REPLY" -gt 65535 ]; then
+      printf '[!] 端口范围 1-65535\n'
+      continue
+    fi
+    if port_in_use "$REPLY"; then
+      # spore 容器自身映射的现端口（重装/恢复场景）不算冲突
+      if [ "$REPLY" = "$current" ] && docker port "$CONTAINER_NAME" 2>/dev/null | grep -q ":$REPLY"; then
+        break
+      fi
+      warn "端口 $REPLY 已被占用（可用 docker ps --filter publish=$REPLY 或 ss -ltnp | grep $REPLY 定位占用方）；请换一个端口"
+      continue
+    fi
+    break
+  done
+  if [ "$REPLY" != "$current" ]; then
+    set_env WEB_HOST_PORT "$REPLY"
+    PORT_CHANGED=1
+    info "宿主端口已设为 ${REPLY}（反向代理请指向 127.0.0.1:${REPLY}）"
+  else
+    info "宿主端口：$REPLY"
+  fi
+}
+
 # init_env：确保 .env 存在且三个必填凭据有效；已完整则跳过（升级路径），缺失则交互补填
 init_env() {
   if [ ! -f .env ]; then
@@ -334,14 +378,36 @@ do_install() {
   fi
   prepare_deploy_dir
   init_env
+  PORT_CHANGED=""
+  prompt_port
   prepare_data_dir
   # 嵌套子 shell 隔离：命令注册失败只告警，不阻断安装主流程
   (install_cmd) || warn "spore 命令注册失败（不影响本次部署），可重新运行 install 重试或手动软链"
 
   if is_running; then
-    info "服务运行中，如需更新请使用菜单「升级」；此处跳过启动"
+    if [ "$PORT_CHANGED" = "1" ]; then
+      info "端口已变更，重建容器以应用 ..."
+      docker compose up -d
+      wait_healthy || true
+    else
+      info "服务运行中，如需更新镜像请使用菜单「升级」"
+    fi
     return 0
   fi
+
+  echo
+  info "配置全部完成"
+  local do_start=0
+  if prompt_yesno "是否立即拉取镜像并启动服务？"; then
+    do_start=1
+  fi
+
+  if [ "$do_start" != "1" ]; then
+    info "已跳过启动。稍后启动：spore restart（或菜单「重启服务」；首次启动会先拉取镜像），"
+    info "启动后在 bot 日志中查看管理端访问密钥：docker compose logs bot | grep -F '访问密钥'"
+    return 0
+  fi
+
   info "拉取镜像 $IMAGE ..."
   if ! docker compose pull; then
     warn "镜像拉取失败"
@@ -371,13 +437,17 @@ EOF
 
 do_upgrade() {
   require_installed
+  # 启用了 bigfile 备选路线（BOT_API_URL 非空）时，连带更新 bot-api 服务
+  local -a pf=()
+  [ -n "$(env_get BOT_API_URL)" ] && pf+=(--profile bigfile)
   info "拉取新镜像 $IMAGE ..."
-  if ! docker compose pull; then
+  # ${pf[@]+...}：空数组在 bash 3.2 + set -u 下不可直接展开
+  if ! docker compose ${pf[@]+"${pf[@]}"} pull; then
     warn "镜像拉取失败"
     die "若 GHCR 包为私有，请先 docker login ghcr.io 后重新运行；详见 docs/ops/operations.md §3"
   fi
   info "滚动更新 ..."
-  docker compose up -d
+  docker compose ${pf[@]+"${pf[@]}"} up -d
   wait_healthy || true
   docker compose ps
   (install_cmd) || warn "spore 命令刷新失败（不影响本次升级），可重新运行 upgrade 重试"
@@ -486,7 +556,7 @@ do_verify() {
   if [ "$health" = "healthy" ]; then
     info "容器健康检查：healthy"
   else
-    warn "容器健康检查：$health（刚重启属正常，稍后重试）"
+    warn "容器健康检查：${health}（刚重启属正常，稍后重试）"
     fail=1
   fi
 
