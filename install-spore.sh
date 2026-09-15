@@ -48,13 +48,17 @@ read_input() {
   fi
 }
 
-# prompt_value <提示> <校验正则> <格式错误提示>：结果写入全局 REPLY
+# prompt_value <提示> <校验正则> <格式错误提示> [允许留空跳过]：结果写入全局 REPLY；
+# 第 4 参数非空时空输入直接返回 1（表示跳过），否则空输入重试
 prompt_value() {
-  local pattern="$2" err_msg="$3"
+  local pattern="$2" err_msg="$3" allow_empty="${4:-}"
   while true; do
     printf '%s: ' "$1"
     read_input || die "读取输入失败"
     if [ -z "$REPLY" ]; then
+      if [ -n "$allow_empty" ]; then
+        return 1
+      fi
       printf '[!] 不能为空\n'
       continue
     fi
@@ -221,27 +225,42 @@ init_env() {
   echo "首次部署需要填写 Telegram 凭据（仅写入 ${SPORE_DIR}/.env，权限 600，不进入 shell 历史）："
   echo "  - BOT_TOKEN：找 @BotFather 创建 bot 获取"
   echo "  - TG_API_ID / TG_API_HASH：https://my.telegram.org → API development tools 申请"
+  echo "  - 暂时不填可留空直接回车跳过，之后编辑 .env 补上即可"
   echo
-  local key
+  local key skipped=""
   for key in "${need[@]}"; do
     case "$key" in
       BOT_TOKEN)
-        prompt_value "BOT_TOKEN（数字ID:字符串）" '^[0-9]+:[A-Za-z0-9_-]+$' \
-          "格式应为「数字ID:字符串」，请从 @BotFather 获取" &&
+        if prompt_value "BOT_TOKEN（数字ID:字符串，留空回车跳过）" '^[0-9]+:[A-Za-z0-9_-]+$' \
+          "格式应为「数字ID:字符串」，请从 @BotFather 获取" skip; then
           set_env BOT_TOKEN "$REPLY"
+        else
+          skipped="$skipped BOT_TOKEN"
+        fi
         ;;
       TG_API_ID)
-        prompt_value "TG_API_ID（纯数字）" '^[0-9]+$' \
-          "TG_API_ID 应为纯数字" &&
+        if prompt_value "TG_API_ID（纯数字，留空回车跳过）" '^[0-9]+$' \
+          "TG_API_ID 应为纯数字" skip; then
           set_env TG_API_ID "$REPLY"
+        else
+          skipped="$skipped TG_API_ID"
+        fi
         ;;
       TG_API_HASH)
-        prompt_value "TG_API_HASH（32 位十六进制）" '^[0-9a-fA-F]{32}$' \
-          "TG_API_HASH 应为 32 位十六进制字符" &&
+        if prompt_value "TG_API_HASH（32 位十六进制，留空回车跳过）" '^[0-9a-fA-F]{32}$' \
+          "TG_API_HASH 应为 32 位十六进制字符" skip; then
           set_env TG_API_HASH "$REPLY"
+        else
+          skipped="$skipped TG_API_HASH"
+        fi
         ;;
     esac
   done
+  if [ -n "$skipped" ]; then
+    warn "本次跳过未填：${skipped}"
+    warn "部署会继续，但 Telegram 登录会失败。请稍后编辑 ${SPORE_DIR}/.env 填入凭据，"
+    warn "再执行 spore upgrade（或菜单「2) 升级 Spore」）使其生效"
+  fi
   echo
 }
 
