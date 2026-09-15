@@ -109,9 +109,11 @@ Compose 按新镜像重新创建需要更新的容器。
    ```
 
    确认 `image:`、`.env` 和数据目录仍指向当前生产环境，不要在更新前删除 `data/`。
-3. 如果计划更新到指定版本而不是 `latest`，先记录当前镜像版本或完整 commit SHA，便于
-   回滚。公开发布的 GHCR 镜像同时提供 `latest`、完整 commit SHA 和 `vX.Y.Z` 语义化版本标签；
-   生产环境建议固定到完整 SHA 或正式版本标签，不要长期依赖 `latest`。
+3. 如果计划更新到指定版本而不是 `latest`，先记录当前运行版本或完整 commit SHA，便于
+   回滚。运行版本可在容器内自查：`docker compose exec bot spore version`（输出 git
+   tag 或 commit SHA）。公开发布的 GHCR 镜像提供 `latest` 与完整 commit SHA 标签；
+   自 v1.0.0 起每个正式发布（合并 release PR）还附带 `vX.Y.Z` 语义化版本标签。生产
+   环境建议固定到完整 SHA 或正式版本标签，不要长期依赖 `latest`。
 
 ### 2.2 GHCR 镜像更新（推荐）
 

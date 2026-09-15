@@ -1,0 +1,27 @@
+# 发版自动化（release-please）：分析 main 上的 Conventional Commits，自动
+# 维护版本号与 CHANGELOG，以一个 release PR 呈现；合并该 PR 即创建 tag 与
+# GitHub Release，随后由 docker-publish.yml 的 v* 规则发出对应版本镜像。
+#
+# 版本递增规则：fix → 修订号（v1.0.1）；feat → 次版本（v1.1.0）；
+# feat!/BREAKING CHANGE → 主版本（v2.0.0）；docs/style/chore 不触发发版。
+# 直接 push 到 main 的提交无需额外操作——它们会自动累积进下一个 release PR，
+# 不想发版就不合并该 PR。
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 维护 release PR 与版本号
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -11,6 +11,9 @@ RUN npm run build
 
 FROM golang:1.25 AS build
 ARG TARGETARCH
+# SPORE_VERSION 注入 spore version 子命令（docker-publish.yml 传 git tag
+# 或 commit SHA；本地构建缺省 dev，见 Makefile）
+ARG SPORE_VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -22,7 +25,7 @@ RUN case "${TARGETARCH}" in \
       arm64) go_arch=arm64 ;; \
       *) go_arch=amd64 ;; \
     esac \
-    && make build-linux GOARCH="${go_arch}" \
+    && make build-linux GOARCH="${go_arch}" SPORE_VERSION="${SPORE_VERSION}" \
     && mkdir -p /out && mv spore-linux /out/spore
 
 # 精简 ffmpeg：只编译视频封面兜底抽帧（internal/media/thumb.go）所需的

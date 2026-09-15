@@ -41,10 +41,15 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/web"
 )
 
+// version 由构建期注入（-ldflags "-X main.version=..."，见 Makefile 与
+// docker-publish.yml）：CI 镜像构建传 git tag 或 commit SHA，本地
+// go run/build 保持 dev——运行中的容器经 spore version 自证构建来源。
+var version = "dev"
+
 func main() {
 	_ = godotenv.Load()
 
-	// admin 子命令（如 spore admin reset-key）：不启动 Bot，执行后直接退出
+	// admin/version 子命令（如 spore admin reset-key）：不启动 Bot，执行后直接退出
 	if len(os.Args) > 1 {
 		runAdminCommand(os.Args[1:])
 		return
@@ -541,14 +546,18 @@ func (s cloudDriveStatus) EnabledDestinations() []string {
 	return names
 }
 
-// runAdminCommand 执行管理子命令后退出；目前仅支持 admin reset-key
-// （重新生成访问密钥，旧密钥与全部会话立即失效，动作留审计）。
+// runAdminCommand 执行管理子命令后退出；目前支持 version（输出版本号）与
+// admin reset-key（重新生成访问密钥，旧密钥与全部会话立即失效，动作留审计）。
 func runAdminCommand(args []string) {
+	if len(args) == 1 && args[0] == "version" {
+		fmt.Println("spore", version)
+		return
+	}
 	if len(args) == 2 && args[0] == "admin" && args[1] == "reset-key" {
 		adminResetKey()
 		return
 	}
-	fmt.Fprintln(os.Stderr, "未知子命令。用法：spore admin reset-key")
+	fmt.Fprintln(os.Stderr, "未知子命令。用法：spore version | spore admin reset-key")
 	os.Exit(2)
 }
 

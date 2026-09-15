@@ -58,8 +58,11 @@ tidy:
 # Linux 二进制构建参数的唯一来源（Dockerfile 复用同一目标，避免参数漂移）
 # 默认 amd64；Docker buildx 通过 GOARCH=arm64 覆盖。
 GOARCH ?= amd64
+# 版本号注入 spore version 子命令；CI 传 git tag/SHA，本地构建保持 dev
+SPORE_VERSION ?= dev
+
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags="-s -w" -o spore-linux ./cmd/bot
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags="-s -w -X main.version=$(SPORE_VERSION)" -o spore-linux ./cmd/bot
 
 # VPS 部署交叉编译；ARM 服务器改 GOARCH=arm64
 linux: build-linux
