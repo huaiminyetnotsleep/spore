@@ -16,6 +16,7 @@ import (
 type apiSettingsView struct {
 	Timezone                      string `json:"timezone"`
 	DedupWindowMin                int    `json:"dedup_window_min"`
+	MaxLinksPerMessage            int    `json:"max_links_per_message"`
 	QueueCapacity                 int    `json:"queue_capacity"`
 	QueueRuntime                  int    `json:"queue_runtime"` // 0 表示未接入队列指标
 	QueueSame                     bool   `json:"queue_same"`
@@ -65,6 +66,7 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 		view.Timezone = s.access.TimezoneName(ctx)
 		view.DedupWindowMin = s.access.DedupWindowMinutes(ctx)
 	}
+	view.MaxLinksPerMessage = LoadMaxLinksPerMessage(ctx, s.st, s.cfg.MaxLinksPerMessage)
 	view.QueueCapacity = s.loadQueueCapacity(ctx)
 	view.QueueSame = view.QueueRuntime == view.QueueCapacity
 	// worker 数：配置值 = DB 覆盖（缺失/非法回退进程值）；进程值来自启动时
@@ -139,6 +141,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 	var in struct {
 		Timezone               string   `json:"timezone"`
 		DedupWindowMin         *int     `json:"dedup_window_min"`
+		MaxLinksPerMessage     *int     `json:"max_links_per_message"`
 		QueueCapacity          *int     `json:"queue_capacity"`
 		WorkerCount            *int     `json:"worker_count"`
 		MaxFileSize            string   `json:"max_file_size"`
@@ -169,6 +172,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 	}
 	payload := settingsUpdateInput{
 		Timezone:               in.Timezone,
+		MaxLinksPerMessage:     in.MaxLinksPerMessage,
 		WorkerCount:            in.WorkerCount,
 		MaxFileSizeRaw:         in.MaxFileSize,
 		MaxFileSizeUnit:        in.MaxFileSizeUnit,

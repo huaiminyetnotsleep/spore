@@ -252,26 +252,60 @@ func TestHandleLinkInvalidText(t *testing.T) {
 	}
 }
 
-func TestHandleLinkMultipleLinksNotice(t *testing.T) {
+func TestHandleLinkMultipleLinksSubmittedIndependently(t *testing.T) {
 	opt, fa, fs := newHarness(t, 4)
 	run(opt, fs, "https://t.me/example_channel/1 https://t.me/example_channel/2")
 
 	texts := fs.texts()
-	if len(texts) != 2 || texts[0] != multiLinkNotice || texts[1] != statusPrompt {
-		t.Fatalf("多链接应先提示再占位: %v", texts)
+	if len(texts) != 3 || texts[0] != statusPrompt || texts[1] != statusPrompt ||
+		texts[2] != "批量提交完成：成功 2 条，失败 0 条。" {
+		t.Fatalf("多链接应逐条占位后汇总: %v", texts)
 	}
 	subs := fa.submitted()
-	if len(subs) != 1 || subs[0].Ref.MessageID != 1 {
-		t.Fatalf("只应提交第一条链接: %+v", subs)
+	if len(subs) != 2 || subs[0].Ref.MessageID != 1 || subs[1].Ref.MessageID != 2 {
+		t.Fatalf("应按顺序提交全部链接: %+v", subs)
 	}
+	if subs[0].StatusMsgID == 0 || subs[1].StatusMsgID == 0 || subs[0].StatusMsgID == subs[1].StatusMsgID {
+		t.Fatalf("每条链接应使用独立占位消息: %+v", subs)
+	}
+	if subs[0].BatchContinuation || !subs[1].BatchContinuation {
+		t.Fatalf("同一输入仅后续链接应标记为批量续项: %+v", subs)
+	}
+}
 
-	// 单条链接：不附带提示
-	opt2, _, fs2 := newHarness(t, 4)
-	run(opt2, fs2, "https://t.me/example_channel/9")
-	for _, txt := range fs2.texts() {
-		if txt == multiLinkNotice {
-			t.Error("单条链接不应出现多链接提示")
+func TestHandleLinkTooManyLinksRejectedAsBatch(t *testing.T) {
+	opt, fa, fs := newHarness(t, 20)
+	opt.MaxLinksPerMessage = func(context.Context) int { return 2 }
+	run(opt, fs, "https://t.me/example_channel/1 invalid https://t.me/example_channel/2 https://t.me/example_channel/3")
+
+	if n := len(fa.submitted()); n != 0 {
+		t.Fatalf("超限时不应提交任何链接，得到 %d 次", n)
+	}
+	if got := lastText(t, fs); !strings.Contains(got, "一次最多处理 2 条有效链接") || !strings.Contains(got, "检测到 3 条") {
+		t.Fatalf("超限提示不符: %q", got)
+	}
+}
+
+func TestHandleLinkBatchContinuesAfterRejection(t *testing.T) {
+	opt, fa, fs := newHarness(t, 20)
+	fa.decide = func(in access.Submission) (access.Decision, error) {
+		if in.Ref.MessageID == 2 {
+			return access.Decision{Reason: apperr.CodeDuplicateLink}, nil
 		}
+		return access.Decision{Allowed: true, JobID: "ok", RequestID: int64(in.Ref.MessageID)}, nil
+	}
+	run(opt, fs, "https://t.me/example_channel/1 https://t.me/example_channel/2 https://t.me/example_channel/3")
+
+	if subs := fa.submitted(); len(subs) != 3 {
+		t.Fatalf("单条被拒后仍应处理其余链接: %+v", subs)
+	}
+	if deleted := fs.deletedIDs(); len(deleted) != 1 || deleted[0] != 2 {
+		t.Fatalf("只应清理被拒链接的占位消息: %v", deleted)
+	}
+	got := lastText(t, fs)
+	if !strings.Contains(got, "成功 2 条，失败 1 条") ||
+		!strings.Contains(got, apperr.UserText(apperr.CodeDuplicateLink)) {
+		t.Fatalf("部分失败汇总不符: %q", got)
 	}
 }
 
@@ -417,8 +451,8 @@ func TestHandleCancel(t *testing.T) {
 	opt5, fa5, fs5 := newHarness(t, 4)
 	fa5.cancelOut = 1
 	run(opt5, fs5, "/cancel https://t.me/example_channel/1 https://t.me/example_channel/2")
-	if got := fs5.texts()[0]; got != multiLinkNotice {
-		t.Errorf("多链接应先提示，得到 %q", got)
+	if got := fs5.texts()[0]; got != multiCancelNotice {
+		t.Errorf("多链接取消应先提示，得到 %q", got)
 	}
 	if len(fa5.cancelRefs) != 1 || fa5.cancelRefs[0].MessageID != 1 {
 		t.Errorf("只应取消第一条链接: %+v", fa5.cancelRefs)
@@ -683,7 +717,7 @@ func TestHandleDownloadPermissionDenied(t *testing.T) {
 	}
 }
 
-// 链接解析与裸链接同规则：非法链接回 INVALID_URL；多链接提示后取第一条。
+// 链接解析与裸链接同规则：非法链接回 INVALID_URL；多链接逐条提交到同一目的地。
 func TestHandleDownloadLinkParsing(t *testing.T) {
 	opt, fa, fs := newHarness(t, 4)
 	opt.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
@@ -699,12 +733,14 @@ func TestHandleDownloadLinkParsing(t *testing.T) {
 	opt2.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
 	run(opt2, fs2, "/download https://t.me/example_channel/1 https://t.me/example_channel/2")
 	texts := fs2.texts()
-	if len(texts) != 2 || texts[0] != multiLinkNotice || texts[1] != cloudStatusPrompt {
-		t.Fatalf("多链接应先提示再占位: %v", texts)
+	if len(texts) != 3 || texts[0] != cloudStatusPrompt || texts[1] != cloudStatusPrompt ||
+		texts[2] != "批量提交完成：成功 2 条，失败 0 条。" {
+		t.Fatalf("多链接应逐条创建云盘占位后汇总: %v", texts)
 	}
 	subs := fa2.submitted()
-	if len(subs) != 1 || subs[0].Ref.MessageID != 1 {
-		t.Fatalf("只应提交第一条链接: %+v", subs)
+	if len(subs) != 2 || subs[0].Ref.MessageID != 1 || subs[1].Ref.MessageID != 2 ||
+		subs[0].CloudDest != "mega-1" || subs[1].CloudDest != "mega-1" {
+		t.Fatalf("应按顺序提交全部链接到同一目的地: %+v", subs)
 	}
 }
 

@@ -521,6 +521,8 @@ export function fetchApplications(): Promise<{ items: ApplicationRow[] }> {
 export interface SettingsView {
   timezone: string;
   dedup_window_min: number;
+  /** 一条 Bot 输入允许的有效链接数（1–50，保存后即时生效）。 */
+  max_links_per_message: number;
   queue_capacity: number;
   /** 当前进程实际容量；0 表示未接入队列指标。 */
   queue_runtime: number;

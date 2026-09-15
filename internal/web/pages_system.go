@@ -26,15 +26,16 @@ import (
 
 // settings 表中由本包持有的运营键（value_json 为 JSON 编码值，与 access/web 认证键约定一致）。
 const (
-	settingKeyQueueCapacity     = "queue_capacity"       // 全局队列容量（JSON 数字；重启生效）
-	settingKeyWorkerCount       = "worker_count"         // 任务并发 worker 数（JSON 数字；重启生效）
-	settingKeyLastBackupAt      = "last_backup_at"       // 最近一次备份时间（JSON 数字，Unix 毫秒）
-	settingKeyMaxFileSize       = "max_file_size"        // 媒体上限（JSON 数字字节；重启生效）
-	settingKeyStreamLimit       = "stream_limit"         // 流式阈值（JSON 数字字节；重启生效）
-	settingKeyTempDirMaxSize    = "temp_dir_max_size"    // 临时目录总量上限（JSON 数字字节；重启生效）
-	settingKeyMemoryBudget      = "memory_budget"        // 内存管道进程级预算（JSON 数字字节；即时生效）
-	settingKeyChannelCopyEnable = "channel_copy_enabled" // 频道副本同步总开关（JSON 布尔；即时生效）
-	settingKeyTGReuseEnable     = "tg_reuse_enabled"     // TG 链接复用总开关（JSON 布尔；即时生效）
+	settingKeyQueueCapacity      = "queue_capacity"        // 全局队列容量（JSON 数字；重启生效）
+	settingKeyWorkerCount        = "worker_count"          // 任务并发 worker 数（JSON 数字；重启生效）
+	settingKeyLastBackupAt       = "last_backup_at"        // 最近一次备份时间（JSON 数字，Unix 毫秒）
+	settingKeyMaxFileSize        = "max_file_size"         // 媒体上限（JSON 数字字节；重启生效）
+	settingKeyStreamLimit        = "stream_limit"          // 流式阈值（JSON 数字字节；重启生效）
+	settingKeyTempDirMaxSize     = "temp_dir_max_size"     // 临时目录总量上限（JSON 数字字节；重启生效）
+	settingKeyMemoryBudget       = "memory_budget"         // 内存管道进程级预算（JSON 数字字节；即时生效）
+	settingKeyMaxLinksPerMessage = "max_links_per_message" // 单条 Bot 输入最大有效链接数（JSON 数字；即时生效）
+	settingKeyChannelCopyEnable  = "channel_copy_enabled"  // 频道副本同步总开关（JSON 布尔；即时生效）
+	settingKeyTGReuseEnable      = "tg_reuse_enabled"      // TG 链接复用总开关（JSON 布尔；即时生效）
 	// 缓存频道（重复链接复用的干净副本来源）：数字频道 ID 与标题。Web 端
 	// 配置（输入 @username / t.me 链接 / -100 数字 ID，经 bot 解析校验后
 	// 存数字 ID）；环境变量 DUMP_CHANNEL_ID 仅作 settings 为空时的兜底。
@@ -99,6 +100,27 @@ func LoadMemoryBudget(ctx context.Context, st *store.Store, envDefault int64) in
 	var n int64
 	if json.Unmarshal([]byte(v), &n) != nil ||
 		n < config.MinMemoryBudget || n > config.MaxMemoryBudget {
+		return envDefault
+	}
+	return n
+}
+
+// LoadMaxLinksPerMessage 读取单条 Bot 输入允许的有效链接数。handler 每次处理
+// 输入时实时读取，管理端保存后即时生效；键缺失或非法时回退环境默认值。
+func LoadMaxLinksPerMessage(ctx context.Context, st *store.Store, envDefault int) int {
+	if envDefault < config.MinLinksPerMessage || envDefault > config.MaxLinksPerMessage {
+		envDefault = config.DefaultMaxLinksPerMessage
+	}
+	if st == nil {
+		return envDefault
+	}
+	v, ok, err := st.GetSetting(ctx, settingKeyMaxLinksPerMessage)
+	if err != nil || !ok {
+		return envDefault
+	}
+	var n int
+	if json.Unmarshal([]byte(v), &n) != nil ||
+		n < config.MinLinksPerMessage || n > config.MaxLinksPerMessage {
 		return envDefault
 	}
 	return n
@@ -266,9 +288,10 @@ func parseMediaInput(raw, unit string) (int64, error) {
 // 数值字段保留原文：applySettingsUpdate 在对应步骤解析，保证任何一项参数
 // 非法时与前序已生效项保持既有中止顺序。
 type settingsUpdateInput struct {
-	Timezone       string
-	DedupWindowRaw string
-	QueueCapRaw    string
+	Timezone           string
+	DedupWindowRaw     string
+	QueueCapRaw        string
+	MaxLinksPerMessage *int
 	// WorkerCount 为任务并发 worker 数；nil 表示不变更（重启生效）。
 	WorkerCount        *int
 	MaxFileSizeRaw     string
@@ -371,6 +394,23 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 			s.audit(ctx, "settings.dedup_window", "settings", map[string]any{
 				"before_min": before, "after_min": n, "effect": "即时生效"})
 			res.DedupWindow = n
+		}
+	}
+
+	// 单条 Bot 输入最大有效链接数（即时生效）
+	if in.MaxLinksPerMessage != nil {
+		n := *in.MaxLinksPerMessage
+		if n < config.MinLinksPerMessage || n > config.MaxLinksPerMessage {
+			return res, &settingsParamError{fmt.Sprintf("单次最大链接数必须为 %d–%d 的整数。", config.MinLinksPerMessage, config.MaxLinksPerMessage)}
+		}
+		current := LoadMaxLinksPerMessage(ctx, s.st, s.cfg.MaxLinksPerMessage)
+		if n != current {
+			raw, _ := json.Marshal(n)
+			if err := s.st.SetSetting(ctx, settingKeyMaxLinksPerMessage, string(raw)); err != nil {
+				return res, &settingsStoreError{op: "保存单次最大链接数", err: err}
+			}
+			s.audit(ctx, "settings.max_links_per_message", "settings", map[string]any{
+				"before": current, "after": n, "effect": "即时生效"})
 		}
 	}
 

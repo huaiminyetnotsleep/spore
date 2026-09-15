@@ -115,6 +115,9 @@ type Submission struct {
 	Username        string           // Telegram 当前 username，可空
 	DisplayName     string           // Telegram 当前显示名，可空
 	ProfileProvided bool             // 是否明确携带本次 Bot update 的资料（允许清除空资料）
+	// BatchContinuation 表示同一条 Bot 输入中的后续链接。提交间隔按用户输入
+	// 消息检查一次，后续链接跳过该项；额度、并发、去重和队列仍逐条校验。
+	BatchContinuation bool
 	// CloudDest 非空表示云盘下载提交（/download 指令）：六步链语义与裸链接
 	// 完全一致，通过后 requests 行落 cloud 占位与目的地名称，任务带同名
 	// CloudDest 走网盘上传路径。空值 = 现有 TG 投递（零值兼容）。
@@ -137,7 +140,7 @@ type Decision struct {
 //     云盘提交（CloudDest 非空）追加用户级下载权限复核（EffectiveCloudDownload，
 //     显式允许/拒绝优先，默认 owner 允许、普通用户拒绝）；
 //  2. 去重窗口内无同用户同链接的成功记录（owner 同样适用）；
-//  3. 距上次通过提交 >= submit_interval_sec（owner 跳过）；
+//  3. 距上次通过提交 >= submit_interval_sec（owner 跳过；同一 Bot 输入的批量续项跳过）；
 //  4. 运营时区当日用量 < daily_limit（owner 跳过）；
 //  5. 未完成请求数 < concurrent_limit（owner 跳过）；
 //  6. 内存队列未满（owner 同样受限的系统性保护）。
@@ -200,7 +203,7 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 
 		// 3–5 仅约束普通用户；owner 跳过但仍走状态、重复与队列满检查
 		if !u.IsOwner {
-			if intervalMs := int64(u.SubmitIntervalSec) * 1000; now.UnixMilli()-u.LastUsedAt < intervalMs {
+			if intervalMs := int64(u.SubmitIntervalSec) * 1000; !in.BatchContinuation && now.UnixMilli()-u.LastUsedAt < intervalMs {
 				return s.deny(ctx, tx, u, now, apperr.CodeSubmitRateLimited, &d)
 			}
 			usage, err := tx.GetUsage(ctx, in.UserID, day)

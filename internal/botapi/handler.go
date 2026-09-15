@@ -12,6 +12,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
+	"github.com/huaiminyetnotsleep/spore/internal/config"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
@@ -26,7 +27,7 @@ import (
 func helpText(name string) string {
 	return `🦞 ` + name + ` — 受保护消息提取
 
-把 Telegram 消息链接发给我，我会以一条全新消息的形式把内容发回给你（可以正常再次转发）。
+把 Telegram 消息链接发给我，我会以全新消息的形式把内容发回给你（可以正常再次转发）；一条消息可同时发送多个链接。
 
 支持的链接格式：
 • https://t.me/username/message_id
@@ -60,7 +61,7 @@ const (
 	// cloudStatusPrompt 同源规则：云盘任务占位文案，worker 的云盘进度编辑
 	// 以它为前缀（区别于普通任务的"正在获取消息..."）。
 	cloudStatusPrompt = queue.StatusCloudPromptHTML
-	multiLinkNotice   = "一次只处理一条链接，已取第一条有效链接。"
+	multiCancelNotice = "一次只取消一条链接，已取第一条有效链接。"
 )
 
 // updateHandler 默认处理器：仅处理私聊文本。
@@ -269,65 +270,132 @@ func mtprotoStateText(state string) string {
 	}
 }
 
-// handleLink 解析链接并经 access 六步校验后入队提取任务；
-// 先发送"正在获取消息..."占位提示，任务完成后由 worker 删除。
+// handleLink 解析链接并经 access 六步校验后入队提取任务；每个有效链接
+// 独立创建请求与状态占位，任务完成后由对应 worker 删除。
 func handleLink(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64, text string) {
 	handleLinkWithProfile(ctx, opt, snd, models.User{ID: userID}, chatID, text)
 }
 
-// handleLinkWithProfile 处理链接并把 Bot update 中的资料传入访问控制服务。
+type submitFailure struct {
+	ref  tmeurl.SourceRef
+	code apperr.Code
+}
+
+func effectiveMaxLinks(ctx context.Context, opt Options) int {
+	limit := opt.Cfg.MaxLinksPerMessage
+	if opt.MaxLinksPerMessage != nil {
+		limit = opt.MaxLinksPerMessage(ctx)
+	}
+	if limit < config.MinLinksPerMessage || limit > config.MaxLinksPerMessage {
+		return config.DefaultMaxLinksPerMessage
+	}
+	return limit
+}
+
+func rejectTooManyLinks(ctx context.Context, opt Options, snd delivery.Sender, chatID int64, refs []tmeurl.SourceRef) bool {
+	limit := effectiveMaxLinks(ctx, opt)
+	if len(refs) <= limit {
+		return false
+	}
+	sendText(ctx, opt, snd, chatID, fmt.Sprintf("一次最多处理 %d 条有效链接，本次检测到 %d 条，未提交任何任务。请分批发送。", limit, len(refs)))
+	return true
+}
+
+func batchSubmitSummary(succeeded int, failures []submitFailure) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "批量提交完成：成功 %d 条，失败 %d 条。", succeeded, len(failures))
+	if len(failures) == 0 {
+		return b.String()
+	}
+	b.WriteString("\n\n失败明细：")
+	shown := 0
+	for _, failure := range failures {
+		line := fmt.Sprintf("\n• %s：%s", failure.ref.String(), apperr.UserText(failure.code))
+		if b.Len()+len(line) > 3500 {
+			break
+		}
+		b.WriteString(line)
+		shown++
+	}
+	if shown < len(failures) {
+		fmt.Fprintf(&b, "\n• 另有 %d 条失败，请减少单次链接数后重试。", len(failures)-shown)
+	}
+	return b.String()
+}
+
+func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64,
+	refs []tmeurl.SourceRef, prompt, cloudDest string) {
+	multi := len(refs) > 1
+	succeeded := 0
+	failures := make([]submitFailure, 0)
+	for i, ref := range refs {
+		// access 内部仍会权威检查；此处快速路径避免为已饱和队列发送占位。
+		if opt.Queue.Full() {
+			failures = append(failures, submitFailure{ref: ref, code: apperr.CodeQueueFull})
+			if !multi {
+				sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeQueueFull))
+			}
+			continue
+		}
+
+		statusMsgID := 0
+		sent, err := snd.SendMessage(ctx, chatID, prompt)
+		if err != nil {
+			opt.Log.Warn("状态提示发送失败", "user_id", from.ID, "ref", ref.String(), "error", err.Error())
+		} else {
+			statusMsgID = sent
+		}
+
+		dec, err := opt.Access.Submit(ctx, access.Submission{
+			UserID:            from.ID,
+			ChatID:            chatID,
+			Ref:               ref,
+			StatusMsgID:       statusMsgID,
+			Username:          from.Username,
+			DisplayName:       displayNameOf(from),
+			ProfileProvided:   true,
+			BatchContinuation: i > 0,
+			CloudDest:         cloudDest,
+		})
+		if err != nil {
+			ae := apperr.From(err)
+			opt.Log.Error("提交校验失败", "user_id", from.ID, "ref", ref.String(), "code", ae.Code, "error", err.Error())
+			delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
+			failures = append(failures, submitFailure{ref: ref, code: ae.Code})
+			if !multi {
+				sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+			}
+			continue
+		}
+		if !dec.Allowed {
+			opt.Log.Info("拒绝提交", "user_id", from.ID, "ref", ref.String(), "reason", dec.Reason)
+			delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
+			failures = append(failures, submitFailure{ref: ref, code: dec.Reason})
+			if !multi {
+				sendText(ctx, opt, snd, chatID, apperr.UserText(dec.Reason))
+			}
+			continue
+		}
+		succeeded++
+		opt.Log.Info("任务已入队", "job_id", dec.JobID, "user_id", from.ID,
+			"request_id", dec.RequestID, "ref", ref.String(), "cloud_dest", cloudDest)
+	}
+	if multi {
+		sendText(ctx, opt, snd, chatID, batchSubmitSummary(succeeded, failures))
+	}
+}
+
+// handleLinkWithProfile 处理一个或多个链接，并把 Bot update 中的资料传入访问控制服务。
 func handleLinkWithProfile(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
-	userID := from.ID
 	refs := tmeurl.ParseAll(text)
 	if len(refs) == 0 {
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInvalidURL))
 		return
 	}
-	if len(refs) > 1 {
-		// 多链接只取第一条有效链接，其余忽略且不扣额度
-		sendText(ctx, opt, snd, chatID, multiLinkNotice)
-	}
-	// 队列饱和时直接回繁忙，不为注定被拒的任务发送占位提示
-	// （access 内部还会再查一次，这里只是省 Bot API 调用的快速路径）
-	if opt.Queue.Full() {
-		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeQueueFull))
+	if rejectTooManyLinks(ctx, opt, snd, chatID, refs) {
 		return
 	}
-
-	var statusMsgID int
-	sent, err := snd.SendMessage(ctx, chatID, statusPrompt)
-	if err != nil {
-		opt.Log.Warn("状态提示发送失败", "user_id", userID, "error", err.Error())
-	} else {
-		statusMsgID = sent
-	}
-
-	dec, err := opt.Access.Submit(ctx, access.Submission{
-		UserID:          userID,
-		ChatID:          chatID,
-		Ref:             refs[0],
-		StatusMsgID:     statusMsgID,
-		Username:        from.Username,
-		DisplayName:     displayNameOf(from),
-		ProfileProvided: true,
-	})
-	if err != nil {
-		// 存储故障：清理占位提示并回复对应文案
-		ae := apperr.From(err)
-		opt.Log.Error("提交校验失败", "user_id", userID, "code", ae.Code, "error", err.Error())
-		delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
-		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
-		return
-	}
-	if !dec.Allowed {
-		// 业务拒绝：不建任务（除队列满竞态外也不落库），清理占位提示并回复原因
-		opt.Log.Info("拒绝提交", "user_id", userID, "reason", dec.Reason)
-		delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
-		sendText(ctx, opt, snd, chatID, apperr.UserText(dec.Reason))
-		return
-	}
-	opt.Log.Info("任务已入队",
-		"job_id", dec.JobID, "user_id", userID, "request_id", dec.RequestID, "ref", refs[0].String())
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "")
 }
 
 const cancelUsage = "用法：/cancel 消息链接（即当初提交的那条链接）"
@@ -347,7 +415,7 @@ func handleCancel(ctx context.Context, opt Options, snd delivery.Sender, userID,
 		return
 	}
 	if len(refs) > 1 {
-		sendText(ctx, opt, snd, chatID, multiLinkNotice)
+		sendText(ctx, opt, snd, chatID, multiCancelNotice)
 	}
 	n, err := opt.Access.CancelOwnByLink(ctx, userID, refs[0])
 	if err != nil {
@@ -459,59 +527,18 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 		return
 	}
 
-	// 3. 链接解析（多链接规则与裸链接一致：取第一条，其余提示忽略）
+	// 3. 链接解析与单次上限检查；超过上限整批拒绝，不创建占位或任务。
 	refs := tmeurl.ParseAll(linkText)
 	if len(refs) == 0 {
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInvalidURL))
 		return
 	}
-	if len(refs) > 1 {
-		sendText(ctx, opt, snd, chatID, multiLinkNotice)
-	}
-
-	// 4. 队列饱和快速路径：不为注定被拒的任务发送占位提示
-	if opt.Queue.Full() {
-		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeQueueFull))
+	if rejectTooManyLinks(ctx, opt, snd, chatID, refs) {
 		return
 	}
 
-	// 5. 占位提示（云盘文案）→ Submit 透传
-	var statusMsgID int
-	sent, err := snd.SendMessage(ctx, chatID, cloudStatusPrompt)
-	if err != nil {
-		opt.Log.Warn("云盘状态提示发送失败", "user_id", from.ID, "error", err.Error())
-	} else {
-		statusMsgID = sent
-	}
-
-	dec, err := opt.Access.Submit(ctx, access.Submission{
-		UserID:          from.ID,
-		ChatID:          chatID,
-		Ref:             refs[0],
-		StatusMsgID:     statusMsgID,
-		Username:        from.Username,
-		DisplayName:     displayNameOf(from),
-		ProfileProvided: true,
-		CloudDest:       dest,
-	})
-	if err != nil {
-		// 存储故障：清理占位提示并回复对应文案
-		ae := apperr.From(err)
-		opt.Log.Error("云盘提交校验失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
-		delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
-		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
-		return
-	}
-	if !dec.Allowed {
-		// 业务拒绝：与裸链接同构（清理占位+受控文案；云盘提交共用同一六步链）
-		opt.Log.Info("拒绝云盘提交", "user_id", from.ID, "reason", dec.Reason)
-		delivery.TryDeleteStatus(ctx, snd, opt.Log, chatID, statusMsgID)
-		sendText(ctx, opt, snd, chatID, apperr.UserText(dec.Reason))
-		return
-	}
-	opt.Log.Info("云盘任务已入队",
-		"job_id", dec.JobID, "user_id", from.ID, "request_id", dec.RequestID,
-		"ref", refs[0].String(), "cloud_dest", dest)
+	// 4–5. 每条链接独立创建云盘占位并经同一六步链提交到相同目的地。
+	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest)
 }
 
 // handleWhoami 经 MTProto 查询自身账号并回显，用于验证用户通道；调试命令，不在帮助文本列出。

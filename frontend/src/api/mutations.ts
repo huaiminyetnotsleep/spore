@@ -211,6 +211,8 @@ export const resolveEvent = (id: number): Promise<WriteOK> =>
 export interface SettingsSaveInput {
   timezone?: string;
   dedup_window_min?: number;
+  /** 一条 Bot 输入允许的有效链接数（1–50，即时生效）。 */
+  max_links_per_message?: number;
   queue_capacity?: number;
   /** 任务并发 worker 数（1–16，重启生效）；缺省不变更。 */
   worker_count?: number;

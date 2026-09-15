@@ -363,9 +363,13 @@ func main() {
 			WrapSender: func(snd delivery.Sender) delivery.Sender {
 				return notify.NewCountSender(snd, hub)
 			},
-			// 系统名称：每次命令实时读 settings（管理端修改即时生效）
+			// 系统名称与单次链接上限均实时读 settings，管理端修改即时生效。
 			SystemName: func(ctx context.Context) string { return syscfg.Name(ctx, st) },
-			Whoami:     func(ctx context.Context) (string, error) { return mtproto.Me(ctx, api) },
+			MaxLinksPerMessage: func(ctx context.Context) int {
+				return web.LoadMaxLinksPerMessage(ctx, st, cfg.MaxLinksPerMessage)
+			},
+			Whoami: func(ctx context.Context) (string, error) { return mtproto.Me(ctx, api) },
+
 			// /join：joinmgr 统一处理开关/上限/审核分流；owner 判定经
 			// users 表全局唯一 owner（未设置时按普通用户走审核）
 			ChannelJoin: joinSvc,

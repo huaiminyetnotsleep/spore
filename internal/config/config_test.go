@@ -29,6 +29,9 @@ func TestLoadMinimalDefaults(t *testing.T) {
 	if cfg.WorkerCount != 1 {
 		t.Errorf("WorkerCount 默认应为 1，得到 %d", cfg.WorkerCount)
 	}
+	if cfg.MaxLinksPerMessage != DefaultMaxLinksPerMessage {
+		t.Errorf("MaxLinksPerMessage 默认应为 %d，得到 %d", DefaultMaxLinksPerMessage, cfg.MaxLinksPerMessage)
+	}
 	if cfg.DataDir != "data" {
 		t.Errorf("DataDir 默认应为 data，得到 %q", cfg.DataDir)
 	}
@@ -57,22 +60,35 @@ func TestLoadMinimalDefaults(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	cfg, err := Load(baseEnv(map[string]string{
-		"WORKER_COUNT":    "3",
-		"DATA_DIR":        "/var/lib/spore",
-		"MAX_FILE_SIZE":   "1048576",
-		"STREAM_LIMIT":    "524288",
-		"IN_MEMORY_LIMIT": "524288", // 与 STREAM_LIMIT 相等合法（区间退化为空）
-		"LOG_LEVEL":       "debug",
+		"WORKER_COUNT":          "3",
+		"MAX_LINKS_PER_MESSAGE": "20",
+		"DATA_DIR":              "/var/lib/spore",
+		"MAX_FILE_SIZE":         "1048576",
+		"STREAM_LIMIT":          "524288",
+		"IN_MEMORY_LIMIT":       "524288", // 与 STREAM_LIMIT 相等合法（区间退化为空）
+		"LOG_LEVEL":             "debug",
 	}))
 	if err != nil {
 		t.Fatalf("期望成功，得到错误：%v", err)
 	}
-	if cfg.WorkerCount != 3 || cfg.DataDir != "/var/lib/spore" ||
+	if cfg.WorkerCount != 3 || cfg.MaxLinksPerMessage != 20 || cfg.DataDir != "/var/lib/spore" ||
 		cfg.TempDir != "/var/lib/spore/tmp" ||
 		cfg.MaxFileSize != 1048576 || cfg.StreamLimit != 524288 ||
 		cfg.InMemoryLimit != 524288 ||
 		cfg.LogLevel != slog.LevelDebug {
 		t.Errorf("覆盖值未生效：%+v", cfg)
+	}
+}
+
+func TestLoadMaxLinksPerMessageValidation(t *testing.T) {
+	for name, value := range map[string]string{
+		"低于下界": "0",
+		"高于上界": "51",
+		"非整数":  "many",
+	} {
+		if _, err := Load(baseEnv(map[string]string{"MAX_LINKS_PER_MESSAGE": value})); err == nil {
+			t.Errorf("%s 应报错", name)
+		}
 	}
 }
 

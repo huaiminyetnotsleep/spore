@@ -45,6 +45,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
     timezone: "Asia/Shanghai",
     dedup_window_min: 30,
+    max_links_per_message: 10,
     queue_capacity: 64,
     queue_runtime: 64,
     queue_same: true,
@@ -181,6 +182,23 @@ describe("运行设置页", () => {
     expect(input.max_file_size).toBeUndefined();
     expect(input.stream_limit).toBeUndefined();
     expect(input.temp_dir_max_size).toBeUndefined();
+  });
+
+  it("保存单次最大链接数并携带到载荷", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView());
+    fetchBackupStatusMock.mockResolvedValue(backupView);
+    saveSettingsMock.mockResolvedValue({ ok: true, settings: settingsView({ max_links_per_message: 20 }) });
+
+    renderPage();
+
+    const limit = await screen.findByRole("spinbutton", { name: /单次最大链接数/ });
+    await waitFor(() => expect(limit).toHaveValue("10"));
+    fireEvent.change(limit, { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => expect(saveSettingsMock).toHaveBeenCalledTimes(1));
+    const input = saveSettingsMock.mock.calls[0][0] as SettingsSaveInput;
+    expect(input.max_links_per_message).toBe(20);
   });
 
   it("保存任务并发 worker 数并携带到载荷", async () => {

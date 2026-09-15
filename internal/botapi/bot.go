@@ -124,10 +124,11 @@ type Options struct {
 	WrapSender func(delivery.Sender) delivery.Sender
 	// SystemName 提供可配置的系统名称（internal/syscfg，settings 即时生效）；
 	// nil 或返回空串时回退 syscfg.DefaultName（帮助与欢迎文案用）。
-	SystemName      func(ctx context.Context) string
-	Whoami          func(ctx context.Context) (string, error) // MTProto 就绪后注入，供 /whoami 验证
-	Status          StatusProvider                            // 可选：供 /status 与 /health 查询运行状态
-	ProfileObserver func(models.User)                         // 可选：记录已与 Bot 交互的用户资料上下文
+	SystemName         func(ctx context.Context) string
+	MaxLinksPerMessage func(ctx context.Context) int             // 单条输入最大有效链接数；nil 时使用 Cfg
+	Whoami             func(ctx context.Context) (string, error) // MTProto 就绪后注入，供 /whoami 验证
+	Status             StatusProvider                            // 可选：供 /status 与 /health 查询运行状态
+	ProfileObserver    func(models.User)                         // 可选：记录已与 Bot 交互的用户资料上下文
 }
 
 // New 创建 Bot 实例。Sender 由 handler 按 update 即时构造（telegramSender

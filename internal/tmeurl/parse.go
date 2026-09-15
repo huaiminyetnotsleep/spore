@@ -77,7 +77,7 @@ func Parse(text string) (SourceRef, bool) {
 }
 
 // ParseAll 返回文本中全部能成功解析的 Telegram 消息链接，按出现顺序排列；
-// 供调用方检测"一条消息包含多个链接"（多链接只处理第一条并提示）。
+// 供调用方批量处理一条消息中的多个有效链接。
 func ParseAll(text string) []SourceRef {
 	var refs []SourceRef
 	for _, loc := range candidatePattern.FindAllStringIndex(text, -1) {

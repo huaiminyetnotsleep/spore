@@ -954,6 +954,7 @@ cloud-drive.json.enc
 | --- | --- | --- |
 | `timezone` | string | 运营时区（IANA 名称；即时生效） |
 | `dedup_window_min` | int | 重复链接去重窗口（分钟；即时生效） |
+| `max_links_per_message` | int | 单条普通消息或 `/download` 最大有效链接数（1–50；即时生效） |
 | `queue_capacity` | int | 队列容量配置值 |
 | `queue_runtime` | int | 当前进程队列容量（0 = 未接入） |
 | `queue_same` | bool | 配置值是否与运行值一致（`false` 表示待重启生效） |
@@ -981,12 +982,13 @@ cloud-drive.json.enc
 
 ### POST /api/v1/settings
 
-保存运营设置（认证 + CSRF）。按 时区 → 去重窗口 → 频道副本开关 → 复用开关 → 缓存频道 → 频道加入 → 队列容量 → worker 数 → 媒体参数 → 传输并发顺序逐项校验。生效方式：时区、去重窗口、频道副本开关、复用开关、缓存频道、频道加入、内存预算、传输并发**即时生效**；队列容量、worker 数、媒体参数**重启生效**。空缺字段保持不变；值未变化时不写审计。
+保存运营设置（认证 + CSRF）。按 时区 → 去重窗口 → 单次最大链接数 → 频道副本开关 → 复用开关 → 缓存频道 → 频道加入 → 队列容量 → worker 数 → 媒体参数 → 传输并发顺序逐项校验。生效方式：时区、去重窗口、单次最大链接数、频道副本开关、复用开关、缓存频道、频道加入、内存预算、传输并发**即时生效**；队列容量、worker 数、媒体参数**重启生效**。空缺字段保持不变；值未变化时不写审计。
 
 | 请求字段 | 类型 | 校验 |
 | --- | --- | --- |
 | `timezone` | string | IANA 时区名（如 `Asia/Shanghai`） |
 | `dedup_window_min` | int | 1–1440 分钟；缺省保持不变 |
+| `max_links_per_message` | int | 1–50；缺省保持不变，保存后即时影响新输入 |
 | `channel_copy_enabled` | bool | 频道副本同步总开关；缺省保持不变 |
 | `tg_reuse_enabled` | bool | 缓存频道复用总开关；缺省保持不变 |
 | `dump_channel` | string | 缓存频道目标：`@用户名` / `t.me` 链接 / `-100` 数字 ID；经 Bot 校验（频道存在且 Bot 可发帖）后保存数字 ID；空串清除配置（显式 `0` 覆盖环境变量） |
