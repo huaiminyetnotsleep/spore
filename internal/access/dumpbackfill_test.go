@@ -225,3 +225,39 @@ func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 		}
 	})
 }
+
+// TestDumpBackfillProbeOutsideTx：试探复制（Bot API 网络调用）必须发生在
+// store 事务之外——store 是单连接（SQLite 单写者），事务持连接期间的网络
+// IO 会拖住全站 DB 操作（线上事故：转存触发全站卡死直至重启）。
+// 哨兵：dumpLive 假件内用独立 2s 超时连接查询——若在事务内被调用，
+// 连接被事务占用，查询必然超时失败。
+func TestDumpBackfillProbeOutsideTx(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, _ := newTestService(t, 8, clock.Now)
+	mustEnabledUser(t, st, 1)
+	clock.Advance(time.Minute)
+	src := newTerminalRequest(t, svc, st, 51, store.DeliveryModeUpload)
+	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
+		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+	}); err != nil {
+		t.Fatalf("落缓存条目失败: %v", err)
+	}
+
+	inTx := false
+	svc.SetDumpLive(func(ctx context.Context, _ string, _ int) bool {
+		qctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := st.GetRequest(qctx, src.ID); err != nil {
+			inTx = true // 连接被事务占用：试探在事务内执行了
+		}
+		return false // 判定副本失效，放行补写
+	})
+
+	out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
+	if err != nil || out.SkipReason != "" || out.CreatedRequestID == 0 {
+		t.Fatalf("失效副本应放行建行: %+v err=%v", out, err)
+	}
+	if inTx {
+		t.Fatal("试探复制在 store 事务内被调用（会拖住全站 DB 操作）")
+	}
+}

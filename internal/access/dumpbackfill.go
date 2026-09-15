@@ -73,11 +73,23 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 			fmt.Sprintf("请求 %d 的频道键无法重建来源链接", requestID))
 	}
 
+	// 副本有效性试探（EntryLive = Bot API 网络调用）必须在事务外完成：
+	// store 是单连接（SQLite 单写者），事务持连接期间的网络 IO 会拖住
+	// 全站 DB 操作。试探结论（stale）传入事务内做纯 DB 复核。
+	stale := false
+	if s.dumpLive != nil {
+		if _, err := s.store.LatestDumpEntry(ctx, req.ChannelKey, req.MessageID); err == nil {
+			stale = !s.dumpLive(ctx, req.ChannelKey, req.MessageID)
+		}
+	}
+
 	now := s.now().UnixMilli()
 	out := DumpBackfillOutcome{RequestID: requestID}
 	var createdID int64
 	err = s.store.Tx(ctx, func(tx *store.Store) error {
-		skip, err := dumpBackfillSkip(ctx, tx, requestID, s.dumpLive)
+		// 事务内复核仅限纯 DB 判定：请求存在 + 终态 + 条目存在性；
+		// 副本有效性以事务外试探结论为准（网络试探严禁入事务）
+		skip, err := dumpBackfillSkipInTx(ctx, tx, requestID, s.dumpLive != nil, stale)
 		if err != nil {
 			return err
 		}
@@ -146,12 +158,11 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 	return out, nil
 }
 
-// dumpBackfillSkip 判定请求级补写资格（st 传事务视图可在事务内复核）：
-// 请求存在、已终态（succeeded/failed/cancelled）、缓存频道无同链接的有效
-// 副本。条目存在时经 live（试探复制）判定副本是否仍有效——缓存频道里的
-// 副本消息可能被管理员在客户端删除，条目坐标不感知删除；live 判定失效
-// 时放行补写自愈。live 为 nil（未注入）时条目存在即视为有效（保守旧行为）。
-// 返回跳过原因（空串 = 通过）；error 仅存储故障。
+// dumpBackfillSkip 判定请求级补写资格（供事务外预检调用；内含 EntryLive
+// 试探复制的网络调用，严禁传入事务视图）。判定：请求存在、已终态、缓存
+// 频道无同链接的有效副本——副本消息可能被管理员在客户端删除，条目坐标
+// 不感知删除，以试探复制结论为准（live 为 nil 时条目存在即视为有效，
+// 保守旧行为）。返回跳过原因（空串 = 通过）；error 仅存储故障。
 func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, live dumpLiveFunc) (string, error) {
 	r, err := st.GetRequest(ctx, requestID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -168,6 +179,34 @@ func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, liv
 	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID); err == nil {
 		if live != nil && !live(ctx, r.ChannelKey, r.MessageID) {
 			return "", nil // 副本消息已被删除：放行补写自愈
+		}
+		return DumpBackfillSkipAlreadyDumped, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+	return "", nil
+}
+
+// dumpBackfillSkipInTx 是事务内的纯 DB 复核（网络试探严禁入事务——store
+// 单连接下事务持连接期间的 IO 会拖住全站）：请求存在 + 终态 + 条目存在性。
+// 副本有效性以事务外试探结论为准：stale=true（试探判定已失效）时放行
+// 建行自愈；hasLive=false（未注入试探通道）时条目存在即视为有效。
+func dumpBackfillSkipInTx(ctx context.Context, st *store.Store, requestID int64, hasLive, stale bool) (string, error) {
+	r, err := st.GetRequest(ctx, requestID)
+	if errors.Is(err, store.ErrNotFound) {
+		return DumpBackfillSkipNotFound, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	switch r.Status {
+	case store.RequestSucceeded, store.RequestFailed, store.RequestCancelled:
+	default:
+		return DumpBackfillSkipNotFinished, nil
+	}
+	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID); err == nil {
+		if hasLive && stale {
+			return "", nil // 副本已失效（事务外试探结论）：放行补写自愈
 		}
 		return DumpBackfillSkipAlreadyDumped, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
