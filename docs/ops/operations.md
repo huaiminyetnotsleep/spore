@@ -6,6 +6,64 @@
 
 ## 1. 日常运维与健康检查
 
+### 1.1 `spore` 运维命令（install-spore.sh）
+
+一键安装脚本自带完整运维菜单，在任意目录运行均可（自动定位部署目录）。共有三种唤起方式：
+
+| 唤起方式 | 命令 | 适用场景 |
+| --- | --- | --- |
+| ① 远程一行命令（首次部署） | `curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh \| bash` | 全新服务器，无需 clone 仓库；执行后直接打开交互菜单 |
+| ② `spore` 命令（日常推荐） | `spore`（打开菜单）或 `spore status` 等子命令 | 首次安装/升级完成后，脚本自动把自身注册为系统命令（软链 `/usr/local/bin/spore`），此后服务器任意目录可用 |
+| ③ 本地运行脚本 | `bash ~/spore/install-spore.sh [子命令]` | 与 ② 完全等价；软链被误删或不想用 `spore` 名字时使用 |
+
+菜单共 13 项（安装、升级、升级后验证、状态、日志、查看访问密钥、重设密钥、清理临时文件、
+磁盘与数据检查、重启、停止、卸载、退出）；子命令与菜单项一一对应，见下方速查表。
+
+安装（或升级）完成时，脚本会把自身注册为系统的 **`spore` 命令**（软链
+`/usr/local/bin/spore`）。之后在服务器任意目录：
+
+- 输入 `spore` —— 打开交互菜单：
+
+```text
+请选择操作：
+   1) 安装 Spore          8) 清理临时文件
+   2) 升级 Spore          9) 磁盘与数据检查
+   3) 升级后验证         10) 重启服务
+   4) 查看状态           11) 停止服务
+   5) 查看日志           12) 卸载 Spore
+   6) 查看访问密钥       13) 退出
+   7) 重设密钥
+```
+
+- 或使用子命令直接调用（便于放进 cron 或工单流程；`uninstall` 仍会交互确认，
+  `clean-tmp` 会先停止服务）：
+
+| 子命令 | 作用 | 等价的原始操作 |
+| --- | --- | --- |
+| `spore install` | 首次安装（含凭据交互、数据目录授权） | [deployment.md §4.2](../guide/deployment.md) 全流程 |
+| `spore upgrade` | 拉新镜像并滚动更新，不动配置（同时刷新 spore 命令自身） | `docker compose pull && docker compose up -d` |
+| `spore verify` | 升级后验证：探针 + 容器健康 + MTProto 通道登录 | 本节 §2.4 验证序列 |
+| `spore status` | 容器状态 + `/healthz` 探活 | `docker compose ps` + curl |
+| `spore logs` | 跟踪 bot 日志（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
+| `spore show-key` | 从日志查首次访问密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
+| `spore reset-key` | 重置管理端访问密钥（新密钥只打印一次） | `docker compose exec bot spore admin reset-key`（见 §6.3） |
+| `spore clean-tmp` | 清空临时媒体目录 `data/tmp`（先停机） | §6.5 磁盘满处理的第一步 |
+| `spore diskcheck` | 磁盘容量、数据文件、`.env` 权限体检 | §3.1 数据边界的人工检查 |
+| `spore restart` | 重启应用（未运行则直接启动） | `docker compose restart bot` |
+| `spore stop` | 停止服务（保留容器与数据） | `docker compose stop` |
+| `spore uninstall` | 卸载容器与 spore 命令（数据/配置按提示决定去留） | §5 卸载与停用 |
+| `spore exit` | 退出脚本（等价菜单 13） | —（仅结束脚本自身） |
+
+`spore` 命令等价于部署目录内的 `install-spore.sh`（如 `~/spore/install-spore.sh status`）。
+软链被误删时恢复：`sudo ln -sf ~/spore/install-spore.sh /usr/local/bin/spore`。
+
+脚本统一约定：部署目录默认 `~/spore`（`SPORE_DIR` 可覆盖）；所有交互输入读
+`/dev/tty`，`curl | bash` 管道方式可用；涉及 `data/` 的读写自动经 sudo（数据目录
+属主是容器 UID 10001）。备份与恢复不在脚本内：请使用管理端「备份 → 导出数据库」
+（在线一致快照）与 [§4 备份与恢复](#4-备份与恢复) 的手工序列。
+
+### 1.2 常用原始命令
+
 | 操作 | 命令 |
 | --- | --- |
 | 查看服务 | `docker compose ps` |
@@ -238,6 +296,13 @@ shasum -a 256 /受保护位置/spore-backup-YYYYMMDD-HHMMSS.db
 cd ~/spore
 docker compose pull bot
 docker compose up -d
+```
+
+一键脚本部署的目录，重跑安装命令后在菜单选 **2 升级** 即可（不改任何配置，等价于
+上面的 pull + up）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh | bash
 ```
 
 源码构建部署执行：
@@ -590,6 +655,8 @@ HTTPS 地址检查。
 docker compose exec bot spore admin reset-key
 ```
 
+或使用一键脚本菜单「7) 重设密钥」（`install-spore.sh reset-key`）。
+
 只保存命令输出的新密钥。不要直接修改数据库中的哈希，也不要将旧密钥写入 URL。
 
 ### 6.4 MTProto 未就绪或会话失效
@@ -607,8 +674,9 @@ docker compose logs -f bot
 ### 6.5 数据库未就绪或写入失败
 
 查看 `/readyz`、bot 日志和 `data/` 权限。不要在运行中复制 SQLite 主文件作为备份，
-使用管理端导出以获得一致快照。若磁盘满，先处理 `data/tmp/` 中确认的孤儿临时文件，
-再检查数据库和宿主机反向代理的证书/配置存储空间。
+使用管理端导出以获得一致快照。若磁盘满，先处理 `data/tmp/` 中确认的孤儿临时文件
+（一键脚本菜单「8) 清理临时文件」会自动停机清空再启动），再检查数据库和宿主机反向
+代理的证书/配置存储空间；`install-spore.sh diskcheck` 可快速查看容量与数据文件分布。
 
 ### 6.6 大文件发送失败（超过 50MB 的媒体）
 

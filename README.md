@@ -16,7 +16,10 @@ Spore 是一个面向**合法授权场景**的 Telegram 自托管消息重构工
 > Bot API 负责「和用户聊天」，MTProto 负责「以用户身份访问 Telegram」，业务层负责「把源消息转换成新的消息」。
 
 > [!IMPORTANT]
-> **项目性质与合规声明：**本项目由个人出于学习、研究及自用目的独立维护，当前不提供商业服务，也不隶属于、代表或获得 Telegram 官方认可。请仅处理你本人拥有，或已取得内容权利人、频道管理者及相关主体明确授权的内容。账号能够访问某条消息，**不代表**你当然拥有复制、下载、改编、转发或公开传播该内容的权利。使用前请阅读下方的[使用边界与合规要求](#compliance)。
+> **项目性质与合规声明**：本项目由个人出于学习、研究及自用目的独立维护，当前不提供商业服务，也不隶属于、代表或获得 Telegram 官方认可。请仅处理你本人拥有，或已取得内容权利人、频道管理者及相关主体明确授权的内容。账号能够访问某条消息，**不代表**你当然拥有复制、下载、改编、转发或公开传播该内容的权利。使用前请阅读下方的[使用边界与合规要求](#compliance)。
+
+> [!NOTE]
+> 📖 完整文档请[在线阅读](https://huaiminyetnotsleep.github.io/spore/)。
 
 ## ✨ 功能特性
 
@@ -70,6 +73,22 @@ make dev
 
 ## 🐳 Docker Compose 部署
 
+**一条命令部署**（全新 Linux 服务器，需已装 Docker；缺失时脚本可交互安装）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh | bash
+```
+
+运行后出现管理菜单，选 **1** 安装：自动下载配置到 `~/spore` → 交互式填写 `BOT_TOKEN` / `TG_API_ID` / `TG_API_HASH` → 授权 `data/` → 拉取镜像并启动 → 打印首次访问密钥。安装完成后会把脚本注册为 **`spore` 命令**，之后直接输入 `spore` 打开管理菜单，或 `spore status` / `spore upgrade` 等子命令完成**升级、验证、状态、日志、查看/重设密钥、清理临时文件、磁盘检查、重启、停止、卸载**等运维操作；部署目录可经 `curl ... | SPORE_DIR=/opt/spore bash` 覆盖。详见[部署指南](docs/guide/deployment.md)。
+
+```bash
+spore             # 打开管理菜单（安装/升级/验证/状态/日志/密钥/清理/重启/停止/卸载）
+spore status      # 例：查看运行状态（免菜单直通）
+spore upgrade     # 例：升级到最新镜像
+```
+
+手动部署（或脚本不适用时）：
+
 ```bash
 cp .env.example .env       # 填 Telegram 凭据
 chmod 600 .env
@@ -115,19 +134,34 @@ make linux   # 交叉编译 Linux 二进制
 
 ## 📚 文档
 
-完整文档在 [`docs/`](docs/)（VitePress 站点，本地预览 `make docs-dev`）：
+完整文档在 [`docs/`](docs/)（VitePress 站点，本地预览 `make docs-dev`），推荐直接 [在线阅读](https://huaiminyetnotsleep.github.io/spore/)：
+
+| 文档 | 在线版 | 内容 |
+| --- | --- | --- |
+| [项目介绍](docs/guide/introduction.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/introduction) | 目的、核心功能、设计原理与请求流程 |
+| [快速部署](docs/guide/deployment.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/deployment) | 首次上线、访问密钥、反向代理 |
+| [Bot 使用指南](docs/guide/usage.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/usage) | 命令、链接写法、配额与限制 |
+| [下载功能](docs/guide/download.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/download) | 云盘下载的目的地配置与边界 |
+| [配置参考](docs/reference/configuration.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/configuration) | 环境变量、持久化设置、生效时机 |
+| [管理端 API](docs/reference/api.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/api) | `/api/v1` 接口契约 |
+| [架构文档](docs/reference/architecture.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/architecture) | 架构、模块职责与技术决策 |
+| [运维手册](docs/ops/operations.md) | [↗](https://huaiminyetnotsleep.github.io/spore/ops/operations) | 升级、备份恢复、云盘运维 |
+| [本地开发](docs/guide/development.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/development) | 构建、测试与验收门禁 |
+
+### 官方与第三方文档
+
+使用和开发时常查的官方资料，点击即可查看：
 
 | 文档 | 内容 |
 | --- | --- |
-| [项目介绍](docs/guide/introduction.md) | 目的、核心功能、设计原理与请求流程 |
-| [快速部署](docs/guide/deployment.md) | 首次上线、访问密钥、反向代理 |
-| [Bot 使用指南](docs/guide/usage.md) | 命令、链接写法、配额与限制 |
-| [下载功能](docs/guide/download.md) | 云盘下载的目的地配置与边界 |
-| [配置参考](docs/reference/configuration.md) | 环境变量、持久化设置、生效时机 |
-| [管理端 API](docs/reference/api.md) | `/api/v1` 接口契约 |
-| [架构文档](docs/reference/architecture.md) | 架构、模块职责与技术决策 |
-| [运维手册](docs/ops/operations.md) | 升级、备份恢复、云盘运维 |
-| [本地开发](docs/guide/development.md) | 构建、测试与验收门禁 |
+| [Telegram Bot API](https://core.telegram.org/bots/api) | Bot 接口官方参考（消息、文件上传上限等） |
+| [Telegram MTProto API](https://core.telegram.org/api) | 用户账号 API 官方文档，本工具读取源消息所依赖 |
+| [my.telegram.org](https://my.telegram.org) | 申请 API ID / API Hash（[申请流程](docs/guide/telegram-api-credentials.md)） |
+| [Telegram 服务条款](https://telegram.org/tos) | 平台使用条款，使用前请阅读 |
+| [Telegram API 服务条款](https://core.telegram.org/api/terms) | 使用 Telegram API 需遵守的条款 |
+| [gotd/td](https://github.com/gotd/td) | MTProto 客户端（用户号 / Bot 号双会话） |
+| [go-telegram/bot](https://github.com/go-telegram/bot) | Bot API 客户端（流式上传） |
+| [rclone 文档](https://rclone.org/docs/) | 云盘远端配置与上传 |
 
 ## 🗺️ 当前状态
 

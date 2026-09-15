@@ -137,7 +137,37 @@ Spore 提供两种部署方式，都会运行相同的 `bot` 服务；GHCR 是�
 
 ### 4.2 方式 A：GHCR 镜像端到端（推荐）
 
-本节是方式 A 的完整安装路径。每条命令都标注执行位置：**本机**指你自己的电脑
+#### 一键安装（推荐）
+
+在 VPS 终端执行一条命令即可进入安装管理菜单：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh | bash
+```
+
+菜单提供安装、升级、升级后验证、查看状态、查看日志、查看访问密钥、重设密钥、清理
+临时文件、磁盘与数据检查、重启、停止与卸载（各子命令说明见
+[operations.md §1.1](../ops/operations.md)）。选 **1 安装**
+即完成下述第 1–5 步的全部动作（创建部署目录、下载两个配置文件、交互式填写凭据、
+授权数据目录、拉取镜像并启动、等待健康检查、提示保存访问密钥）。
+
+脚本行为说明：
+
+- 部署目录默认 `~/spore`，可覆盖：`curl ... | SPORE_DIR=/opt/spore bash`；
+- 所有交互输入读 `/dev/tty`，`curl | bash` 管道环境可用；无交互终端（CI 等）时安装
+  会生成 `.env` 后提示手工填写，重新运行同一条命令即可继续；
+- Docker 未安装时脚本会询问是否用 get.docker.com 官方脚本自动安装；
+- 菜单「升级」不改任何配置，仅拉取新镜像并滚动更新；「卸载」默认保留 `.env` 与
+  `data/`，按提示二次确认后才删除；
+- 也可用子命令直接调用（便于脚本化）：`install-spore.sh install | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | stop | uninstall | exit`；安装或升级后脚本会把自己注册为系统的 `spore` 命令（软链到 `/usr/local/bin/spore`），之后直接输入 `spore` 打开菜单或 `spore <子命令>` 调用，子命令说明见 [operations.md §1.1](../ops/operations.md)；
+- 首次扫码登录是固有人工环节：启动后按 §4.4 在管理端「MTProto」页面完成。
+
+下面的分步说明是一键脚本的等价展开，便于核对脚本每一步做了什么，也可作为手动
+部署路径。
+
+#### 分步安装
+
+每条命令都标注执行位置：**本机**指你自己的电脑
 终端，**VPS** 指登录服务器后的终端。部署目录统一使用 `~/spore`（即
 `/home/<用户名>/spore`），由第 1 步的 `mkdir` 创建，不需要替换任何占位路径。
 
