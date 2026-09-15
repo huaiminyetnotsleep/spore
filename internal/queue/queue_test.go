@@ -79,14 +79,16 @@ type mediaCall struct {
 	Caption   message.Caption
 	HasReader bool  // 契约要求恒为 true（上传路径必带数据源）
 	ReadErr   error // consumeMediaReaders 时读源错误（nil = 成功读尽）
+	ThumbLen  int   // 解析好的缩略图字节数（0 = 不带封面）
 }
 
 // albumCall 记录一次 SendAlbum 调用的信息。
 type albumCall struct {
-	Kinds    []message.ItemKind
-	Captions []message.Caption // 逐成员 caption（worker 从各 item 的文字填充）
-	ReadLens []int             // consumeAlbumReaders 时逐成员读得的字节数
-	ReadErrs []error           // 逐成员读源错误（nil = 成功读尽）
+	Kinds     []message.ItemKind
+	Captions  []message.Caption // 逐成员 caption（worker 从各 item 的文字填充）
+	ReadLens  []int             // consumeAlbumReaders 时逐成员读得的字节数
+	ReadErrs  []error           // 逐成员读源错误（nil = 成功读尽）
+	ThumbLens []int             // 逐成员缩略图字节数（0 = 不带封面）
 }
 
 // copyCall 记录一次 CopyMessages 调用（复用路径）。
@@ -144,7 +146,8 @@ func (f *fakeSender) SendMedia(_ context.Context, _ int64, m message.Media, capt
 	if f.consumeMediaReaders { // 模拟上传侧读源：下载错误经 reader 在发送阶段传播
 		_, readErr = io.Copy(io.Discard, reader)
 	}
-	call := mediaCall{Kind: m.Kind, Caption: caption, HasReader: reader != nil, ReadErr: readErr}
+	call := mediaCall{Kind: m.Kind, Caption: caption, HasReader: reader != nil, ReadErr: readErr,
+		ThumbLen: len(m.ThumbJPEG)}
 	f.mu.Lock()
 	f.mediaCalls = append(f.mediaCalls, call)
 	mediaErr := f.mediaErr
@@ -161,11 +164,13 @@ func (f *fakeSender) SendMedia(_ context.Context, _ int64, m message.Media, capt
 func (f *fakeSender) SendAlbum(_ context.Context, _ int64, entries []delivery.AlbumEntry) ([]int, error) {
 	kinds := make([]message.ItemKind, 0, len(entries))
 	captions := make([]message.Caption, 0, len(entries))
+	thumbLens := make([]int, 0, len(entries))
 	for _, e := range entries {
 		kinds = append(kinds, e.Media.Kind)
 		captions = append(captions, e.Caption)
+		thumbLens = append(thumbLens, len(e.Media.ThumbJPEG))
 	}
-	call := albumCall{Kinds: kinds, Captions: captions}
+	call := albumCall{Kinds: kinds, Captions: captions, ThumbLens: thumbLens}
 	if f.consumeAlbumReaders { // 模拟上传侧读源：驱动流式/内存管道的下载
 		for _, e := range entries {
 			data, err := io.ReadAll(e.Reader)

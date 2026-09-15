@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"io"
 
@@ -69,6 +70,14 @@ func (s *telegramSender) sendMediaByUpload(ctx context.Context, chatID int64, m 
 			params.Width = meta.Width
 			params.Height = meta.Height
 			params.Duration = meta.Duration
+		}
+		// 服务器端自动生成封面仅覆盖部分容器/编码：worker 已解析好的
+		// 缩略图（源缩略图或 ffmpeg 抽帧）直接随上传携带
+		if len(m.ThumbJPEG) > 0 {
+			params.Thumbnail = &models.InputFileUpload{
+				Filename: message.ThumbFileName,
+				Data:     bytes.NewReader(m.ThumbJPEG),
+			}
 		}
 		sent, err := s.b.SendVideo(ctx, params)
 		return sentMessageID(sent, err)

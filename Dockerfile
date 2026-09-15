@@ -1,4 +1,4 @@
-# spore 容器镜像：前端与 Go 多阶段构建，alpine 运行时（含 CA 证书与 rclone）
+# spore 容器镜像：前端与 Go 多阶段构建，alpine 运行时（含 CA 证书、rclone 与 ffmpeg）
 FROM node:24-alpine AS frontend-build
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -30,7 +30,9 @@ ARG RCLONE_RELEASE=1.75.1
 # buildx 多架构构建自动注入（amd64/arm64）；经典构建器未注入时回退 amd64，
 # 与上面 build-linux 当前固定 GOARCH=amd64 一致。
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates tzdata \
+# ffmpeg：视频封面兜底抽帧用（源消息无自带缩略图时从视频头部抽首帧，
+# 见 internal/media/thumb.go）；缺失时该兜底自动降级为无封面。
+RUN apk add --no-cache ca-certificates tzdata ffmpeg \
     && adduser -D -u 10001 spore
 # rclone 解压到 PATH；alpine 无 unzip，临时安装后移除。
 # rclone version 仅作构建期自检（二进制可在目标架构运行）。

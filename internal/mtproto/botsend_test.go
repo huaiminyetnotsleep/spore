@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gotd/td/bin"
+	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
@@ -33,7 +34,7 @@ func TestUploadedMediaOf(t *testing.T) {
 			Kind:     message.KindVideo,
 			FileName: "video.mp4",
 			Video:    &message.VideoMeta{Width: 640, Height: 480, Duration: 30},
-		})
+		}, nil)
 		doc, ok := media.(*tg.InputMediaUploadedDocument)
 		if !ok {
 			t.Fatalf("形态应为 InputMediaUploadedDocument: %T", media)
@@ -64,7 +65,7 @@ func TestUploadedMediaOf(t *testing.T) {
 			Kind:     message.KindVoice,
 			FileName: "voice.ogg",
 			Audio:    &message.AudioMeta{Duration: 12},
-		})
+		}, nil)
 		doc := media.(*tg.InputMediaUploadedDocument)
 		var voice *tg.DocumentAttributeAudio
 		for _, a := range doc.Attributes {
@@ -85,7 +86,7 @@ func TestUploadedMediaOf(t *testing.T) {
 			Kind:     message.KindAudio,
 			FileName: "a.mp3",
 			Audio:    &message.AudioMeta{Title: "T", Performer: "P", Duration: 60},
-		}).(*tg.InputMediaUploadedDocument)
+		}, nil).(*tg.InputMediaUploadedDocument)
 		var attr *tg.DocumentAttributeAudio
 		for _, a := range audio.Attributes {
 			if v, ok := a.(*tg.DocumentAttributeAudio); ok {
@@ -99,9 +100,29 @@ func TestUploadedMediaOf(t *testing.T) {
 		plain := uploadedMediaOf(file, message.Media{
 			Kind:     message.KindDocument,
 			FileName: "f.bin",
-		}).(*tg.InputMediaUploadedDocument)
+		}, nil).(*tg.InputMediaUploadedDocument)
 		if plain.MimeType != "application/octet-stream" || len(plain.Attributes) != 1 {
 			t.Errorf("普通文档应只有文件名属性: %+v", plain)
+		}
+	})
+
+	t.Run("缩略图挂载与缺省", func(t *testing.T) {
+		thumb := &tg.InputFile{ID: 22, Parts: 1, Name: message.ThumbFileName}
+		with := uploadedMediaOf(file, message.Media{
+			Kind:     message.KindVideo,
+			FileName: "video.mp4",
+		}, thumb).(*tg.InputMediaUploadedDocument)
+		got, ok := with.GetThumb()
+		if !ok || got != thumb {
+			t.Errorf("缩略图应挂到 Thumb 字段: %+v ok=%v", got, ok)
+		}
+
+		without := uploadedMediaOf(file, message.Media{
+			Kind:     message.KindVideo,
+			FileName: "video.mp4",
+		}, nil).(*tg.InputMediaUploadedDocument)
+		if _, ok := without.GetThumb(); ok {
+			t.Error("无缩略图时不应设置 Thumb 标志位")
 		}
 	})
 }
@@ -239,8 +260,13 @@ func (f *largeSendInvoker) Invoke(_ context.Context, req bin.Encoder, d bin.Deco
 	return d.Decode(buf)
 }
 
+// testInvoker 是假 MTProto invoker 的最小接口（tg.NewClient 的入参形态）。
+type testInvoker interface {
+	Invoke(context.Context, bin.Encoder, bin.Decoder) error
+}
+
 // readyBotClient 构造已就绪且走假 invoker 的 BotClient。
-func readyBotClient(t *testing.T, inv *largeSendInvoker) *BotClient {
+func readyBotClient(t *testing.T, inv testInvoker) *BotClient {
 	t.Helper()
 	c := newTestBotClient(t)
 	c.setReady(tg.NewClient(inv))
@@ -673,12 +699,88 @@ func TestUploadedInputMedia(t *testing.T) {
 	file := &tg.InputFile{ID: 11, Parts: 1, Name: "x"}
 	if _, ok := uploadedInputMedia(file, message.Media{
 		Kind: message.KindPhoto, FileName: "photo.jpg",
-	}).(*tg.InputMediaUploadedPhoto); !ok {
+	}, nil).(*tg.InputMediaUploadedPhoto); !ok {
 		t.Fatal("photo 应保持 InputMediaUploadedPhoto 形态")
 	}
 	if _, ok := uploadedInputMedia(file, message.Media{
 		Kind: message.KindVideo, FileName: "v.mp4",
-	}).(*tg.InputMediaUploadedDocument); !ok {
+	}, nil).(*tg.InputMediaUploadedDocument); !ok {
 		t.Fatal("video 应走 InputMediaUploadedDocument 形态")
 	}
+}
+
+// ---- 缩略图上传（直传路径的封面携带与降级） ----
+
+// saveFailInvoker 只在 upload.saveFilePart 阶段失败：注入缩略图上传失败。
+type saveFailInvoker struct {
+	largeSendInvoker
+}
+
+func (f *saveFailInvoker) Invoke(ctx context.Context, req bin.Encoder, d bin.Decoder) error {
+	switch req.(type) {
+	case *tg.UploadSaveFilePartRequest, *tg.UploadSaveBigFilePartRequest:
+		return errors.New("测试注入：分片上传失败")
+	}
+	return f.largeSendInvoker.Invoke(ctx, req, d)
+}
+
+func TestBotClientSendMediaCarriesThumb(t *testing.T) {
+	inv := &largeSendInvoker{users: tg.UserClassVector{Elems: []tg.UserClass{
+		&tg.User{ID: 7, AccessHash: 777},
+	}}}
+	c := readyBotClient(t, inv)
+
+	m := largeVideo()
+	m.ThumbJPEG = []byte("fake-jpeg-bytes")
+	if _, err := c.SendMedia(context.Background(), 7, m, message.Caption{}, strings.NewReader("payload")); err != nil {
+		t.Fatalf("带缩略图直传应成功: %v", err)
+	}
+	doc, ok := inv.lastSend.Media.(*tg.InputMediaUploadedDocument)
+	if !ok {
+		t.Fatalf("媒体应为 InputMediaUploadedDocument: %T", inv.lastSend.Media)
+	}
+	thumb, ok := doc.GetThumb()
+	if !ok {
+		t.Fatal("sendMedia 请求应携带缩略图")
+	}
+	if f, ok := thumb.(*tg.InputFile); !ok || f.Name != message.ThumbFileName {
+		t.Errorf("缩略图句柄不符: %+v", thumb)
+	}
+}
+
+func TestUploadThumbDegrade(t *testing.T) {
+	t.Run("上传失败降级为无缩略图", func(t *testing.T) {
+		inv := &saveFailInvoker{}
+		c := readyBotClient(t, inv)
+		up := uploader.NewUploader(tg.NewClient(inv))
+		m := largeVideo()
+		m.ThumbJPEG = []byte("fake-jpeg-bytes")
+		thumb, err := c.uploadThumb(context.Background(), up, m)
+		if err != nil || thumb != nil {
+			t.Errorf("缩略图上传失败应降级（nil, nil），得到 (%v, %v)", thumb, err)
+		}
+	})
+
+	t.Run("无缩略图字节直接跳过", func(t *testing.T) {
+		inv := &saveFailInvoker{} // 若发起上传会立即失败
+		c := readyBotClient(t, inv)
+		up := uploader.NewUploader(tg.NewClient(inv))
+		thumb, err := c.uploadThumb(context.Background(), up, largeVideo())
+		if err != nil || thumb != nil {
+			t.Errorf("空缩略图应跳过上传，得到 (%v, %v)", thumb, err)
+		}
+	})
+
+	t.Run("ctx 已取消时向外传播", func(t *testing.T) {
+		inv := &saveFailInvoker{}
+		c := readyBotClient(t, inv)
+		up := uploader.NewUploader(tg.NewClient(inv))
+		m := largeVideo()
+		m.ThumbJPEG = []byte("fake-jpeg-bytes")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := c.uploadThumb(ctx, up, m); err == nil {
+			t.Error("ctx 已取消时应返回错误（主上传必然同样失败）")
+		}
+	})
 }

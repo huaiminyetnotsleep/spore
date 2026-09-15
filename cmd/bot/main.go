@@ -474,6 +474,7 @@ func main() {
 				DownloadThreads: cfg.DownloadThreads,
 				MaxDirSize:      cfg.TempDirMaxSize,
 				Memory:          memoryGate, // 进程级内存预算（预算不足降级落盘）
+				FFmpegPath:      cfg.FFmpegPath,
 			},
 			Log: logger,
 		}

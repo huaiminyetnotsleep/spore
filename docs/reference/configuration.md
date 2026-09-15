@@ -60,6 +60,7 @@ Spore 的配置有三个来源：
 | `IN_MEMORY_LIMIT` | 默认 512 MiB；必须满足 `STREAM_LIMIT ≤ 值 ≤ MAX_FILE_SIZE` | 启动；**仅环境变量，无数据库覆盖** | 单文件常驻内存上限；进程总量由 `MEMORY_BUDGET` 封顶 |
 | `MEMORY_BUDGET` | 默认 1 GiB；可调 64 MiB–8 GiB | 环境默认；数据库覆盖（管理端 `memory_budget`）**即时生效** | 内存管道进程级总预算：预算不足的文件自动降级临时文件路径（边下边传），常驻内存被额度封顶而不随并发任务数放大；调小只影响新打开的媒体 |
 | `TEMP_DIR_MAX_SIZE` | 默认 5 GiB；管理端范围 1 MiB–1 TiB，且不得小于 `MAX_FILE_SIZE` | 数据库覆盖；重启生效 | 超限时拒绝进入临时文件下载路径 |
+| `FFMPEG_PATH` | 默认 `ffmpeg`（按 PATH 查找）；**仅环境变量，无数据库覆盖** | 启动 | 视频封面兜底抽帧的 ffmpeg 可执行路径；重发视频优先携带源缩略图，无源缩略图时用 ffmpeg 从视频头部抽帧；二进制缺失或抽帧失败降级为无封面发送，不影响投递 |
 | `LOG_LEVEL` | 默认 `info`；可选 `debug` / `info` / `warn` / `error` | 启动 | 日志只写 stderr；源码没有文件日志与轮转配置 |
 
 ### 2.5 并发与 worker

@@ -661,13 +661,19 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, items []message.Item, so
 				return err
 			}
 			handles[i] = h // 槽位固定，无需额外同步
+			m := *it.Media
+			src, err := prepareVideoThumb(openCtx, d, &m, h.Reader, tempKey(j, it)+"-thumb")
+			if err != nil {
+				cancelOpen() // 成员数据流损坏：整组失败，停止其余在途下载
+				return err
+			}
 			caption := it.MediaCaption().WithQuotedBody()
 			if i == 0 {
 				caption = caption.WithSourceLink(sourceURL).WithChannels(links)
 			}
 			entries[i] = delivery.AlbumEntry{
-				Media:   *it.Media,
-				Reader:  uploadReader(d, j, h.Reader),
+				Media:   m,
+				Reader:  uploadReader(d, j, src),
 				Caption: caption, // 逐成员绑定；来源链接只置于相册首项
 			}
 			return nil
@@ -724,7 +730,8 @@ func sendMediaItem(ctx context.Context, d Deps, j Job, it message.Item, sourceUR
 }
 
 // openAndSend 打开句柄 → 发送 → 清理（无论成败）。
-// 上传路径的尝试与送达在此计入投递观测。
+// 视频媒体在发送前就地解析缩略图（源缩略图优先、ffmpeg 抽帧兜底，见
+// thumb.go）；上传路径的尝试与送达在此计入投递观测。
 func openAndSend(ctx context.Context, d Deps, j Job, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	h, err := media.Open(ctx, d.Fetcher.API(), *it.Media, tempKey(j, it), d.Media, d.Log, downloadReporter(d, j))
 	if err != nil {
@@ -735,12 +742,17 @@ func openAndSend(ctx context.Context, d Deps, j Job, it message.Item, sourceURL 
 			h.Cleanup()
 		}
 	}()
+	m := *it.Media
+	src, err := prepareVideoThumb(ctx, d, &m, h.Reader, tempKey(j, it)+"-thumb")
+	if err != nil {
+		return err
+	}
 	caption := it.MediaCaption().WithQuotedBody().WithSourceLink(sourceURL)
 	if sourceURL != "" {
 		// 脚注与原消息链接同位：只出现在组首/带来源的条目上
 		caption = caption.WithChannels(links)
 	}
-	id, err := d.Sender.SendMedia(ctx, j.ChatID, *it.Media, caption, uploadReader(d, j, h.Reader))
+	id, err := d.Sender.SendMedia(ctx, j.ChatID, m, caption, uploadReader(d, j, src))
 	if err != nil {
 		return err
 	}

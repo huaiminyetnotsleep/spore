@@ -8,6 +8,7 @@
 package mtproto
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -46,8 +47,14 @@ func (c *BotClient) SendMedia(ctx context.Context, chatID int64, m message.Media
 	}
 
 	// 并发分片上传：bigLoop 单读多发，读端背压由数据源（缓冲/文件）承担
-	threads := c.uploadThreads()
-	file, err := uploader.NewUploader(api).WithThreads(threads).Upload(ctx, uploader.NewUpload(m.FileName, r, m.Size))
+	up := uploader.NewUploader(api).WithThreads(c.uploadThreads())
+	// 缩略图先传（≤200KB 级，失败早暴露）：MTProto 服务器不为上传的
+	// document 自动生成缩略图，不带 Thumb 的视频在客户端无封面预览
+	thumb, err := c.uploadThumb(ctx, up, m)
+	if err != nil {
+		return 0, err
+	}
+	file, err := up.Upload(ctx, uploader.NewUpload(m.FileName, r, m.Size))
 	if err != nil {
 		return 0, classifySendError(err)
 	}
@@ -55,7 +62,7 @@ func (c *BotClient) SendMedia(ctx context.Context, chatID int64, m message.Media
 	limited := caption.Limited()
 	req := &tg.MessagesSendMediaRequest{
 		Peer:     peer,
-		Media:    uploadedMediaOf(file, m),
+		Media:    uploadedMediaOf(file, m, thumb),
 		Message:  limited.Text,
 		RandomID: rand.Int64(),
 	}
@@ -116,6 +123,10 @@ func (c *BotClient) SendAlbum(ctx context.Context, chatID int64, medias []messag
 			return nil, apperr.New(apperr.CodeInternal,
 				fmt.Sprintf("相册第 %d 项缺少上传数据源（reader 为空）", i))
 		}
+		thumb, err := c.uploadThumb(ctx, up, m)
+		if err != nil {
+			return nil, err
+		}
 		file, err := up.Upload(ctx, uploader.NewUpload(m.FileName, readers[i], m.Size))
 		if err != nil {
 			return nil, classifySendError(err)
@@ -124,7 +135,7 @@ func (c *BotClient) SendAlbum(ctx context.Context, chatID int64, medias []messag
 		//（含新鲜 file_reference 的 Photo/Document 坐标）
 		registered, err := api.MessagesUploadMedia(ctx, &tg.MessagesUploadMediaRequest{
 			Peer:  peer,
-			Media: uploadedInputMedia(file, m),
+			Media: uploadedInputMedia(file, m, thumb),
 		})
 		if err != nil {
 			return nil, classifySendError(err)
@@ -214,11 +225,11 @@ func sentMessageIDs(upd tg.UpdatesClass) []int {
 // uploadedInputMedia 构造 messages.uploadMedia 的入参媒体：photo 保持
 // photo 形态（document 与 photo 混组会被拒，进入本路径的图片必经
 // photoLimit 预检），video 复用单发大文件的 document+video 属性构造。
-func uploadedInputMedia(file tg.InputFileClass, m message.Media) tg.InputMediaClass {
+func uploadedInputMedia(file tg.InputFileClass, m message.Media, thumb tg.InputFileClass) tg.InputMediaClass {
 	if m.Kind == message.KindPhoto {
 		return &tg.InputMediaUploadedPhoto{File: file}
 	}
-	return uploadedMediaOf(file, m)
+	return uploadedMediaOf(file, m, thumb)
 }
 
 // mediaReference 从 messages.uploadMedia 的返回中提取 sendMultiMedia 可用的
@@ -250,16 +261,41 @@ func mediaReference(mm tg.MessageMediaClass) (tg.InputMediaClass, error) {
 	}
 }
 
+// uploadThumb 上传文档缩略图（worker 解析好的 JPEG 字节，≤200KB 级）。
+// 尽力而为：失败只记日志并降级为无缩略图——缩略图是外观增强，不值得让
+// 可能已完成大半的大文件上传前功尽弃；仅 ctx 已取消时向外传播错误
+//（主文件上传必然同样失败，早失败省去无谓等待）。
+func (c *BotClient) uploadThumb(ctx context.Context, up *uploader.Uploader, m message.Media) (tg.InputFileClass, error) {
+	if len(m.ThumbJPEG) == 0 {
+		return nil, nil
+	}
+	f, err := up.Upload(ctx, uploader.NewUpload(message.ThumbFileName,
+		bytes.NewReader(m.ThumbJPEG), int64(len(m.ThumbJPEG))))
+	if err == nil {
+		return f, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	c.log.Warn("缩略图上传失败，本次发送不带封面",
+		"file", m.FileName, "error", err.Error())
+	return nil, nil
+}
+
 // uploadedMediaOf 把上传所得 InputFile 构造为发送用的输入媒体：
 // 大文件通道一律按 document 发送（photo 本就不会超过 Bot API 上限，
-// 超限的"图片"实为超大文档），按 Kind 补齐 video/audio 属性与 MIME。
-func uploadedMediaOf(file tg.InputFileClass, m message.Media) tg.InputMediaClass {
+// 超限的"图片"实为超大文档），按 Kind 补齐 video/audio 属性与 MIME；
+// thumb 非 nil 时挂为文档封面。
+func uploadedMediaOf(file tg.InputFileClass, m message.Media, thumb tg.InputFileClass) tg.InputMediaClass {
 	doc := &tg.InputMediaUploadedDocument{
 		File:     file,
 		MimeType: mimeOf(m.Kind),
 		Attributes: []tg.DocumentAttributeClass{
 			&tg.DocumentAttributeFilename{FileName: m.FileName},
 		},
+	}
+	if thumb != nil {
+		doc.SetThumb(thumb)
 	}
 	switch m.Kind {
 	case message.KindVideo:

@@ -50,6 +50,9 @@ type Options struct {
 	// 记账，预算不足自动降级临时文件路径，使常驻 RAM 被额度封顶而不随并发
 	// 任务数放大。nil 表示不启用限制（历史行为）。
 	Memory MemoryBudget
+	// FFmpegPath 是视频封面兜底抽帧用的 ffmpeg 可执行文件路径（FFMPEG_PATH，
+	// 默认按 PATH 查找 "ffmpeg"）；空串表示关闭抽帧兜底（测试用）。
+	FFmpegPath string
 }
 
 // Open 按大小选择下载路径并返回句柄。

@@ -139,6 +139,7 @@ func extractDocument(mm *tg.MessageMediaDocument) *Media {
 				Duration: int(videoAttr.Duration),
 			}
 		}
+		media.Thumb = documentThumb(d)
 		media.FileName = defaultName(fileName, "video.mp4")
 	default:
 		media.FileName = defaultName(fileName, "file.bin")
@@ -152,6 +153,41 @@ func documentLocation(d *tg.Document) tg.InputFileLocationClass {
 		ID:            d.ID,
 		AccessHash:    d.AccessHash,
 		FileReference: slices.Clone(d.FileReference),
+	}
+}
+
+// documentThumb 从文档自带缩略图中选取最大的 JPEG 档，构造带 ThumbSize 的
+// 下载坐标；文档无可用缩略图时返回 nil。PhotoStrippedSize 是需专用解码的
+// 内联微缩图、PhotoPathSize 是 Lottie 路径预览，均不作为封面候选——与
+// extractPhoto 一样只认真实字节档（PhotoSize / PhotoSizeProgressive）。
+func documentThumb(d *tg.Document) *ThumbMeta {
+	var best int64
+	var thumbType string
+	for _, th := range d.Thumbs {
+		switch ps := th.(type) {
+		case *tg.PhotoSize:
+			if int64(ps.Size) > best {
+				best, thumbType = int64(ps.Size), ps.Type
+			}
+		case *tg.PhotoSizeProgressive:
+			for _, n := range ps.Sizes {
+				if int64(n) > best {
+					best, thumbType = int64(n), ps.Type
+				}
+			}
+		}
+	}
+	if thumbType == "" || best <= 0 {
+		return nil
+	}
+	return &ThumbMeta{
+		Location: &tg.InputDocumentFileLocation{
+			ID:            d.ID,
+			AccessHash:    d.AccessHash,
+			FileReference: slices.Clone(d.FileReference),
+			ThumbSize:     thumbType,
+		},
+		Size: best,
 	}
 }
 

@@ -154,3 +154,64 @@ func TestConvertOneExclusions(t *testing.T) {
 		}
 	})
 }
+
+// 视频源缩略图坐标提取：最大 JPEG 档、跳过 stripped/path 预览、
+// 非视频类型不提取。
+func TestConvertOneVideoThumb(t *testing.T) {
+	videoDoc := func(thumbs []tg.PhotoSizeClass) *tg.MessageMediaDocument {
+		mm := testDocument(&tg.DocumentAttributeVideo{W: 1280, H: 720, Duration: 30})
+		mm.Document.(*tg.Document).Thumbs = thumbs
+		return mm
+	}
+
+	t.Run("取最大档并带 ThumbSize", func(t *testing.T) {
+		mm := videoDoc([]tg.PhotoSizeClass{
+			&tg.PhotoSize{Type: "s", W: 90, H: 90, Size: 1200},
+			&tg.PhotoSize{Type: "m", W: 320, H: 180, Size: 8600},
+		})
+		m := ConvertOne(&tg.Message{ID: 7, Media: mm}).Media
+		if m.Thumb == nil {
+			t.Fatalf("视频应携带缩略图坐标: %+v", m)
+		}
+		loc, ok := m.Thumb.Location.(*tg.InputDocumentFileLocation)
+		if !ok {
+			t.Fatalf("缩略图位置应为 InputDocumentFileLocation: %T", m.Thumb.Location)
+		}
+		if loc.ThumbSize != "m" || m.Thumb.Size != 8600 {
+			t.Errorf("应取最大档 m/8600，得到 %s/%d", loc.ThumbSize, m.Thumb.Size)
+		}
+		assertLocationSource(t, loc)
+	})
+
+	t.Run("跳过 stripped 与 path 档", func(t *testing.T) {
+		mm := videoDoc([]tg.PhotoSizeClass{
+			&tg.PhotoStrippedSize{Type: "i", Bytes: []byte{1, 2, 3}},
+			&tg.PhotoPathSize{Type: "j", Bytes: []byte{4, 5}},
+		})
+		m := ConvertOne(&tg.Message{ID: 7, Media: mm}).Media
+		if m.Thumb != nil {
+			t.Errorf("stripped/path 档不构成封面候选: %+v", m.Thumb)
+		}
+	})
+
+	t.Run("无缩略图", func(t *testing.T) {
+		m := ConvertOne(&tg.Message{ID: 7, Media: videoDoc(nil)}).Media
+		if m.Thumb != nil {
+			t.Errorf("无缩略图时 Thumb 应为 nil: %+v", m.Thumb)
+		}
+	})
+
+	t.Run("非视频类型不提取", func(t *testing.T) {
+		mm := testDocument(&tg.DocumentAttributeFilename{FileName: "f.bin"})
+		mm.Document.(*tg.Document).Thumbs = []tg.PhotoSizeClass{
+			&tg.PhotoSize{Type: "m", W: 320, H: 320, Size: 8600},
+		}
+		m := ConvertOne(&tg.Message{ID: 7, Media: mm}).Media
+		if m.Kind != KindDocument {
+			t.Fatalf("应为 KindDocument: %+v", m)
+		}
+		if m.Thumb != nil {
+			t.Errorf("普通文档不提取缩略图坐标: %+v", m.Thumb)
+		}
+	})
+}

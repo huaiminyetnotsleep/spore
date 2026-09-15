@@ -94,6 +94,9 @@ func TestLoadTransferTuning(t *testing.T) {
 	if cfg.MemoryBudget != int64(1)<<30 {
 		t.Errorf("内存预算默认应为 1GB，得到 %d", cfg.MemoryBudget)
 	}
+	if cfg.FFmpegPath != "ffmpeg" {
+		t.Errorf("FFmpegPath 默认应为 ffmpeg（PATH 查找），得到 %q", cfg.FFmpegPath)
+	}
 
 	cfg, err = Load(baseEnv(map[string]string{
 		"DOWNLOAD_THREADS":     "8",

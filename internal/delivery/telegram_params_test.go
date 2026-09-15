@@ -241,3 +241,45 @@ func TestEditMessageCaptionNotModifiedIsNoop(t *testing.T) {
 		t.Fatalf("相同 caption 编辑应视为成功 no-op，得到 %v", err)
 	}
 }
+
+// 视频缩略图：Media.ThumbJPEG 非空时随 sendVideo 的 multipart 携带
+// thumbnail 附件；为空时不带该字段（服务器端自动生成为历史行为）。
+func TestSendMediaVideoThumbnail(t *testing.T) {
+	video := func() message.Media {
+		return message.Media{Kind: message.KindVideo, FileName: "v.mp4", Size: 100,
+			Video: &message.VideoMeta{Width: 640, Height: 480, Duration: 10}}
+	}
+
+	t.Run("带缩略图", func(t *testing.T) {
+		s, captured := newCapturingSender(t)
+		m := video()
+		m.ThumbJPEG = []byte("fake-jpeg-bytes")
+		if _, err := s.SendMedia(context.Background(), 7, m, message.Caption{}, strings.NewReader("data")); err != nil {
+			t.Fatalf("video 发送应成功: %v", err)
+		}
+		reqs := *captured
+		if len(reqs) != 1 || !strings.HasSuffix(reqs[0].Path, "/sendVideo") {
+			t.Fatalf("应恰好一次 sendVideo: %+v", reqs)
+		}
+		body := reqs[0].Body
+		if !strings.Contains(body, `name="thumbnail"`) {
+			t.Errorf("sendVideo 应携带 thumbnail 附件: %s", body)
+		}
+		if !strings.Contains(body, "fake-jpeg-bytes") {
+			t.Errorf("thumbnail 附件应包含缩略图字节: %s", body)
+		}
+		if !strings.Contains(body, "thumb.jpg") {
+			t.Errorf("thumbnail 附件名应为 thumb.jpg: %s", body)
+		}
+	})
+
+	t.Run("无缩略图", func(t *testing.T) {
+		s, captured := newCapturingSender(t)
+		if _, err := s.SendMedia(context.Background(), 7, video(), message.Caption{}, strings.NewReader("data")); err != nil {
+			t.Fatalf("video 发送应成功: %v", err)
+		}
+		if strings.Contains((*captured)[0].Body, "thumbnail") {
+			t.Errorf("无缩略图时不应携带 thumbnail 字段: %s", (*captured)[0].Body)
+		}
+	})
+}

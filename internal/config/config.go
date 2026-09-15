@@ -37,6 +37,10 @@ const (
 	maxTransferThreads     = 16
 	defaultInMemoryLimit   = int64(512) << 20 // 512MB，内存管道缓冲上限
 
+	// defaultFFmpegPath 是视频封面兜底抽帧的 ffmpeg 可执行文件（FFMPEG_PATH
+	// 可覆盖为绝对路径）；二进制不存在时抽帧降级跳过，不影响投递。
+	defaultFFmpegPath = "ffmpeg"
+
 	// 内存预算（MEMORY_BUDGET）：进程级内存管道总额度。预算不足的媒体
 	// 自动降级临时文件路径（边下边传），使常驻 RAM 被额度封顶而不随
 	// 并发任务数线性放大；管理端 memory_budget 键可热调（即时生效）。
@@ -82,6 +86,7 @@ type Config struct {
 	WorkerCount     int
 	DataDir         string // session.json / peers.json 存放目录
 	TempDir         string // 临时媒体目录
+	FFmpegPath      string // 视频封面兜底抽帧的 ffmpeg 可执行路径（默认 PATH 查找）
 	MaxFileSize     int64  // 发送大小上限（字节）
 	StreamLimit     int64  // 流式下载上限（字节），超过走内存缓冲或临时文件
 	InMemoryLimit   int64  // 内存重排序缓冲上限（字节）；超过走临时文件多线程落盘
@@ -120,11 +125,15 @@ type Config struct {
 // Load 从 getenv 读取配置（注入 os.Getenv 以便测试），校验失败返回错误。
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		BotToken:  strings.TrimSpace(getenv("BOT_TOKEN")),
-		TGAPIHash: strings.TrimSpace(getenv("TG_API_HASH")),
-		TGPhone:   strings.TrimSpace(getenv("TG_PHONE")),
-		DataDir:   strings.TrimSpace(getenv("DATA_DIR")),
-		TempDir:   strings.TrimSpace(getenv("TEMP_DIR")),
+		BotToken:   strings.TrimSpace(getenv("BOT_TOKEN")),
+		TGAPIHash:  strings.TrimSpace(getenv("TG_API_HASH")),
+		TGPhone:    strings.TrimSpace(getenv("TG_PHONE")),
+		DataDir:    strings.TrimSpace(getenv("DATA_DIR")),
+		TempDir:    strings.TrimSpace(getenv("TEMP_DIR")),
+		FFmpegPath: strings.TrimSpace(getenv("FFMPEG_PATH")),
+	}
+	if cfg.FFmpegPath == "" {
+		cfg.FFmpegPath = defaultFFmpegPath
 	}
 
 	if cfg.BotToken == "" {

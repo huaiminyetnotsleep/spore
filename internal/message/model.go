@@ -28,6 +28,18 @@ type VideoMeta struct {
 	Duration      int // 秒
 }
 
+// ThumbFileName 是文档缩略图上传时的统一文件名（JPEG）。
+// Bot API 与 MTProto 两条上传路径共用。
+const ThumbFileName = "thumb.jpg"
+
+// ThumbMeta 源文档自带缩略图的下载坐标（Telegram 客户端上传视频时
+// 会附带生成的封面图）。MTProto 下服务器不为上传的 document 自动生成
+// 缩略图，重发时须主动下载并随文件一起上传。
+type ThumbMeta struct {
+	Location tg.InputFileLocationClass // 带 ThumbSize 的文档下载位置
+	Size     int64                     // 缩略图字节数
+}
+
 // AudioMeta 重发音频/语音所需的元数据；语音与音乐靠 Kind 区分。
 type AudioMeta struct {
 	Title     string
@@ -44,6 +56,13 @@ type Media struct {
 	Size     int64                     // 字节，用于发送上限预检查与上传通道路由
 	Video    *VideoMeta                // Kind==Video 时有效
 	Audio    *AudioMeta                // Kind==Audio/Voice 时有效
+	// Thumb 是源文档自带的缩略图坐标（Kind==Video 时尽力提取）；nil 表示
+	// 源无缩略图，发送侧回退 ffmpeg 抽帧或不带封面。
+	Thumb *ThumbMeta
+	// ThumbJPEG 是发送前解析好的缩略图字节（源缩略图下载或 ffmpeg 抽帧
+	// 所得，≤200KB 级），由 worker 在打开下载句柄后就地填充；两条上传
+	// 路径据此构造带封面的媒体。不落库、不参与复用判断。
+	ThumbJPEG []byte
 }
 
 // Item 内部标准化的消息条目（单条或相册成员）。

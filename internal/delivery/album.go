@@ -58,6 +58,11 @@ func (s *telegramSender) SendAlbum(ctx context.Context, chatID int64, entries []
 				MediaAttachment:   e.Reader,
 				SupportsStreaming: true,
 			}
+			// 缩略图说明：go-telegram/bot 的表单构造器只为主媒体
+			//（MediaAttachment）生成附件，InputMediaVideo.Thumbnail 引用的
+			// attach:// 名字没有对应 form part，带上会被服务器拒绝——本路径
+			// 依赖 Bot API 服务器的自动封面生成（≤50MB 视频基本可用）；
+			// 带确定封面的整组（含超限成员）走 MTProto SendAlbum。
 			if meta := e.Media.Video; meta != nil {
 				im.Width = meta.Width
 				im.Height = meta.Height
