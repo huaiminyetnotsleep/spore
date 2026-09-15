@@ -156,6 +156,9 @@ curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/insta
 - 部署目录默认 `~/spore`，可覆盖：`curl ... | SPORE_DIR=/opt/spore bash`；
 - 所有交互输入读 `/dev/tty`，`curl | bash` 管道环境可用；无交互终端（CI 等）时安装
   会生成 `.env` 后提示手工填写，重新运行同一条命令即可继续；
+- 凭据提问支持留空回车**跳过**：部署会继续，但 Telegram 登录会失败；之后编辑
+  `~/spore/.env` 填入凭据，再运行 `spore upgrade`（或菜单「2) 升级 Spore」）使其生效；
+  重跑 install 只会补问缺失项；
 - Docker 未安装时脚本会询问是否用 get.docker.com 官方脚本自动安装；
 - 菜单「升级」不改任何配置，仅拉取新镜像并滚动更新；「卸载」默认保留 `.env` 与
   `data/`，按提示二次确认后才删除；
