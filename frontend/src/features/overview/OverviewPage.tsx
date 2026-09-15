@@ -1,13 +1,14 @@
 /**
  * 总览页（/）：职责 = 系统现在怎么样。第一屏「状态一览」四张彩色状态卡
  * （MTProto 会话 / 数据库 / 队列水位 / 待办提醒），下方紧凑「服务信息」卡。
- * 服务版本行展示当前版本与上游最新版本：进入页面自动检查一次，落后时
- * 给出「有新版本」标签；刷新按钮在标签文字后，手动检查跳过缓存，发现
- * 新版本时经 toast 提示版本号。用户计数与频道加入快照已迁至 /stats。
+ * 服务版本行展示当前版本与上游最新版本：进入页面自动检查一次，刷新按钮
+ * 在标签文字后，手动检查跳过缓存并经 toast 报告最新版本号（不做新旧
+ * 判断——SHA 构建与语义化版本无法比较）。用户计数与频道加入快照已迁至
+ * /stats。
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
-import { ArrowUpOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ReloadOutlined } from "@ant-design/icons";
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
@@ -59,15 +60,13 @@ function displayVersion(v: string): string {
   return /^[0-9a-f]{40}$/i.test(v) ? v.slice(0, 7) : v;
 }
 
-/** 版本检查结果提示：落后 → 橙色升级标签（链接到发布页）；最新 → 绿色；
- * 无法比较（dev 构建）→ 展示上游最新版；查询失败 → 红色受控文案。 */
+/** 版本检查结果：无条件展示上游最新版本（当前构建可能是 SHA，无法也
+ * 不必判断新旧）；查询失败展示受控文案。 */
 function VersionCheckHint({
-  status,
   latestVersion,
   releaseUrl,
   error,
 }: {
-  status: string | undefined;
   latestVersion: string | undefined;
   releaseUrl: string | undefined;
   error: string | null;
@@ -79,31 +78,20 @@ function VersionCheckHint({
       </Tag>
     );
   }
-  if (status === "outdated") {
-    const label = latestVersion ? `有新版本 ${latestVersion}` : "有新版本";
-    return (
-      <Tag color="processing" icon={<ArrowUpOutlined />} data-testid="version-upgrade-hint">
-        {releaseUrl ? (
-          <a href={releaseUrl} target="_blank" rel="noreferrer">
-            {label}
-          </a>
-        ) : (
-          label
-        )}
-      </Tag>
-    );
+  if (!latestVersion) {
+    return null;
   }
-  if (status === "up_to_date") {
-    return (
-      <Tag color="green" data-testid="version-up-to-date">
-        已是最新
-      </Tag>
-    );
-  }
-  if (status === "unknown" && latestVersion) {
-    return <Tag>最新 {latestVersion}</Tag>;
-  }
-  return null;
+  return (
+    <Tag data-testid="version-latest">
+      {releaseUrl ? (
+        <a href={releaseUrl} target="_blank" rel="noreferrer">
+          最新 {latestVersion}
+        </a>
+      ) : (
+        `最新 ${latestVersion}`
+      )}
+    </Tag>
+  );
 }
 
 function StatusTile({
@@ -132,8 +120,8 @@ export function OverviewPage() {
   });
   const { message } = App.useApp();
   // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞）；
-  // 管理员点刷新按钮时强制绕过缓存重查（点了就要最新结果），发现新版本
-  // 时经 toast 提示版本号。
+  // 管理员点刷新按钮时强制绕过缓存重查（点了就要最新结果），toast 报告
+  // 上游最新版本号。
   const versionCheck = useQuery({
     queryKey: ["version-check"],
     queryFn: () => fetchVersionCheck(false),
@@ -142,8 +130,8 @@ export function OverviewPage() {
   const forceCheck = useMutation({
     mutationFn: () => fetchVersionCheck(true),
     onSuccess: (data) => {
-      if (data.status === "outdated" && data.latest_version) {
-        void message.info(`有新版本 ${data.latest_version}`);
+      if (data.latest_version) {
+        void message.info(`最新版本 ${data.latest_version}`);
       }
     },
   });
@@ -247,7 +235,6 @@ export function OverviewPage() {
               <span title={data.version}>{displayVersion(data.version)}</span>
               {/* 手动刷新结果优先于进入页面的自动检查 */}
               <VersionCheckHint
-                status={forceCheck.data?.status ?? versionCheck.data?.status}
                 latestVersion={forceCheck.data?.latest_version ?? versionCheck.data?.latest_version}
                 releaseUrl={forceCheck.data?.release_url ?? versionCheck.data?.release_url}
                 error={forceCheck.error?.message ?? versionCheck.error?.message ?? null}

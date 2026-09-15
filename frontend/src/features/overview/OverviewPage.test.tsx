@@ -179,12 +179,16 @@ describe("总览页", () => {
     expect(screen.queryByText("已加入频道")).not.toBeInTheDocument();
   });
 
-  it("进入页面自动检查更新，已是最新时展示绿色标签（无需点击）", async () => {
+  it("进入页面自动检查更新，版本旁展示上游最新版本（无需点击）", async () => {
     stubRoutes(overviewRoutes());
 
     renderPage();
 
-    expect(await screen.findByTestId("version-up-to-date")).toBeInTheDocument();
+    expect(await screen.findByTestId("version-latest")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "最新 v1.2.0" })).toHaveAttribute(
+      "href",
+      "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
+    );
     expect(screen.getByRole("button", { name: "检查更新" })).toBeInTheDocument();
   });
 
@@ -198,50 +202,19 @@ describe("总览页", () => {
     expect(shown).toHaveAttribute("title", full);
   });
 
-  it("点击检查更新重新查询，落后于上游时展示有新版本标签并弹 toast", async () => {
-    stubRoutes(overviewRoutes(overviewResponse(), { payload: versionCheckResponse() }));
-
-    renderPage();
-
-    // 自动检查已给出「有新版本」提示（蓝色标签，链接发布页）
-    const hint = await screen.findByTestId("version-upgrade-hint");
-    expect(hint).toBeInTheDocument();
-    // 手动点击刷新按钮重查：请求带 force=1（跳过服务端缓存），结果保持，
-    // 且经 toast 再次提示新版本号（标签 + toast 两处同文案）
-    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
-    const link = await screen.findByRole("link", { name: "有新版本 v1.2.0" });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
-    );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noreferrer");
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("force=1"))).toBe(true);
-    await waitFor(() =>
-      expect(screen.getAllByText("有新版本 v1.2.0").length).toBeGreaterThanOrEqual(2),
-    );
-  });
-
-  it("点击检查更新后仍是最新时展示绿色标签", async () => {
+  it("点击检查更新带 force=1 重新查询，并经 toast 报告最新版本号", async () => {
     stubRoutes(overviewRoutes());
 
     renderPage();
-    await screen.findByTestId("version-up-to-date");
+    await screen.findByTestId("version-latest");
+
+    // 手动点击刷新按钮重查：请求带 force=1（跳过服务端缓存）
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
-
-    expect(await screen.findByTestId("version-up-to-date")).toBeInTheDocument();
-  });
-
-  it("dev 构建无法比较时展示上游最新版本", async () => {
-    stubRoutes(
-      overviewRoutes(overviewResponse(), {
-        payload: versionCheckResponse({ status: "unknown", current_version: "dev" }),
-      }),
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("force=1"))).toBe(true),
     );
-
-    renderPage();
-
-    expect(await screen.findByText("最新 v1.2.0")).toBeInTheDocument();
+    // toast 报告最新版本号（与行内标签"最新 v1.2.0"文案不同，可精确断言）
+    expect(await screen.findByText("最新版本 v1.2.0")).toBeInTheDocument();
   });
 
   it("检查更新失败时展示受控错误文案", async () => {
