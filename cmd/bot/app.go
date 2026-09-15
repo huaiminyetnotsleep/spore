@@ -194,10 +194,9 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		return web.LoadEffectiveDumpChannelID(ctx, a.st, a.cfg.DumpChannelID)
 	}
 	dumpSvc := dumpcache.New(counted, a.st, dumpChannel, a.log)
-	// 副本存在性校验（Bot 身份 MTProto 读消息）：管理端"转存缓存频道"的
-	// already_dumped 预检与执行时复核据此识别"条目在、消息已被删"的失效
-	// 副本，放行重新补写；BotClient 长生命周期，重连内部换 api 不换对象
-	dumpSvc.SetProber(a.botClient)
+	// 副本有效性校验（dumpcache.EntryLive，试探复制判定）注入管理端补写
+	// 预检：缓存频道里的副本消息被客户端删除后，条目坐标不感知删除，
+	// 据此放行重新补写自愈
 	a.access.SetDumpLive(dumpSvc.EntryLive)
 	if dumpChannel() != 0 {
 		a.log.Info("缓存频道复用已启用", "channel_id", dumpChannel())

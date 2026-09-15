@@ -34,10 +34,11 @@ type DumpBackfillOutcome struct {
 	QueueFull        bool   // 建行后入队失败（队列饱和），行已标记 failed(QUEUE_FULL)
 }
 
-// dumpLiveFunc 报告同链接缓存频道副本是否仍然有效（消息未被删除）。
-// 由装配层注入（Bot 会话就绪后 SetDumpLive，dumpcache.EntryLive 同源）；
+// dumpLiveFunc 报告同链接缓存频道副本是否仍然有效（试探复制判定，
+// dumpcache.EntryLive 同源）：false = 无条目或副本已失效，放行补写；
+// true = 有效副本，跳过。由装配层注入（Bot 会话就绪后 SetDumpLive）；
 // nil 时条目存在即视为有效（保守旧行为）。
-type dumpLiveFunc func(ctx context.Context, channelKey string, messageID int) (bool, error)
+type dumpLiveFunc func(ctx context.Context, channelKey string, messageID int) bool
 
 // SetDumpLive 注入缓存副本有效性校验（Bot 会话就绪后由装配层调用，与
 // SetSender 同款模式；重复注册以最后一次为准）。
@@ -147,9 +148,10 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 
 // dumpBackfillSkip 判定请求级补写资格（st 传事务视图可在事务内复核）：
 // 请求存在、已终态（succeeded/failed/cancelled）、缓存频道无同链接的有效
-// 副本。条目存在但副本消息已被删除（管理员在缓存频道客户端删除）时放行
-// 补写自愈；live 为 nil 或校验故障时保守视为有效（跳过），与 Entry 失败
-// 语义同向。返回跳过原因（空串 = 通过）；error 仅存储故障。
+// 副本。条目存在时经 live（试探复制）判定副本是否仍有效——缓存频道里的
+// 副本消息可能被管理员在客户端删除，条目坐标不感知删除；live 判定失效
+// 时放行补写自愈。live 为 nil（未注入）时条目存在即视为有效（保守旧行为）。
+// 返回跳过原因（空串 = 通过）；error 仅存储故障。
 func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, live dumpLiveFunc) (string, error) {
 	r, err := st.GetRequest(ctx, requestID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -164,11 +166,8 @@ func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, liv
 		return DumpBackfillSkipNotFinished, nil
 	}
 	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID); err == nil {
-		if live != nil {
-			valid, lerr := live(ctx, r.ChannelKey, r.MessageID)
-			if lerr == nil && !valid {
-				return "", nil // 副本消息已被删除：放行补写自愈
-			}
+		if live != nil && !live(ctx, r.ChannelKey, r.MessageID) {
+			return "", nil // 副本消息已被删除：放行补写自愈
 		}
 		return DumpBackfillSkipAlreadyDumped, nil
 	} else if !errors.Is(err, store.ErrNotFound) {

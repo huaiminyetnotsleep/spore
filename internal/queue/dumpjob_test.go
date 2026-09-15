@@ -253,22 +253,18 @@ func TestDumpJobWithoutDumpFails(t *testing.T) {
 	}
 }
 
-// fakeProber 是 dumpcache.MessageProber 假实现：失效副本判定（执行时复核）。
-type fakeProber struct{ present bool }
-
-func (f *fakeProber) ChannelMessagesPresent(context.Context, int64, []int) (bool, error) {
-	return f.present, nil
-}
-
 // 条目存在但副本消息已被删除（管理员在缓存频道客户端删除）：执行时复核
 // 放行重写，不再误判"已有副本"直接成功。
 func TestDumpJobStaleEntryRewrites(t *testing.T) {
 	s := openStore(t)
 	job := dumpJob(t, s, 7)
 	seedDumpEntry(t, s, 7, []int{11})
-	sender := &chatRecordingSender{fakeSender: &fakeSender{}}
+	// copyErr 注入使试探复制失败（模拟副本消息已被删除），执行时复核应
+	// 放行重写而非误判"已有副本"直接成功
+	sender := &chatRecordingSender{fakeSender: &fakeSender{copyErr: func(copyCall) error {
+		return errFakeSend
+	}}}
 	d := dumpDeps(t, s, fetcherWith(errInvoker{}, &tg.Message{ID: 7, Message: "hello"}), sender)
-	d.Dump.SetProber(&fakeProber{present: false})
 
 	runProcess(t, d, job)
 

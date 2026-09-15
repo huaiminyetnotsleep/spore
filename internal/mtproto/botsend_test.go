@@ -793,9 +793,7 @@ func TestUploadThumbDegrade(t *testing.T) {
 type channelInvoker struct {
 	mu           sync.Mutex
 	chats        tg.MessagesChats
-	messages     tg.MessagesMessagesClass
 	resolveCalls int
-	getMsgCalls  int
 	sendCalls    int
 	lastSend     *tg.MessagesSendMediaRequest
 }
@@ -810,9 +808,6 @@ func (f *channelInvoker) Invoke(_ context.Context, req bin.Encoder, d bin.Decode
 		payload = &f.chats
 	case *tg.UploadSaveFilePartRequest, *tg.UploadSaveBigFilePartRequest:
 		payload = &tg.BoolTrue{}
-	case *tg.ChannelsGetMessagesRequest:
-		f.getMsgCalls++
-		payload = f.messages
 	case *tg.MessagesSendMediaRequest:
 		f.sendCalls++
 		f.lastSend = r
@@ -887,42 +882,3 @@ func TestBotClientSendLargeMediaToChannel(t *testing.T) {
 	}
 }
 
-// 副本存在性校验：全部命中为 true；有缺失（已删除）为 false；非 -100
-// 前缀目标本地拒绝。
-func TestBotClientChannelMessagesPresent(t *testing.T) {
-	t.Run("全部存在", func(t *testing.T) {
-		inv := &channelInvoker{
-			chats: channelChats(),
-			messages: &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
-				&tg.Message{ID: 11, PeerID: &tg.PeerChannel{ChannelID: 4443957166}}, &tg.Message{ID: 12, PeerID: &tg.PeerChannel{ChannelID: 4443957166}},
-			}},
-		}
-		c := readyBotClient(t, inv)
-		present, err := c.ChannelMessagesPresent(context.Background(), testDumpChannelID(), []int{11, 12})
-		if err != nil || !present {
-			t.Fatalf("全部存在应 true: %v err=%v", present, err)
-		}
-	})
-
-	t.Run("部分已删除", func(t *testing.T) {
-		inv := &channelInvoker{
-			chats: channelChats(),
-			messages: &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
-				&tg.Message{ID: 11, PeerID: &tg.PeerChannel{ChannelID: 4443957166}},
-			}},
-		}
-		c := readyBotClient(t, inv)
-		present, err := c.ChannelMessagesPresent(context.Background(), testDumpChannelID(), []int{11, 12})
-		if err != nil || present {
-			t.Fatalf("消息缺失应 false: %v err=%v", present, err)
-		}
-	})
-
-	t.Run("非频道目标拒绝", func(t *testing.T) {
-		c := newTestBotClient(t)
-		c.setReady(&tg.Client{})
-		if _, err := c.ChannelMessagesPresent(context.Background(), -12345, []int{11}); err == nil {
-			t.Fatal("非 -100 前缀目标应本地拒绝")
-		}
-	})
-}

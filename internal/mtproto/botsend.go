@@ -411,48 +411,6 @@ func nativeChannelID(chatID int64) (int64, bool) {
 	return id, true
 }
 
-// ChannelMessagesPresent 校验频道内指定消息是否全部仍存在：channels.getMessages
-// 按 ID 读取，已删除的消息不出现在响应中（或以 MessageEmpty 占位）。缓存频道
-// 副本失效判定（管理端"转存缓存频道"的 already_dumped 预检与执行时复核）用。
-func (c *BotClient) ChannelMessagesPresent(ctx context.Context, channelChatID int64, messageIDs []int) (bool, error) {
-	api, ok := c.current()
-	if !ok {
-		return false, apperr.Wrap(apperr.CodeLargeChannelUnavailable, ErrBotSessionNotReady)
-	}
-	channelID, ok := nativeChannelID(channelChatID)
-	if !ok {
-		return false, apperr.New(apperr.CodeInternal,
-			fmt.Sprintf("频道消息校验要求 -100 前缀频道目标，得到 chat_id=%d", channelChatID))
-	}
-	accessHash, err := c.channelAccessHash(ctx, api, channelChatID, channelID)
-	if err != nil {
-		return false, err
-	}
-	ids := make([]tg.InputMessageClass, 0, len(messageIDs))
-	for _, id := range messageIDs {
-		ids = append(ids, &tg.InputMessageID{ID: id})
-	}
-	res, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash},
-		ID:      ids,
-	})
-	if err != nil {
-		return false, classifySendError(err)
-	}
-	messages, ok := res.(*tg.MessagesChannelMessages)
-	if !ok {
-		return false, apperr.New(apperr.CodeInternal,
-			fmt.Sprintf("channels.getMessages 响应类型异常: %T", res))
-	}
-	present := 0
-	for _, m := range messages.Messages {
-		if _, isMessage := m.(*tg.Message); isMessage {
-			present++
-		}
-	}
-	return present >= len(messageIDs), nil
-}
-
 // channelAccessHash 返回频道的 access_hash：优先取缓存（peers 表，key 为
 // Bot API 的 -100 形式 chatID），未缓存时经 ChannelsGetChannels 特权反查
 // 并写缓存。

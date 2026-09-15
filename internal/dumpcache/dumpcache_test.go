@@ -4,7 +4,6 @@ package dumpcache
 // 写失败不落条目、Entry/CopyOut/Enabled。
 
 import (
-	"errors"
 	"context"
 	"io"
 	"log/slog"
@@ -263,76 +262,40 @@ func TestCleanCaptionNoChannels(t *testing.T) {
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-// fakeProber 是 MessageProber 假实现：返回预设结果或错误（EntryLive 判定）。
-type fakeProber struct {
-	present bool
-	err     error
-	calls   int
-}
-
-func (f *fakeProber) ChannelMessagesPresent(_ context.Context, _ int64, _ []int) (bool, error) {
-	f.calls++
-	return f.present, f.err
-}
-
-// ---- EntryLive：副本失效判定（条目在、消息可能已被删） ----
+// ---- EntryLive：试探复制判定（条目在、消息可能已被删） ----
 
 func TestEntryLive(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("无条目可补写", func(t *testing.T) {
 		st := openStore(t)
-		s := New(&fakeSender{}, st, func() int64 { return -100123 }, testLog())
-		live, err := s.EntryLive(ctx, "example", 7)
-		if err != nil || live {
-			t.Fatalf("无条目应 (false, nil): %v err=%v", live, err)
+		snd := &fakeSender{}
+		s := New(snd, st, func() int64 { return -100123 }, testLog())
+		if live := s.EntryLive(ctx, "example", 7); live {
+			t.Fatal("无条目应放行补写")
 		}
 	})
 
-	t.Run("条目存在但未注入校验通道时保守视为有效", func(t *testing.T) {
+	t.Run("试探复制成功判定有效并清理试探副本", func(t *testing.T) {
 		st := openStore(t)
-		s := New(&fakeSender{}, st, func() int64 { return -100123 }, testLog())
+		snd := &fakeSender{}
+		s := New(snd, st, func() int64 { return -100123 }, testLog())
 		seedEntry(t, st)
-		live, err := s.EntryLive(ctx, "example", 7)
-		if err != nil || !live {
-			t.Fatalf("无 prober 应保守有效: %v err=%v", live, err)
+		if live := s.EntryLive(ctx, "example", 7); !live {
+			t.Fatal("试探复制成功应判定有效")
+		}
+		if len(snd.singleCopies) != 1 || snd.singleCopies[0].From != -100123 || snd.singleCopies[0].To != -100123 {
+			t.Fatalf("试探应复制条目首条消息到缓存频道自身: %+v", snd.singleCopies)
 		}
 	})
 
-	t.Run("消息已删除放行补写", func(t *testing.T) {
+	t.Run("试探复制失败判定失效放行补写", func(t *testing.T) {
 		st := openStore(t)
-		s := New(&fakeSender{}, st, func() int64 { return -100123 }, testLog())
+		snd := &fakeSender{failCopies: true}
+		s := New(snd, st, func() int64 { return -100123 }, testLog())
 		seedEntry(t, st)
-		prober := &fakeProber{present: false}
-		s.SetProber(prober)
-		live, err := s.EntryLive(ctx, "example", 7)
-		if err != nil || live {
-			t.Fatalf("失效副本应放行 (false, nil): %v err=%v", live, err)
-		}
-		if prober.calls != 1 {
-			t.Fatalf("应恰好一次校验: %d", prober.calls)
-		}
-	})
-
-	t.Run("消息仍在判定有效", func(t *testing.T) {
-		st := openStore(t)
-		s := New(&fakeSender{}, st, func() int64 { return -100123 }, testLog())
-		seedEntry(t, st)
-		s.SetProber(&fakeProber{present: true})
-		live, err := s.EntryLive(ctx, "example", 7)
-		if err != nil || !live {
-			t.Fatalf("有效副本应 (true, nil): %v err=%v", live, err)
-		}
-	})
-
-	t.Run("校验故障保守视为有效", func(t *testing.T) {
-		st := openStore(t)
-		s := New(&fakeSender{}, st, func() int64 { return -100123 }, testLog())
-		seedEntry(t, st)
-		s.SetProber(&fakeProber{err: errors.New("mtproto offline")})
-		live, err := s.EntryLive(ctx, "example", 7)
-		if err == nil || !live {
-			t.Fatalf("校验故障应保守 (true, err): %v err=%v", live, err)
+		if live := s.EntryLive(ctx, "example", 7); live {
+			t.Fatal("试探复制失败（消息已删）应放行补写")
 		}
 	})
 }

@@ -2,7 +2,6 @@ package access
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -181,8 +180,8 @@ func TestRetryDumpBackfillKeepsDumpOnly(t *testing.T) {
 }
 
 // TestDumpBackfillSkipMatrixLiveEntry：副本失效自愈——条目存在但消息已被
-// 删除（管理员在缓存频道客户端删除）时放行补写；校验通道未注入或校验故障
-// 时保守维持 already_dumped 跳过。
+// 删除（管理员在缓存频道客户端删除）时放行补写（试探复制判定）；校验通道
+// 未注入时保守维持 already_dumped 跳过。
 func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 	clock := newClock(baseTime)
 	svc, st, _ := newTestService(t, 8, clock.Now)
@@ -203,7 +202,7 @@ func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 	})
 
 	t.Run("副本失效放行补写", func(t *testing.T) {
-		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return false, nil })
+		svc.SetDumpLive(func(context.Context, string, int) bool { return false })
 		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
 		if err != nil || out.SkipReason != "" || out.CreatedRequestID == 0 {
 			t.Fatalf("失效副本应放行建行: %+v err=%v", out, err)
@@ -211,18 +210,18 @@ func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 	})
 
 	t.Run("副本仍有效维持跳过", func(t *testing.T) {
-		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return true, nil })
+		svc.SetDumpLive(func(context.Context, string, int) bool { return true })
 		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
 		if err != nil || out.SkipReason != DumpBackfillSkipAlreadyDumped {
 			t.Fatalf("有效副本应跳过: %+v err=%v", out, err)
 		}
 	})
 
-	t.Run("校验故障保守跳过", func(t *testing.T) {
-		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return false, errors.New("offline") })
+	t.Run("试探故障同样放行（判定失效，避免卡死补写）", func(t *testing.T) {
+		svc.SetDumpLive(func(context.Context, string, int) bool { return false })
 		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
-		if err != nil || out.SkipReason != DumpBackfillSkipAlreadyDumped {
-			t.Fatalf("校验故障应保守跳过: %+v err=%v", out, err)
+		if err != nil || out.SkipReason != "" || out.CreatedRequestID == 0 {
+			t.Fatalf("试探故障判定失效应放行建行: %+v err=%v", out, err)
 		}
 	})
 }

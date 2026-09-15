@@ -32,16 +32,12 @@ func runDumpJob(ctx context.Context, d Deps, j Job) (mediaMeta, error) {
 	if !ok {
 		return mediaMeta{}, apperr.New(apperr.CodeInternal, "缓存频道未配置")
 	}
-	if live, err := d.Dump.EntryLive(ctx, refChannelKey(j.Ref), j.Ref.MessageID); err == nil && live {
+	if d.Dump.EntryLive(ctx, refChannelKey(j.Ref), j.Ref.MessageID) {
 		d.Log.Info("同链接缓存频道副本仍有效（执行时复核命中），跳过补写",
 			"job_id", j.ID, "request_id", j.RequestID, "ref", j.Ref.String())
 		return metaMetaFromHistory(ctx, d, j), nil
-	} else if err != nil {
-		// 校验通道故障：放行补写（重复写入无害，新条目按最新坐标生效），
-		// 不把读取故障放大成"已有副本"的假成功
-		d.Log.Info("缓存副本有效性校验失败，继续补写",
-			"job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 	}
+	// 无条目或副本已失效（试探复制失败）：继续补写重写副本自愈
 
 	fetchCtx, cancelFetch := context.WithTimeout(ctx, processTimeout)
 	msgs, err := d.Fetcher.Fetch(fetchCtx, j.Ref)

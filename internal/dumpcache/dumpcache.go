@@ -35,19 +35,7 @@ type Service struct {
 	log       *slog.Logger
 
 	hintOnce sync.Once // 首次写失败的配置提示只打一次
-	prober   MessageProber
 }
-
-// MessageProber 校验频道内指定消息是否仍全部存在（Bot 身份 MTProto 读消息，
-// *mtproto.BotClient 天然实现；接口由本包所有，装配层注入，nil 时 EntryLive
-// 一律视为有效——保持"查到条目即有效"的保守旧行为）。
-type MessageProber interface {
-	ChannelMessagesPresent(ctx context.Context, channelID int64, messageIDs []int) (bool, error)
-}
-
-// SetProber 注入副本存在性校验通道（Bot 会话就绪后由装配层调用；重复注册
-// 以最后一次为准，MTProto 每轮重连重新装配时幂等注入）。
-func (s *Service) SetProber(p MessageProber) { s.prober = p }
 
 // New 创建缓存频道服务；channelID 闭包返回 0 时 Enabled() 恒为 false。
 func New(snd delivery.Sender, st *store.Store, channelID func() int64, log *slog.Logger) *Service {
@@ -94,30 +82,39 @@ func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (
 	return e, true
 }
 
-// EntryLive 报告同链接最新副本是否仍然可用：条目存在且其全部消息仍可访问。
+// EntryLive 报告同链接最新副本是否仍然可用：条目存在且其消息仍可访问。
 // 缓存频道里的消息可能被管理员在客户端直接删除——条目坐标不感知删除，
 // 预检与执行时复核都应经本方法判定，避免把失效条目误当成"已有副本"。
 //
-// 返回语义：
-//   - 无条目 → (false, nil)：可补写；
-//   - 条目存在且校验全部在 → (true, nil)：跳过补写；
-//   - 条目存在但消息确已删除 → (false, nil)：条目失效，放行补写（重写后
-//     新条目按最新坐标生效，旧条目残留无害）；
-//   - 校验通道未注入（MTProto 未就绪）或校验失败 → (true, err)：保守视为
-//     有效，避免把读取故障放大成重复补写（与 Entry 的失败语义同向）。
-func (s *Service) EntryLive(ctx context.Context, channelKey string, messageID int) (bool, error) {
+// 判定走"试探复制"，与私聊复用（tryReuseFromDump 的 CopyOut 回落）同源，
+// 用生产已验证的 Bot API copyMessage 而非 MTProto 读消息（后者依赖频道
+// access_hash 反查，对 Bot 会话不可靠且故障时静默）：把条目首条消息复制
+// 到缓存频道自身——消息已被删除时该调用以明确错误失败；成功即删除试探
+// 副本（删除失败只留一条无害的重复副本，记日志）。
+//
+// 返回值：无条目或试探失败（副本已删，或 Bot API 瞬时故障——放行后无非
+// 是重复补写，无害）返回 false 放行补写自愈；试探成功返回 true 跳过补写。
+func (s *Service) EntryLive(ctx context.Context, channelKey string, messageID int) bool {
 	e, ok := s.Entry(ctx, channelKey, messageID)
 	if !ok {
-		return false, nil
+		return false
 	}
-	if s.prober == nil {
-		return true, nil
+	if !s.Enabled() {
+		return false
 	}
-	present, err := s.prober.ChannelMessagesPresent(ctx, s.channelID(), e.DumpIDs)
+	channel := s.channelID()
+	id, err := s.snd.CopyMessage(ctx, channel, channel, e.DumpIDs[0], "")
 	if err != nil {
-		return true, err
+		s.log.Info("缓存副本试探复制失败，判定条目失效（放行补写自愈）",
+			"channel_key", channelKey, "message_id", messageID,
+			"dump_id", e.DumpIDs[0], "error", err.Error())
+		return false
 	}
-	return present, nil
+	if derr := s.snd.DeleteMessage(ctx, channel, id); derr != nil {
+		s.log.Warn("缓存副本试探消息删除失败（缓存频道残留一条重复副本，无害）",
+			"channel_id", channel, "message_id", id, "error", derr.Error())
+	}
+	return true
 }
 
 // CopyOut 把缓存频道副本整条复制到目标聊天，返回按序新消息 ID。
