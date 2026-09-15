@@ -15,7 +15,7 @@
 | Docker | Docker Engine 与 Compose v2 插件，可执行 `docker compose version` |
 | 系统 | 支持 Docker 的 Linux 服务器；示例命令使用 Debian/Ubuntu |
 | 域名 | 一个解析到服务器公网 IP 的域名，例如 `admin.example.com` |
-| 反向代理 | VPS 宿主机已有 Caddy、Nginx 或其他代理，负责 HTTPS 并反代到 `127.0.0.1:8080` |
+| 反向代理 | VPS 宿主机已有 Caddy、Nginx 或其他代理，负责 HTTPS 并反代到 `127.0.0.1:<WEB_HOST_PORT>`（默认 `8080`） |
 | 入站端口 | TCP 80、443；由反向代理负责 HTTP→HTTPS、证书和管理端访问 |
 | Telegram 网络 | 服务器能访问 Telegram Bot API 和 MTProto；必要时按环境注入代理 |
 | 磁盘 | 至少 1GB；传输大文件时，临时目录还须预留最大媒体文件大小（启用 §5 本地 Bot API 备选路线则须双份预留） |
@@ -64,8 +64,10 @@ spore/
 ```
 
 Compose 不创建反向代理或证书命名卷。`bot` 将容器端 `8080` 发布到宿主机
-`127.0.0.1:8080`，只有宿主机上的反向代理可以访问；可选的 `bot-api` 只在
-`bigfile` profile 中启动，并仅在 Compose 网络暴露 `8081`，不对公网开放。
+`127.0.0.1:<WEB_HOST_PORT>`（默认 `8080`；宿主端口只经 `.env` 的 `WEB_HOST_PORT`
+修改，同机多实例各自错开即可，容器内恒为 `8080`），只有宿主机上的反向代理可以
+访问；可选的 `bot-api` 只在 `bigfile` profile 中启动，端口经 `.env` 的
+`BOT_API_PORT` 配置（默认 `8081`），仅在 Compose 网络暴露，不对公网开放。
 
 业务数据边界如下：
 
@@ -82,11 +84,13 @@ Compose 不创建反向代理或证书命名卷。`bot` 将容器端 `8080` 发�
 
 Compose 不启动 Caddy、Nginx 或其他反向代理，也不占用宿主机的 80/443。请在宿主机
 已有代理中配置一个 HTTPS 虚拟主机，将管理端域名反代到
-`http://127.0.0.1:8080`，并只允许该代理访问应用端口。代理必须：
+`http://127.0.0.1:<WEB_HOST_PORT>`（默认 `8080`），并只允许该代理访问应用端口。代理必须：
 
 - 监听公网 TCP 80/443，完成 HTTP→HTTPS 跳转和 ACME/证书续期；
 - 转发 `Host`、`X-Forwarded-For`、`X-Forwarded-Proto`，并限制可信代理来源；
-- 不把 `127.0.0.1:8080` 再暴露到公网，不与其他代理重复占用 80/443。
+- 不把应用端口再暴露到公网，不与其他代理重复占用 80/443。
+
+以下示例使用默认端口 `8080`；若在 `.env` 中修改了 `WEB_HOST_PORT`，请同步替换。
 
 Caddy 配置示例（使用实际域名替换占位符）：
 
@@ -324,6 +328,7 @@ https://<你的域名>/admin/login
 
 ```dotenv
 BOT_API_URL=http://bot-api:8081   # Compose 内部服务名；不要写 localhost（在 bot 容器内指向 bot 自身）
+BOT_API_PORT=8081                 # bot-api 服务端口（默认 8081）；改动时需同步上面 BOT_API_URL 的端口
 MAX_FILE_SIZE=2097152000
 ```
 
@@ -358,7 +363,8 @@ curl -fsS http://127.0.0.1:8080/readyz
 [development.md](development.md)；e2e 与 Web 边界契约的唯一详细出处是
 [SPA 验收记录](../reference/admin-acceptance.md)。
 
-Compose 监听地址只应为 `127.0.0.1:8080`。验证失败时执行 `docker compose restart bot`，
+Compose 只应把管理端发布到宿主回环 `127.0.0.1:<WEB_HOST_PORT>`（默认 `8080`）。
+验证失败时执行 `docker compose restart bot`，
 确认 `/healthz` 恢复。旧 SSR 认证页与表单路由代码已移除：未登录访问 `/admin` 下的
 受保护页面会被引导到 `/admin/login`，旧路径（如 `/users`、`/settings`）现在直接
 返回 404（此切换不涉及数据库 schema 变更）。真实 HTTPS、反向代理、生产

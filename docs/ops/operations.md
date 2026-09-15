@@ -575,12 +575,14 @@ docker compose logs --tail=200 bot
 
 ```bash
 docker compose logs --tail=200 bot
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS "http://127.0.0.1:${WEB_HOST_PORT:-8080}/healthz"
 docker compose exec bot wget -qO- http://127.0.0.1:8080/healthz
 ```
 
-检查必填配置、`data/` 权限以及容器是否反复重启。正式 Compose 将 bot 只发布到宿主
-`127.0.0.1:8080`；宿主机代理应反代到该地址，公网请求则通过代理的 HTTPS 地址检查。
+检查必填配置、`data/` 权限以及容器是否反复重启。宿主机那条 curl 用的是发布端口
+`WEB_HOST_PORT`（默认 8080），容器内那条恒为 8080。正式 Compose 将 bot 只发布到宿主
+回环 `127.0.0.1:<WEB_HOST_PORT>`；宿主机代理应反代到该地址，公网请求则通过代理的
+HTTPS 地址检查。
 
 ### 6.3 登录密钥丢失
 
@@ -789,7 +791,7 @@ rclone 环境变量或凭据相关 stderr 粘贴到日志、工单或聊天中�
 - [ ] `.env` 权限为 600，未提交 Git，未写入备份或截图；
 - [ ] `data/`、`session.json` 和 `peers.json` 权限最小化，Session 不经 Web 下载；
 - [ ] Docker 镜像以非 root UID 10001 运行；
-- [ ] bot Web 端口仅发布到宿主 `127.0.0.1:8080`，公网只经宿主机反向代理的 80/443；
+- [ ] bot Web 端口仅发布到宿主回环 `127.0.0.1:<WEB_HOST_PORT>`（默认 8080），公网只经宿主机反向代理的 80/443；
 - [ ] 宿主机反向代理的证书、私钥和配置已持久化且不公开下载；
 - [ ] 管理端只使用 HTTPS，访问密钥存入密码管理器，不复用 Telegram 凭据；
 - [ ] GitHub OAuth 回调仅使用 HTTPS 域名，绑定唯一管理员账号；

@@ -46,7 +46,7 @@ Spore 的配置有三个来源：
 | 变量 | 默认值与校验 | 生效方式 | 说明与边界 |
 | --- | --- | --- | --- |
 | `ALLOWED_USER_IDS` | 默认空；逗号分隔的正整数 | 仅首次启动 | 只在 `users` 表为空时导入为已启用用户；此后白名单以数据库为准，修改该变量不会同步 |
-| `BOT_API_URL` | 默认空（官方 Bot API）；非空必须是 `http`/`https` 且含 host | 启动 | 配置后（本地 Bot API 模式）上传上限放宽到 `MAX_FILE_SIZE`，并停用 Bot 身份 MTProto 大文件直传 |
+| `BOT_API_URL` | 默认空（官方 Bot API）；非空必须是 `http`/`https` 且含 host | 启动 | 配置后（本地 Bot API 模式）上传上限放宽到 `MAX_FILE_SIZE`，并停用 Bot 身份 MTProto 大文件直传；Compose bigfile 路线设为 `http://bot-api:<BOT_API_PORT>`（默认 8081） |
 | `DUMP_CHANNEL_ID` | 默认 0（关闭）；非空解析为整数频道 ID | 见第 3 节 | 数据库设置存在时优先（包括显式 0）；管理端保存后即时影响新任务与复用 |
 
 ### 2.4 目录、媒体与日志
@@ -77,10 +77,12 @@ Spore 的配置有三个来源：
 
 | 变量 | 默认值与校验 | 生效方式 | 说明与边界 |
 | --- | --- | --- | --- |
-| `WEB_ADDR` | 默认 `127.0.0.1:8080`；必须为 `host:port` | 启动 | Compose 部署固定覆盖为 `0.0.0.0:8080`，宿主只暴露回环端口 |
+| `WEB_ADDR` | 默认 `127.0.0.1:8080`；必须为 `host:port` | 启动 | 仅源码/裸机直跑生效；Compose 部署固定覆盖为 `0.0.0.0:8080`（端口映射要求容器内监听所有接口），宿主端口用 `WEB_HOST_PORT` 配置 |
 | `WEB_TRUSTED_PROXY` | 默认 `false`；接受 `1/true/yes`、`0/false/no` | 启动 | 仅影响审计来源 IP 与 OAuth 回调地址推导；不作为鉴权依据 |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | 默认空；必须成对配置 | 启动 | 数据库 OAuth 配置不存在时的回退；管理端保存过配置后数据库优先；修改需重启；Secret 不进日志，入库为 AES-GCM 密文 |
 | `WEB_OAUTH_ENCRYPTION_KEY` | 默认空；接受 32 字节原文、64 位 hex，或解码后为 32 字节的 base64 | 启动 | 加密数据库中的 OAuth Secret 与云盘配置备份候选；更换后旧密文可能无法解密；缺失时云盘配置备份相关端点不可用（受控 503），其余功能不受影响；GitHub OAuth 配置见 [GitHub 登录](../guide/github-oauth.md) |
+
+以上变量均由应用进程读取。Compose 部署另有仅由 `docker-compose.yml` 消费的插值变量（应用不读取）：`WEB_HOST_PORT`（宿主侧管理端端口，默认 8080，宿主只绑回环）与 `BOT_API_PORT`（bigfile profile 的本地 Bot API 端口，默认 8081），同机多实例各自错开即可，详见 [部署指南](../guide/deployment.md)。
 
 ### 2.7 事件与通知
 
