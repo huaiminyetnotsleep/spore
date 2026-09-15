@@ -146,6 +146,38 @@ func TestAPIOverviewNoStoreHeader(t *testing.T) {
 	bodyOf(t, resp)
 }
 
+// 接入机器人身份随快照下发（总览页展示 Name 与 @username）；
+// 未注入或未就绪时字段整体省略，前端显示"未接入"。
+func TestAPIOverviewBotIdentity(t *testing.T) {
+	t.Run("已就绪时下发", func(t *testing.T) {
+		e := newTestEnvOpts(t, func(_ *config.Config, opt *Options) {
+			opt.BotIdentity = fakeBotIdentity{id: BotIdentity{ID: 42, Name: "Spore Bot", Username: "spore_bot"}}
+		})
+		j := e.login(t)
+		var view apiOverviewView
+		body := getAPIJSON(t, e, j, "/api/v1/overview", &view)
+		if view.Bot == nil || view.Bot.ID != 42 || view.Bot.Name != "Spore Bot" || view.Bot.Username != "spore_bot" {
+			t.Fatalf("机器人身份不符: %+v", view.Bot)
+		}
+		if !strings.Contains(body, `"bot":{"id":42,"name":"Spore Bot","username":"spore_bot"}`) {
+			t.Fatalf("overview 应下发 bot 身份字段：%s", body)
+		}
+	})
+
+	t.Run("未注入时省略", func(t *testing.T) {
+		e := newTestEnv(t, nil)
+		j := e.login(t)
+		var view apiOverviewView
+		body := getAPIJSON(t, e, j, "/api/v1/overview", &view)
+		if view.Bot != nil {
+			t.Fatalf("未注入时 bot 应为 nil: %+v", view.Bot)
+		}
+		if strings.Contains(body, `"bot":`) {
+			t.Fatalf("未注入时不应下发 bot 字段：%s", body)
+		}
+	})
+}
+
 // Bot MTProto 会话状态与当前主 DC 随 health 下发；未接入时字段整体省略。
 func TestAPIOverviewBotSession(t *testing.T) {
 	t.Run("ready 带当前 DC", func(t *testing.T) {
@@ -190,4 +222,19 @@ func TestAPIOverviewBotSession(t *testing.T) {
 			t.Fatalf("未接入时不应下发 bot_mtproto_state：%s", body)
 		}
 	})
+}
+
+// Options.Version 注入的构建期版本优先于内置缺省常量（CI ldflags 注入链路：
+// cmd/bot 把 main.version 传给 web.Options）；未注入时回退缺省的行为由
+// TestAPIOverviewSnapshotJoinTally 的 Version 比对覆盖。
+func TestAPIOverviewVersionOverride(t *testing.T) {
+	e := newTestEnvOpts(t, func(_ *config.Config, opt *Options) {
+		opt.Version = "v9.9.9-e2e"
+	})
+	j := e.login(t)
+	var view apiOverviewView
+	getAPIJSON(t, e, j, "/api/v1/overview", &view)
+	if view.Version != "v9.9.9-e2e" {
+		t.Fatalf("应展示注入的构建期版本，得到 %q", view.Version)
+	}
 }

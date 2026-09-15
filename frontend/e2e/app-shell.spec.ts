@@ -27,6 +27,7 @@ const overviewFixture = {
     github_configured: false,
   },
   queue: { len: 0, cap: 8 },
+  bot: { id: 42, name: "Spore Bot", username: "spore_bot" },
   requests: {
     queued_rows: 0,
     processing_rows: 0,
@@ -188,6 +189,15 @@ async function mockAdminAPI(page: Page, options: { sessionStatus?: number; users
     }
     if (path === "/api/v1/overview" && method === "GET") {
       await fulfillJSON(route, 200, overviewFixture);
+      return;
+    }
+    // 检查更新（总览页自动查询）：unknown 且无 latest_version，页面不展示提示
+    if (path === "/api/v1/version/check" && method === "GET") {
+      await fulfillJSON(route, 200, {
+        current_version: "e2e",
+        status: "unknown",
+        checked_at: 0,
+      });
       return;
     }
     if (path === "/api/v1/stats" && method === "GET") {

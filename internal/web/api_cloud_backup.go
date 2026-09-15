@@ -68,7 +68,7 @@ func (s *Server) handleAPICloudBackupExport(w http.ResponseWriter, r *http.Reque
 		s.apiBadRequest(w, r, op, "两次输入的备份密码不一致。")
 		return
 	}
-	data, meta, err := cloudarchive.ExportBackup(s.cloudCfg.Snapshot(), in.Password, Version, s.now())
+	data, meta, err := cloudarchive.ExportBackup(s.cloudCfg.Snapshot(), in.Password, s.version, s.now())
 	if err != nil {
 		s.auditCloudBackup(r, "cloud_drive.backup.failed", cloudarchive.BackupMetadata{}, "failed")
 		s.log.Warn("导出云盘配置备份失败", "op", op)

@@ -1,15 +1,17 @@
 /**
  * 总览页组件测试：状态一览四卡（MTProto/数据库/队列水位/待办）与服务信息
- * 渲染、状态色调与待办跳转链接；旧版本后端响应缺少 join 字段时回退零值
- * 不崩白。经全局 fetch mock 注入响应，走真实 fetchOverview（含 join 兜底）
- * 和系统监控查询，不发起真实网络请求。业务统计图表仍由 /stats 承担。
+ * 渲染、机器人身份展示、进入页面自动检查更新（落后→升级提示/最新→绿色
+ * 标签/失败→受控文案）、状态色调与待办跳转链接；旧版本后端响应缺少 join
+ * 字段时回退零值不崩白。fetch 桩按 URL 路由应答——页面初始并发发起
+ * overview / 版本检查 / 系统监控三个请求，到达顺序不定，不能按调用队列
+ * 消费。业务统计图表仍由 /stats 承担。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { OverviewResponse } from "../../api/admin";
+import type { OverviewResponse, VersionCheckResponse } from "../../api/admin";
 import { OverviewPage } from "./OverviewPage";
 
 const fetchMock = vi.fn();
@@ -32,6 +34,7 @@ function overviewResponse(overrides: Partial<OverviewResponse> = {}): OverviewRe
       github_configured: false,
     },
     queue: { len: 0, cap: 100 },
+    bot: { id: 42, name: "Spore Bot", username: "spore_bot" },
     requests: { queued_rows: 1, processing_rows: 2 },
     users: { total: 10, enabled: 8, pending: 1, disabled: 1, archived: 0 },
     join: {
@@ -53,19 +56,52 @@ function overviewResponse(overrides: Partial<OverviewResponse> = {}): OverviewRe
   };
 }
 
-/** 用指定 payload 应答 /api/v1/overview（模拟后端响应，可缺字段）。 */
-function stubResponse(payload: unknown) {
-  fetchMock.mockImplementationOnce(async () =>
-    new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-  );
+interface RouteSpec {
+  payload: unknown;
+  status?: number;
 }
 
-function stubOverviewResponse(payload: unknown) {
-  stubResponse(payload);
-  stubResponse({ range: "1d", since: 0, until: 0, sample_interval_ms: 120000, points: [] });
+/** 按 URL 包含匹配路由应答（可重复应答同一路径，支持点击后重新查询）。 */
+function stubRoutes(routes: Record<string, RouteSpec>) {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    for (const [fragment, route] of Object.entries(routes)) {
+      if (url.includes(fragment)) {
+        return new Response(JSON.stringify(route.payload), {
+          status: route.status ?? 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+    throw new Error(`未匹配的 fetch 请求: ${url}`);
+  });
+}
+
+const METRICS_FIXTURE = { range: "1d", since: 0, until: 0, sample_interval_ms: 120000, points: [] };
+
+/** 检查更新响应 fixture。 */
+function versionCheckResponse(overrides: Partial<VersionCheckResponse> = {}): VersionCheckResponse {
+  return {
+    current_version: "v1.0.0",
+    latest_version: "v1.2.0",
+    status: "outdated",
+    release_url: "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
+    checked_at: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+/** 总览页三个初始请求的路由表：overview 可传任意 payload（含缺字段变体），
+ * versionCheck 缺省为"已是最新"（页面加载即自动检查）。 */
+function overviewRoutes(
+  payload: unknown = overviewResponse(),
+  versionCheck: RouteSpec = { payload: versionCheckResponse({ status: "up_to_date", current_version: "dev" }) },
+): Record<string, RouteSpec> {
+  return {
+    "/api/v1/overview": { payload },
+    "/api/v1/system-metrics": { payload: METRICS_FIXTURE },
+    "/api/v1/version/check": versionCheck,
+  };
 }
 
 function renderPage() {
@@ -90,7 +126,7 @@ describe("总览页", () => {
   });
 
   it("渲染状态一览四卡、服务信息与系统监控区；业务统计图表不出现在本页", async () => {
-    stubOverviewResponse(overviewResponse());
+    stubRoutes(overviewRoutes());
 
     renderPage();
 
@@ -127,6 +163,9 @@ describe("总览页", () => {
     }
     // Bot MTProto 会话：就绪并展示当前主 DC（数据中心，非地理位置）
     expect(screen.getByText("已连接 · DC 4")).toBeInTheDocument();
+    // 机器人：展示接入机器人的 Name 与 @username
+    expect(screen.getByText("机器人")).toBeInTheDocument();
+    expect(screen.getByText("Spore Bot（@spore_bot）")).toBeInTheDocument();
 
     // 系统监控独立区块挂在服务信息之后；业务统计仍由 /stats 承担
     // （懒加载 chunk 在并行测试负载下可能超过默认 1s，显式放宽等待）
@@ -136,25 +175,93 @@ describe("总览页", () => {
     expect(screen.queryByText("已加入频道")).not.toBeInTheDocument();
   });
 
+  it("进入页面自动检查更新，已是最新时展示绿色标签（无需点击）", async () => {
+    stubRoutes(overviewRoutes());
+
+    renderPage();
+
+    expect(await screen.findByTestId("version-up-to-date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeInTheDocument();
+  });
+
+  it("点击检查更新重新查询，落后于上游时展示升级标签并链接发布页", async () => {
+    stubRoutes(overviewRoutes(overviewResponse(), { payload: versionCheckResponse() }));
+
+    renderPage();
+
+    // 自动检查已给出升级提示
+    const hint = await screen.findByTestId("version-upgrade-hint");
+    expect(hint).toBeInTheDocument();
+    // 手动点击刷新按钮重查，结果保持
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    const link = await screen.findByRole("link", { name: "可升级 v1.2.0" });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+  });
+
+  it("点击检查更新后仍是最新时展示绿色标签", async () => {
+    stubRoutes(overviewRoutes());
+
+    renderPage();
+    await screen.findByTestId("version-up-to-date");
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+
+    expect(await screen.findByTestId("version-up-to-date")).toBeInTheDocument();
+  });
+
+  it("dev 构建无法比较时展示上游最新版本", async () => {
+    stubRoutes(
+      overviewRoutes(overviewResponse(), {
+        payload: versionCheckResponse({ status: "unknown", current_version: "dev" }),
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("最新 v1.2.0")).toBeInTheDocument();
+  });
+
+  it("检查更新失败时展示受控错误文案", async () => {
+    stubRoutes(
+      overviewRoutes(overviewResponse(), {
+        status: 503,
+        payload: {
+          error: { code: "SERVICE_UNAVAILABLE", message: "查询最新版本失败，请检查服务器到 GitHub 的网络后重试。" },
+        },
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId("version-check-error")).toHaveTextContent(
+      "查询最新版本失败，请检查服务器到 GitHub 的网络后重试。",
+    );
+  });
+
   it("旧版本后端响应缺少 join 字段时回退零值，不触发错误边界", async () => {
     const legacy = overviewResponse() as Partial<OverviewResponse>;
     delete legacy.join;
-    stubOverviewResponse(legacy);
+    stubRoutes(overviewRoutes(legacy));
 
     renderPage();
 
     expect(await screen.findByTestId("status-tile-todo")).toBeInTheDocument();
     // join 兜底零值：待办卡待审批加入显示 0，页面正常展示而非崩白
     expect(screen.getByRole("link", { name: "待审批加入 0" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("Bot MTProto 会话离线时显示离线，不带 DC", async () => {
     const { health, ...rest } = overviewResponse();
-    stubOverviewResponse({
-      ...rest,
-      health: { ...health, bot_mtproto_state: "offline", bot_mtproto_dc_id: 0 },
-    });
+    stubRoutes(
+      overviewRoutes({
+        ...rest,
+        health: { ...health, bot_mtproto_state: "offline", bot_mtproto_dc_id: 0 },
+      }),
+    );
 
     renderPage();
 
@@ -165,10 +272,12 @@ describe("总览页", () => {
 
   it("Bot MTProto 会话就绪但 DC 未知时显示 DC 未知", async () => {
     const { health, ...rest } = overviewResponse();
-    stubOverviewResponse({
-      ...rest,
-      health: { ...health, bot_mtproto_dc_id: 0 },
-    });
+    stubRoutes(
+      overviewRoutes({
+        ...rest,
+        health: { ...health, bot_mtproto_dc_id: 0 },
+      }),
+    );
 
     renderPage();
 
@@ -180,10 +289,38 @@ describe("总览页", () => {
     const { bot_mtproto_state, bot_mtproto_dc_id, ...plainHealth } = health;
     expect(bot_mtproto_state).toBeDefined();
     expect(bot_mtproto_dc_id).toBeDefined();
-    stubOverviewResponse({ ...rest, health: plainHealth });
+    stubRoutes(
+      overviewRoutes({
+        ...rest,
+        health: plainHealth,
+      }),
+    );
 
     renderPage();
 
     expect(await screen.findByText("未接入")).toBeInTheDocument();
+  });
+
+  it("响应缺少 bot 身份字段时机器人行显示未接入", async () => {
+    const legacy = overviewResponse() as Partial<OverviewResponse>;
+    delete legacy.bot;
+    stubRoutes(overviewRoutes(legacy));
+
+    renderPage();
+
+    // Bot MTProto 会话就绪（fixture 默认），此处"未接入"仅来自机器人行
+    expect(await screen.findByText("未接入")).toBeInTheDocument();
+  });
+
+  it("机器人无公开用户名时只显示 Name", async () => {
+    const { bot, ...rest } = overviewResponse();
+    expect(bot).toBeDefined();
+    stubRoutes(
+      overviewRoutes({ ...rest, bot: { ...bot!, username: "" } }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("Spore Bot")).toBeInTheDocument();
   });
 });

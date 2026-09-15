@@ -155,12 +155,13 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `version` | string | 应用版本 |
+| `version` | string | 应用版本（CI 构建经 -ldflags 注入 git tag/SHA；未注入时回退内置缺省） |
 | `started_at` | int64 | 进程启动时间（Unix 毫秒） |
 | `addr` | string | Web 监听地址 |
 | `workers` | int | 媒体处理 worker 数 |
 | `health` | object | 服务健康快照，见下 |
 | `queue` | object \| 缺省 | 内存队列指标 `{len, cap}`；队列未注入时省略 |
+| `bot` | object \| 缺省 | 接入的 Bot API 机器人身份 `{id, name, username}`（getMe 快照；`name` 为 first_name，`username` 不含 `@`）；Bot 未就绪或身份查询未成功时整体省略，前端显示"未接入" |
 | `requests` | object | 请求行状态计数 `{queued_rows, processing_rows}`（全时段当前值） |
 | `users` | object | 用户状态计数 `{total, enabled, pending, disabled, archived}` |
 | `join` | object | 频道加入全时段快照，见下 |
@@ -190,6 +191,22 @@
 | `source_dist` | array | 来源分布固定三行 `{key: join_command\|approved\|external, count}`（含 0；count 为该来源当前加入数） |
 
 错误：`500/503`（存储类，经统一映射）。
+
+### GET /api/v1/version/check
+
+检查更新（认证）。把当前服务版本与上游最新发布（GitHub Releases）比较，供总览页"服务版本"旁的刷新按钮与升级提示使用。无查询参数。上游查询在服务端有 1 小时缓存窗口，`checked_at` 为原始查询时间（可能早于本次请求）。
+
+响应：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `current_version` | string | 当前服务版本（构建期注入；未注入时为内置缺省） |
+| `latest_version` | string | 上游最新发布 tag（如 `v1.2.0`） |
+| `status` | string | 比较结论：`up_to_date` \| `outdated` \| `unknown`（`unknown` = 当前版本无法解析为纯数字点分格式，如 `dev` 构建，此时仍下发 `latest_version` 供自行判断） |
+| `release_url` | string | 上游发布页链接 |
+| `checked_at` | int64 | 查询时间（Unix 毫秒，来自服务端缓存时为原始查询时间） |
+
+错误：`503`（上游查询失败——网络不可达/被限流，或版本检查通道未注入；受控错误码 `SERVICE_UNAVAILABLE`）；响应 `Cache-Control: no-store`。
 
 ### GET /api/v1/system-metrics
 

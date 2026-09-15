@@ -53,6 +53,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/session", s.apiAuth(s.handleAPISession))
 	s.mountAPIWrite(mux, "/api/v1/session/logout", s.handleAPISessionLogout)
 	mux.Handle("GET /api/v1/overview", s.apiAuth(s.handleAPIOverview))
+	// 检查更新：当前版本与上游最新发布比较（总览页服务版本旁的刷新按钮）
+	mux.Handle("GET /api/v1/version/check", s.apiAuth(s.handleAPIVersionCheck))
 	// 业务统计：总览拆页后承接原
 	// /api/v1/overview 的时间范围请求指标与图表数据。
 	mux.Handle("GET /api/v1/stats", s.apiAuth(s.handleAPIStats))

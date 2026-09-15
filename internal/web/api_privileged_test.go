@@ -615,6 +615,10 @@ type fakeBotStatus struct{ snap mtproto.BotStatusSnapshot }
 
 func (f fakeBotStatus) Status() mtproto.BotStatusSnapshot { return f.snap }
 
+type fakeBotIdentity struct{ id BotIdentity }
+
+func (f fakeBotIdentity) BotIdentity() (BotIdentity, bool) { return f.id, f.id.ID != 0 }
+
 func TestAPIMTProtoStatus(t *testing.T) {
 	e, fake := newMTTestEnv(t)
 	j := e.login(t)

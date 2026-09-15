@@ -1,14 +1,16 @@
 /**
  * 总览页（/）：职责 = 系统现在怎么样。第一屏「状态一览」四张彩色状态卡
  * （MTProto 会话 / 数据库 / 队列水位 / 待办提醒），下方紧凑「服务信息」卡。
- * 用户计数与频道加入快照已迁至 /stats 的「全时段快照」区。
+ * 服务版本支持手动检查更新（点击刷新按钮查询上游最新发布，落后时给出
+ * 升级提示图标）。用户计数与频道加入快照已迁至 /stats 的「全时段快照」区。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
+import { Button, Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
+import { ArrowUpOutlined, ReloadOutlined } from "@ant-design/icons";
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { fetchOverview } from "../../api/admin";
+import { fetchOverview, fetchVersionCheck, type OverviewBot } from "../../api/admin";
 import {
   MTPROTO_STATE_LABELS,
   botAPIStateText,
@@ -43,6 +45,59 @@ function botSessionText(state: string | undefined, dcID: number | undefined): st
   return dcID && dcID > 0 ? `已连接 · DC ${dcID}` : "已连接 · DC 未知";
 }
 
+/** 接入机器人展示文案：Name（@username）；未就绪/未接入时显示"未接入"。 */
+function botIdentityText(bot: OverviewBot | undefined): string {
+  if (!bot) return "未接入";
+  return bot.username ? `${bot.name}（@${bot.username}）` : bot.name;
+}
+
+/** 版本检查结果提示：落后 → 橙色升级标签（链接到发布页）；最新 → 绿色；
+ * 无法比较（dev 构建）→ 展示上游最新版；查询失败 → 红色受控文案。 */
+function VersionCheckHint({
+  status,
+  latestVersion,
+  releaseUrl,
+  error,
+}: {
+  status: string | undefined;
+  latestVersion: string | undefined;
+  releaseUrl: string | undefined;
+  error: string | null;
+}) {
+  if (error) {
+    return (
+      <Tag color="red" data-testid="version-check-error">
+        {error}
+      </Tag>
+    );
+  }
+  if (status === "outdated") {
+    const label = latestVersion ? `可升级 ${latestVersion}` : "可升级";
+    return (
+      <Tag color="orange" icon={<ArrowUpOutlined />} data-testid="version-upgrade-hint">
+        {releaseUrl ? (
+          <a href={releaseUrl} target="_blank" rel="noreferrer">
+            {label}
+          </a>
+        ) : (
+          label
+        )}
+      </Tag>
+    );
+  }
+  if (status === "up_to_date") {
+    return (
+      <Tag color="green" data-testid="version-up-to-date">
+        已是最新
+      </Tag>
+    );
+  }
+  if (status === "unknown" && latestVersion) {
+    return <Tag>最新 {latestVersion}</Tag>;
+  }
+  return null;
+}
+
 function StatusTile({
   tone,
   testId,
@@ -66,6 +121,13 @@ export function OverviewPage() {
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
+  });
+  // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞），
+  // 管理员仍可随时点刷新按钮重查
+  const versionCheck = useQuery({
+    queryKey: ["version-check"],
+    queryFn: fetchVersionCheck,
+    retry: false,
   });
 
   if (isPending) {
@@ -147,10 +209,31 @@ export function OverviewPage() {
 
       <PageCard title="服务信息">
         <Descriptions column={{ xs: 1, md: 2 }} size="small" bordered>
-          <Descriptions.Item label="服务版本">{data.version}</Descriptions.Item>
+          <Descriptions.Item label="服务版本">
+            <Space size={6} wrap>
+              <span>{data.version}</span>
+              <Button
+                size="small"
+                type="text"
+                aria-label="检查更新"
+                title="检查更新"
+                icon={<ReloadOutlined />}
+                loading={versionCheck.fetchStatus === "fetching"}
+                onClick={() => void versionCheck.refetch()}
+              />
+              {/* 未点击过检查更新时 data 与 error 均为空，提示组件渲染 null */}
+              <VersionCheckHint
+                status={versionCheck.data?.status}
+                latestVersion={versionCheck.data?.latest_version}
+                releaseUrl={versionCheck.data?.release_url}
+                error={versionCheck.isError ? versionCheck.error.message : null}
+              />
+            </Space>
+          </Descriptions.Item>
           <Descriptions.Item label="启动时间">{fmtTime(data.started_at)}</Descriptions.Item>
           <Descriptions.Item label="监听地址">{data.addr}</Descriptions.Item>
           <Descriptions.Item label="Worker 数">{data.workers}</Descriptions.Item>
+          <Descriptions.Item label="机器人">{botIdentityText(data.bot)}</Descriptions.Item>
           <Descriptions.Item label="Bot API 长轮询">
             {botAPIStateText(health.mtproto_state)}
             <Text type="secondary">（随 MTProto 会话启停）</Text>

@@ -26,7 +26,9 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
 )
 
-// Version 是管理端展示的服务版本（总览信息；后续里程碑接入构建信息）。
+// Version 是服务版本的内置缺省值：装配层未注入构建期版本（Options.Version）
+// 时的回退（本地 go build、测试）。CI 构建经 -ldflags 注入 git tag 或 commit
+// SHA，总览页与云盘备份元数据都展示注入值。
 const Version = "0.2.0-web-pages"
 
 // QueueStats 是总览页对内存队列的最小依赖（*queue.Queue 天然满足）。
@@ -45,6 +47,19 @@ type MTProtoRelogin interface {
 // BotMTProtoStatus 是 Bot MTProto 会话状态的最小 Web 依赖。
 type BotMTProtoStatus interface {
 	Status() mtproto.BotStatusSnapshot
+}
+
+// BotIdentity 是总览页展示的 Bot API 机器人身份（脱敏，不含 token）。
+type BotIdentity struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`     // getMe 的 first_name
+	Username string `json:"username"` // 不含 @；无公开用户名时为空串
+}
+
+// BotIdentityProvider 提供当前接入的 Bot API 机器人身份；ok=false 表示
+// Bot 尚未就绪或身份查询失败（总览页显示"未接入"）。
+type BotIdentityProvider interface {
+	BotIdentity() (BotIdentity, bool)
 }
 
 // UserProfileLookup 是 Web 手动刷新用户资料的最小生命周期感知接口。
@@ -90,16 +105,17 @@ type Options struct {
 	Store       *store.Store // 必填：业务数据库（settings/web_sessions/audit_log）
 	Cfg         config.Config
 	Log         *slog.Logger
-	Now         func() time.Time  // 可注入时钟（测试用）；缺省 time.Now
-	OAuth       OAuthEndpoints    // 可选：整体覆盖 GitHub OAuth 端点（测试注入假服务）
-	Client      *http.Client      // 可选：OAuth 出站 HTTP 客户端；缺省带超时的独立客户端
-	Access      *access.Service   // 可选：访问控制服务（管理页面的操作入口）；缺失时相关路由报不可用
-	Queue       QueueStats        // 可选：内存队列指标（总览页）；缺失时不展示
-	MTProto     MTProtoRelogin    // 可选：MTProto 登录会话（状态/扫码/重连）；缺失时显示未接入
-	BotMTProto  BotMTProtoStatus  // 可选：Bot MTProto 会话状态（状态/DC）；缺失时显示未接入
-	Profile     UserProfileLookup // 可选：Telegram 用户资料刷新上下文
-	RestartFunc func() error      // 可选：受控优雅重启；生产实现只发送 SIGTERM
-	Hub         *notify.Hub       // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
+	Now         func() time.Time    // 可注入时钟（测试用）；缺省 time.Now
+	OAuth       OAuthEndpoints      // 可选：整体覆盖 GitHub OAuth 端点（测试注入假服务）
+	Client      *http.Client        // 可选：OAuth 出站 HTTP 客户端；缺省带超时的独立客户端
+	Access      *access.Service     // 可选：访问控制服务（管理页面的操作入口）；缺失时相关路由报不可用
+	Queue       QueueStats          // 可选：内存队列指标（总览页）；缺失时不展示
+	MTProto     MTProtoRelogin      // 可选：MTProto 登录会话（状态/扫码/重连）；缺失时显示未接入
+	BotMTProto  BotMTProtoStatus    // 可选：Bot MTProto 会话状态（状态/DC）；缺失时显示未接入
+	BotIdentity BotIdentityProvider // 可选：接入的 Bot API 机器人身份（总览页）；缺失或未就绪时显示未接入
+	Profile     UserProfileLookup   // 可选：Telegram 用户资料刷新上下文
+	RestartFunc func() error        // 可选：受控优雅重启；生产实现只发送 SIGTERM
+	Hub         *notify.Hub         // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
 	// Progress 是处理中请求的实时传输进度注册表，与 worker 共享同一实例
 	// （internal/progress）；nil 时请求记录不携带进度字段。
 	Progress *progress.Registry
@@ -122,6 +138,12 @@ type Options struct {
 	// cfg.OAuthEncryptionKey，cloudarchive 再经 HKDF 域分离派生候选专用 key。
 	CloudBackupKey []byte
 	DBPath         string // 可选：数据库文件路径（备份页大小展示）；缺省按 DataDir 推导
+	// Version 是构建期版本（CI 经 -ldflags 注入 git tag/SHA 后由装配层传入，
+	// 如 cmd/bot 的 main.version）；空串时回退内置缺省 Version 常量。
+	Version string
+	// ReleaseCheck 是检查更新的上游发布查询通道（GitHub Releases，带缓存）；
+	// 缺失时检查更新端点返回受控不可用。
+	ReleaseCheck ReleaseChecker
 }
 
 // Server 是管理端 HTTP 服务：零值不可用，经 New 构造。
@@ -139,6 +161,7 @@ type Server struct {
 	queue            QueueStats
 	mtp              MTProtoRelogin
 	botMTP           BotMTProtoStatus
+	botIdentity      BotIdentityProvider
 	profile          UserProfileLookup
 	restartFunc      func() error
 	restartMu        sync.Mutex
@@ -154,6 +177,8 @@ type Server struct {
 	cloudSink        cloudarchive.Sink
 	cloudPending     *cloudarchive.PendingStore
 	dbPath           string
+	version          string
+	release          ReleaseChecker
 	started          time.Time
 }
 
@@ -186,6 +211,10 @@ func New(opt Options) (*Server, error) {
 	if opt.CloudCfg != nil && len(opt.CloudBackupKey) == 32 {
 		cloudPending, _ = cloudarchive.NewPendingStore(filepath.Dir(opt.CloudCfg.Path()), opt.CloudBackupKey)
 	}
+	version := opt.Version
+	if version == "" {
+		version = Version
+	}
 	return &Server{
 		st:           opt.Store,
 		cfg:          opt.Cfg,
@@ -199,6 +228,7 @@ func New(opt Options) (*Server, error) {
 		queue:        opt.Queue,
 		mtp:          opt.MTProto,
 		botMTP:       opt.BotMTProto,
+		botIdentity:  opt.BotIdentity,
 		profile:      opt.Profile,
 		restartFunc:  opt.RestartFunc,
 		nonceFunc:    randomToken,
@@ -212,6 +242,8 @@ func New(opt Options) (*Server, error) {
 		cloudSink:    opt.CloudSink,
 		cloudPending: cloudPending,
 		dbPath:       dbPath,
+		version:      version,
+		release:      opt.ReleaseCheck,
 		started:      now(),
 	}, nil
 }

@@ -1,9 +1,10 @@
 package web
 
 // GET /api/v1/overview 总览快照 API：只携带实时快照——服务状态（版本/启动
-// 时间/监听地址/GitHub 通道）、MTProto/Bot API/数据库/临时目录健康、队列与
-// Worker、用户状态计数与 requests 行状态计数，以及频道加入（join）全时段
-// 统计（申请状态计数、在加入/已退出频道、来源分布与数量上限配置）。
+// 时间/监听地址/GitHub 通道）、接入机器人身份（getMe 快照）、MTProto/Bot API/
+// 数据库/临时目录健康、队列与 Worker、用户状态计数与 requests 行状态计数，
+// 以及频道加入（join）全时段统计（申请状态计数、在加入/已退出频道、来源分布
+// 与数量上限配置）。
 // 时间范围类请求指标与图表数据由 GET /api/v1/stats 承接（api_stats.go）。
 // DTO 只携带原始值（raw 状态码、Unix 毫秒、字节计数），中文标签与格式化
 // 由前端共享 util 处理；错误链路经统一 writeAPIAppErr 映射。
@@ -69,15 +70,18 @@ type apiJoinTallyView struct {
 
 // apiOverviewView 是 GET /api/v1/overview 的只读快照 DTO（独立于 SSR view struct）。
 type apiOverviewView struct {
-	Version   string              `json:"version"`
-	StartedAt int64               `json:"started_at"` // Unix 毫秒
-	Addr      string              `json:"addr"`
-	Workers   int                 `json:"workers"`
-	Health    apiOverviewHealth   `json:"health"`
-	Queue     *apiQueueView       `json:"queue,omitempty"`
-	Requests  apiOverviewRequests `json:"requests"`
-	Users     apiUserTallyView    `json:"users"`
-	Join      apiJoinTallyView    `json:"join"`
+	Version   string            `json:"version"`
+	StartedAt int64             `json:"started_at"` // Unix 毫秒
+	Addr      string            `json:"addr"`
+	Workers   int               `json:"workers"`
+	Health    apiOverviewHealth `json:"health"`
+	Queue     *apiQueueView     `json:"queue,omitempty"`
+	// Bot 是接入的 Bot API 机器人身份（getMe 快照）；Bot 未就绪或身份
+	// 查询未成功时整体省略，前端显示"未接入"。
+	Bot      *BotIdentity        `json:"bot,omitempty"`
+	Requests apiOverviewRequests `json:"requests"`
+	Users    apiUserTallyView    `json:"users"`
+	Join     apiJoinTallyView    `json:"join"`
 }
 
 // handleAPIOverview 返回总览快照。主要计数（行状态/用户/加入统计）失败经
@@ -87,7 +91,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 	ctx := r.Context()
 
 	view := apiOverviewView{
-		Version:   Version,
+		Version:   s.version,
 		StartedAt: s.started.UnixMilli(),
 		Addr:      s.cfg.WebAddr,
 		Workers:   s.cfg.WorkerCount,
@@ -130,6 +134,14 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 	if s.queue != nil {
 		view.Queue = &apiQueueView{Len: s.queue.Len(), Cap: s.queue.Cap()}
 	}
+
+	// 接入的 Bot API 机器人身份（Bot 客户端晚于 Web 服务创建，未就绪时省略）
+	if s.botIdentity != nil {
+		if ident, ok := s.botIdentity.BotIdentity(); ok {
+			view.Bot = &ident
+		}
+	}
+
 	queued, processing, err := s.st.CountRequestsByStatus(ctx)
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)

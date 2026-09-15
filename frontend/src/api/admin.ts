@@ -58,6 +58,15 @@ export interface OverviewQueue {
   cap: number;
 }
 
+/** 接入的 Bot API 机器人身份（getMe 快照；缺省 = 未接入或查询未成功）。 */
+export interface OverviewBot {
+  id: number;
+  /** getMe 的 first_name（如有 last_name 由后端拼接）。 */
+  name: string;
+  /** 不含 @；无公开用户名时为空串。 */
+  username: string;
+}
+
 export interface DistRow {
   /** 空串表示"未记录"（展示文案由 shared/format 统一）。 */
   key: string;
@@ -102,6 +111,8 @@ export interface OverviewResponse {
   workers: number;
   health: OverviewHealth;
   queue?: OverviewQueue;
+  /** 接入机器人身份；旧后端或未就绪时缺省（展示"未接入"）。 */
+  bot?: OverviewBot;
   requests: OverviewRequests;
   users: OverviewUsers;
   join: OverviewJoin;
@@ -124,6 +135,25 @@ const EMPTY_JOIN: OverviewJoin = {
 export async function fetchOverview(): Promise<OverviewResponse> {
   const data = await apiRequest<OverviewResponse>("/api/v1/overview");
   return { ...data, join: data.join ?? EMPTY_JOIN };
+}
+
+// ---- 检查更新（总览页服务版本旁的刷新按钮）----
+
+/** 版本比较结论 raw 值：unknown = 当前版本无法解析（如 dev 构建）。 */
+export type VersionCheckStatus = "up_to_date" | "outdated" | "unknown";
+
+export interface VersionCheckResponse {
+  current_version: string;
+  latest_version?: string;
+  status: VersionCheckStatus;
+  /** 上游发布页链接；查询结果未携带时缺省。 */
+  release_url?: string;
+  /** 查询时间（Unix 毫秒）；服务端有缓存窗口，可能早于本次点击。 */
+  checked_at: number;
+}
+
+export async function fetchVersionCheck(): Promise<VersionCheckResponse> {
+  return apiRequest<VersionCheckResponse>("/api/v1/version/check");
 }
 
 // ---- 系统资源与传输监控 ----
