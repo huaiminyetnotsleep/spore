@@ -20,7 +20,8 @@ services:
       # 容器内需监听所有接口；ports 的宿主绑定限制为 127.0.0.1。
       WEB_ADDR: 0.0.0.0:8080
     ports:
-      - "127.0.0.1:8080:8080"
+      # 宿主侧访问端口经 WEB_HOST_PORT 配置（同机多实例各自错开）；容器内恒为 8080
+      - "127.0.0.1:${WEB_HOST_PORT:-8080}:8080"
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -41,9 +42,12 @@ services:
     environment:
       TELEGRAM_API_ID: ${TG_API_ID:?请在 .env 中设置 TG_API_ID}
       TELEGRAM_API_HASH: ${TG_API_HASH:?请在 .env 中设置 TG_API_HASH}
+      # 入口脚本把该变量映射为 --http-port（服务真实监听端口）；改动时需同步
+      # .env 中 BOT_API_URL 的端口（bot 经它访问本服务）
+      TELEGRAM_HTTP_PORT: ${BOT_API_PORT:-8081}
       TELEGRAM_LOCAL: "1"
     expose:
-      - "8081"
+      - "${BOT_API_PORT:-8081}"
     volumes:
       - ./bot-api-data:/var/lib/telegram-bot-api
     restart: unless-stopped
