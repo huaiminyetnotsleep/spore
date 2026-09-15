@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.6.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.6.0...v1.6.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **bot:** 缓存补写支持大文件直传到频道，副本被删后可重新补写 ([1986c1c](https://github.com/huaiminyetnotsleep/spore/commit/1986c1cda0babb1dc6ba3c1ed6d22dc78d39ea47))
+
 ## [1.6.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.5.0...v1.6.0) (2026-09-15)
 
 
