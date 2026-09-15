@@ -1,0 +1,58 @@
+# 镜像构建检查：验证 Dockerfile 可正常构建。
+# 本 workflow 不产出、不推送任何镜像——镜像只由发版产生（见 docker-release.yml），
+# 保证 latest、sha-<commit> 与版本标签始终指向有版本号的正式发布。
+name: docker-build-check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "frontend/**"
+      - "public/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/docker-build-check.yml"
+  pull_request:
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "frontend/**"
+      - "public/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/docker-build-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像（不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            SPORE_VERSION=${{ github.sha }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
