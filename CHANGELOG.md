@@ -7,7 +7,6 @@
 
 ### Features
 
-* **bot:** 支持批量链接提交 ([6a88979](https://github.com/huaiminyetnotsleep/spore/commit/6a889790102a9686ac1038c5a2d87f219660e87f))
 * **bot:** 支持批量链接提交 ([75718a0](https://github.com/huaiminyetnotsleep/spore/commit/75718a06312c736007514c8323bd41cf5c77fc62))
 
 ## [1.1.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.0.0...v1.1.0) (2026-09-15)

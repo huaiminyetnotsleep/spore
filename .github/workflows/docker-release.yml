@@ -1,14 +1,19 @@
-# 正式发版构建：release-please 合并 release PR 时打的 vX.Y.Z tag 触发，
-# 发布与 git tag 同名的镜像标签（vX.Y.Z / vX.Y / vX）。
-#
-# 为什么独立成文件且不带 paths 过滤：paths 对 tag 推送同样生效，若 tag
-# 指向的变更集不含代码路径（发版合并通常只改 CHANGELOG.md），挂在
-# docker-publish.yml 上的 tag 触发会被跳过，镜像漏发（v1.1.0 曾因此漏发）。
+# 正式发版构建：发布与 git tag 同名的镜像标签（vX.Y.Z / vX.Y / vX）。
+# 两个触发来源，天然互斥不会重复构建：
+#   1. repository_dispatch：release.yml 在 release-please 创建 tag 后派发
+#      （GITHUB_TOKEN 创建的 tag 其 push 事件不会触发其他 workflow，见
+#      release.yml 内注释）；payload.tag 指定要构建的 tag。
+#   2. push tags v*：人工打/挪 tag 的兜底通道。
+# 历史教训：本 workflow 不能依赖 docker-publish 的 tags 触发加 paths 过滤——
+# paths 对 tag 推送同样生效，发版合并只改 CHANGELOG.md 时构建会被跳过
+# （v1.1.0 曾因此漏发）。
 name: docker-release
 
 on:
   push:
     tags: ["v*"]
+  repository_dispatch:
+    types: [release-image]
 
 permissions:
   contents: read
@@ -24,22 +29,32 @@ jobs:
       contents: read
       packages: write
     steps:
+      # dispatch 事件的 github.ref 是默认分支而非 tag，版本号需从 payload 取；
+      # 两种事件统一归一到目标 tag 后续步骤使用
+      - name: 解析目标 tag
+        id: ver
+        env:
+          PAYLOAD_TAG: ${{ github.event.client_payload.tag }}
+        run: |
+          if [ -n "$PAYLOAD_TAG" ]; then tag="$PAYLOAD_TAG"; else tag="${{ github.ref_name }}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - name: 检出源码
         uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - name: 计算镜像标签（vX.Y.Z / vX.Y / vX）
+        id: meta
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          base="${TAG#v}"
+          echo "minor=v${base%.*}" >> "$GITHUB_OUTPUT"
+          echo "major=v${base%%.*}" >> "$GITHUB_OUTPUT"
 
       - name: 设置 Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: 生成镜像元数据
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # 保留 v 前缀：镜像 tag 与 git tag、spore version 输出三者同名
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
 
       - name: 登录 GHCR
         uses: docker/login-action@v3
@@ -54,8 +69,12 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.minor }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.major }}
+          build-args: |
+            SPORE_VERSION=${{ steps.ver.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true

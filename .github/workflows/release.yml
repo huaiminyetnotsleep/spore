@@ -24,9 +24,30 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: 维护 release PR 与版本号
+        id: release
         uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # GITHUB_TOKEN 创建的 tag 其 push 事件不会触发其他 workflow（GitHub 防循环
+  # 规则），镜像构建必须经 repository_dispatch 中转——这是官方豁免的两种
+  # 事件之一，由它接续触发 docker-release.yml。
+  release-image:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 通知 docker-release 构建发版镜像
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh api "repos/${{ github.repository }}/dispatches" \
+            -f event_type=release-image \
+            -F "client_payload[tag]=$TAG"
