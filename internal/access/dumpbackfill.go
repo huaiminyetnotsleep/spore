@@ -34,10 +34,19 @@ type DumpBackfillOutcome struct {
 	QueueFull        bool   // 建行后入队失败（队列饱和），行已标记 failed(QUEUE_FULL)
 }
 
+// dumpLiveFunc 报告同链接缓存频道副本是否仍然有效（消息未被删除）。
+// 由装配层注入（Bot 会话就绪后 SetDumpLive，dumpcache.EntryLive 同源）；
+// nil 时条目存在即视为有效（保守旧行为）。
+type dumpLiveFunc func(ctx context.Context, channelKey string, messageID int) (bool, error)
+
+// SetDumpLive 注入缓存副本有效性校验（Bot 会话就绪后由装配层调用，与
+// SetSender 同款模式；重复注册以最后一次为准）。
+func (s *Service) SetDumpLive(fn dumpLiveFunc) { s.dumpLive = fn }
+
 // DumpBackfillEligibility 只读预检请求级资格，返回跳过原因（空串 = 可补写）。
 // 供 Web 层在缓存频道全局判定前先分流。
 func (s *Service) DumpBackfillEligibility(ctx context.Context, requestID int64) (string, error) {
-	return dumpBackfillSkip(ctx, s.store, requestID)
+	return dumpBackfillSkip(ctx, s.store, requestID, s.dumpLive)
 }
 
 // DumpBackfill 对终态请求执行缓存补写：事务内复核资格（单连接下事务即
@@ -67,7 +76,7 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 	out := DumpBackfillOutcome{RequestID: requestID}
 	var createdID int64
 	err = s.store.Tx(ctx, func(tx *store.Store) error {
-		skip, err := dumpBackfillSkip(ctx, tx, requestID)
+		skip, err := dumpBackfillSkip(ctx, tx, requestID, s.dumpLive)
 		if err != nil {
 			return err
 		}
@@ -137,10 +146,11 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 }
 
 // dumpBackfillSkip 判定请求级补写资格（st 传事务视图可在事务内复核）：
-// 请求存在、已终态（succeeded/failed/cancelled）、缓存频道无同链接副本
-// （已有条目跳过——不自愈语义：条目对应消息可能仍有效，重复补写只会
-// 浪费队列资源）。返回跳过原因（空串 = 通过）；error 仅存储故障。
-func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64) (string, error) {
+// 请求存在、已终态（succeeded/failed/cancelled）、缓存频道无同链接的有效
+// 副本。条目存在但副本消息已被删除（管理员在缓存频道客户端删除）时放行
+// 补写自愈；live 为 nil 或校验故障时保守视为有效（跳过），与 Entry 失败
+// 语义同向。返回跳过原因（空串 = 通过）；error 仅存储故障。
+func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, live dumpLiveFunc) (string, error) {
 	r, err := st.GetRequest(ctx, requestID)
 	if errors.Is(err, store.ErrNotFound) {
 		return DumpBackfillSkipNotFound, nil
@@ -154,6 +164,12 @@ func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64) (st
 		return DumpBackfillSkipNotFinished, nil
 	}
 	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID); err == nil {
+		if live != nil {
+			valid, lerr := live(ctx, r.ChannelKey, r.MessageID)
+			if lerr == nil && !valid {
+				return "", nil // 副本消息已被删除：放行补写自愈
+			}
+		}
 		return DumpBackfillSkipAlreadyDumped, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", err

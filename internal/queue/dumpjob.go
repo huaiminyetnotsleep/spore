@@ -17,9 +17,9 @@ import (
 // runDumpJob 执行仅缓存补写任务，返回媒体诊断元数据与错误。流程：
 //  1. 依赖与目标解析（nil 防御：装配错误/配置在排队后被清除都直接失败，
 //     不静默降级——列表与重试入口可见明确原因）；
-//  2. 执行时二次预检 dump_entries：提交入口已预检"跳过已有副本"，此处
-//     覆盖入队到执行之间同链接被普通任务或并发补写写入副本的竞态窗口，
-//     命中直接成功，不重复写副本；
+//  2. 执行时二次预检 dump_entries：提交入口已预检"跳过有效副本"，此处
+//     覆盖入队到执行之间的并发窗口，并按消息存在性复核（管理员在缓存
+//     频道删除副本后条目仍在，须放行重写自愈）；命中有效副本直接成功；
 //  3. fetch（15 分钟取数窗口）→ sendConverted 发送到缓存频道；任一条目
 //     失败即整体失败，部分已发送消息留在缓存频道但不落条目（与 WriteClean
 //     的中断语义一致，下次成功投递/补写自愈）；
@@ -32,10 +32,15 @@ func runDumpJob(ctx context.Context, d Deps, j Job) (mediaMeta, error) {
 	if !ok {
 		return mediaMeta{}, apperr.New(apperr.CodeInternal, "缓存频道未配置")
 	}
-	if _, exists := d.Dump.Entry(ctx, refChannelKey(j.Ref), j.Ref.MessageID); exists {
-		d.Log.Info("同链接缓存频道副本已存在（执行时复核命中），跳过补写",
+	if live, err := d.Dump.EntryLive(ctx, refChannelKey(j.Ref), j.Ref.MessageID); err == nil && live {
+		d.Log.Info("同链接缓存频道副本仍有效（执行时复核命中），跳过补写",
 			"job_id", j.ID, "request_id", j.RequestID, "ref", j.Ref.String())
 		return metaMetaFromHistory(ctx, d, j), nil
+	} else if err != nil {
+		// 校验通道故障：放行补写（重复写入无害，新条目按最新坐标生效），
+		// 不把读取故障放大成"已有副本"的假成功
+		d.Log.Info("缓存副本有效性校验失败，继续补写",
+			"job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 	}
 
 	fetchCtx, cancelFetch := context.WithTimeout(ctx, processTimeout)

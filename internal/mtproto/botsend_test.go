@@ -784,3 +784,145 @@ func TestUploadThumbDegrade(t *testing.T) {
 		}
 	})
 }
+
+// ---- 频道目标（缓存频道直传）与副本存在性校验 ----
+
+// channelInvoker 按请求类型分发预设响应：channels.getChannels 返回目标频道
+//（bot 特权反查 access_hash），channels.getMessages 返回预设消息集，
+// messages.sendMedia 记录请求并返回空 Updates。
+type channelInvoker struct {
+	mu           sync.Mutex
+	chats        tg.MessagesChats
+	messages     tg.MessagesMessagesClass
+	resolveCalls int
+	getMsgCalls  int
+	sendCalls    int
+	lastSend     *tg.MessagesSendMediaRequest
+}
+
+func (f *channelInvoker) Invoke(_ context.Context, req bin.Encoder, d bin.Decoder) error {
+	var payload bin.Encoder
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch r := req.(type) {
+	case *tg.ChannelsGetChannelsRequest:
+		f.resolveCalls++
+		payload = &f.chats
+	case *tg.UploadSaveFilePartRequest, *tg.UploadSaveBigFilePartRequest:
+		payload = &tg.BoolTrue{}
+	case *tg.ChannelsGetMessagesRequest:
+		f.getMsgCalls++
+		payload = f.messages
+	case *tg.MessagesSendMediaRequest:
+		f.sendCalls++
+		f.lastSend = r
+		payload = &tg.Updates{Updates: []tg.UpdateClass{
+			&tg.UpdateMessageID{ID: 4242, RandomID: 1},
+		}}
+	default:
+		return fmt.Errorf("测试 invoker：未预期的请求 %T", req)
+	}
+	buf := &bin.Buffer{}
+	if err := payload.Encode(buf); err != nil {
+		return fmt.Errorf("测试 invoker：编码响应失败: %w", err)
+	}
+	return d.Decode(buf)
+}
+
+func testDumpChannelID() int64 { return -1004443957166 }
+
+func channelChats() tg.MessagesChats {
+	return tg.MessagesChats{Chats: []tg.ChatClass{
+		&tg.Channel{ID: 4443957166, AccessHash: 424242, Photo: &tg.ChatPhotoEmpty{}},
+	}}
+}
+
+func TestNativeChannelID(t *testing.T) {
+	for _, tc := range []struct {
+		chatID int64
+		want   int64
+		ok     bool
+	}{
+		{-1004443957166, 4443957166, true},
+		{-100123, 123, true},
+		{-12345, 0, false},  // 普通群组 - 前缀，不支持
+		{7, 0, false},       // 用户私聊不走此路径
+		{-100, 0, false},    // 空 ID
+	} {
+		got, ok := nativeChannelID(tc.chatID)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("nativeChannelID(%d) = (%d, %v)，期望 (%d, %v)", tc.chatID, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// 大文件直传到缓存频道：-100 前缀还原后反查 access_hash，发送 Peer 为
+// InputPeerChannel；二次发送命中 peer 缓存不再反查。
+func TestBotClientSendLargeMediaToChannel(t *testing.T) {
+	inv := &channelInvoker{chats: channelChats()}
+	c := readyBotClient(t, inv)
+
+	if _, err := c.SendMedia(context.Background(), testDumpChannelID(),
+		largeVideo(), message.Caption{}, strings.NewReader("payload")); err != nil {
+		t.Fatalf("大文件直传到缓存频道应成功: %v", err)
+	}
+	if inv.lastSend == nil {
+		t.Fatal("应发出 messages.sendMedia")
+	}
+	peer, ok := inv.lastSend.Peer.(*tg.InputPeerChannel)
+	if !ok || peer.ChannelID != 4443957166 || peer.AccessHash != 424242 {
+		t.Fatalf("发送 Peer 应为解析后的频道: %+v", inv.lastSend.Peer)
+	}
+	if inv.resolveCalls != 1 {
+		t.Fatalf("应恰好一次频道反查: %d", inv.resolveCalls)
+	}
+
+	// 二次发送命中 peers 缓存，不再反查
+	if _, err := c.SendMedia(context.Background(), testDumpChannelID(),
+		largeVideo(), message.Caption{}, strings.NewReader("payload")); err != nil {
+		t.Fatalf("二次直传应成功: %v", err)
+	}
+	if inv.resolveCalls != 1 {
+		t.Fatalf("缓存命中不应再反查: %d", inv.resolveCalls)
+	}
+}
+
+// 副本存在性校验：全部命中为 true；有缺失（已删除）为 false；非 -100
+// 前缀目标本地拒绝。
+func TestBotClientChannelMessagesPresent(t *testing.T) {
+	t.Run("全部存在", func(t *testing.T) {
+		inv := &channelInvoker{
+			chats: channelChats(),
+			messages: &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
+				&tg.Message{ID: 11, PeerID: &tg.PeerChannel{ChannelID: 4443957166}}, &tg.Message{ID: 12, PeerID: &tg.PeerChannel{ChannelID: 4443957166}},
+			}},
+		}
+		c := readyBotClient(t, inv)
+		present, err := c.ChannelMessagesPresent(context.Background(), testDumpChannelID(), []int{11, 12})
+		if err != nil || !present {
+			t.Fatalf("全部存在应 true: %v err=%v", present, err)
+		}
+	})
+
+	t.Run("部分已删除", func(t *testing.T) {
+		inv := &channelInvoker{
+			chats: channelChats(),
+			messages: &tg.MessagesChannelMessages{Messages: []tg.MessageClass{
+				&tg.Message{ID: 11, PeerID: &tg.PeerChannel{ChannelID: 4443957166}},
+			}},
+		}
+		c := readyBotClient(t, inv)
+		present, err := c.ChannelMessagesPresent(context.Background(), testDumpChannelID(), []int{11, 12})
+		if err != nil || present {
+			t.Fatalf("消息缺失应 false: %v err=%v", present, err)
+		}
+	})
+
+	t.Run("非频道目标拒绝", func(t *testing.T) {
+		c := newTestBotClient(t)
+		c.setReady(&tg.Client{})
+		if _, err := c.ChannelMessagesPresent(context.Background(), -12345, []int{11}); err == nil {
+			t.Fatal("非 -100 前缀目标应本地拒绝")
+		}
+	})
+}

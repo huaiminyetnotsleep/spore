@@ -66,6 +66,7 @@ type Service struct {
 	events    EventSink
 	senderMu  sync.RWMutex
 	sender    delivery.Sender // 审批结果通知通道；Bot 就绪后经 SetSender 注入（见注释）
+	dumpLive  dumpLiveFunc    // 缓存副本有效性校验；Bot 就绪后经 SetDumpLive 注入
 	log       *slog.Logger
 	now       func() time.Time
 }

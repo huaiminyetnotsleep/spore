@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"strconv"
+	"strings"
 
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -41,7 +43,7 @@ func (c *BotClient) SendMedia(ctx context.Context, chatID int64, m message.Media
 	if r == nil {
 		return 0, apperr.New(apperr.CodeInternal, "大文件直传要求提供媒体数据源 reader")
 	}
-	peer, err := c.resolveUserPeer(ctx, api, chatID)
+	peer, err := c.resolvePeer(ctx, api, chatID)
 	if err != nil {
 		return 0, err
 	}
@@ -105,7 +107,7 @@ func (c *BotClient) SendAlbum(ctx context.Context, chatID int64, medias []messag
 			fmt.Sprintf("相册成员与数据源/caption 数量不一致：%d vs %d/%d",
 				len(medias), len(readers), len(captions)))
 	}
-	peer, err := c.resolveUserPeer(ctx, api, chatID)
+	peer, err := c.resolvePeer(ctx, api, chatID)
 	if err != nil {
 		return nil, err
 	}
@@ -340,6 +342,15 @@ func mimeOf(k message.ItemKind) string {
 	}
 }
 
+// resolvePeer 解析目标聊天为 InputPeer：chatID > 0 为私聊用户，< 0 为
+// 频道/超级群组（缓存频道直传与副本存在性校验的目标）。
+func (c *BotClient) resolvePeer(ctx context.Context, api *tg.Client, chatID int64) (tg.InputPeerClass, error) {
+	if chatID > 0 {
+		return c.resolveUserPeer(ctx, api, chatID)
+	}
+	return c.resolveChannelPeer(ctx, api, chatID)
+}
+
 // resolveUserPeer 解析目标用户为 InputPeerUser。Bot 持有特权：
 // UsersGetUsers 接受 access_hash=0 的 InputUser 反查目标（WTelegramBot 同款
 // 做法）；结果缓存于内存，bot↔user 的 access hash 长期稳定、跨重连保留。
@@ -366,6 +377,105 @@ func (c *BotClient) resolveUserPeer(ctx context.Context, api *tg.Client, chatID 
 	}
 	return nil, apperr.New(apperr.CodeSendFailed,
 		fmt.Sprintf("UsersGetUsers 未返回目标用户 %d", chatID))
+}
+
+// resolveChannelPeer 解析目标频道为 InputPeerChannel。Bot 为该频道管理员
+// （缓存频道场景：Bot API copyMessage 投递副本的前提）；access_hash 经
+// ChannelsGetChannels 特权反查（channelAccessHash），与用户 peer 同缓存
+// （bot↔频道 access hash 长期稳定、跨重连保留）。缓存频道 ID 是 Bot API
+// 的 -100 前缀数字 ID，还原为原生 channel ID 后查询。
+func (c *BotClient) resolveChannelPeer(ctx context.Context, api *tg.Client, chatID int64) (tg.InputPeerClass, error) {
+	channelID, ok := nativeChannelID(chatID)
+	if !ok {
+		return nil, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("大文件直传不支持的目标 chat_id=%d（仅支持用户私聊与 -100 前缀频道）", chatID))
+	}
+	accessHash, err := c.channelAccessHash(ctx, api, chatID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: accessHash}, nil
+}
+
+// nativeChannelID 把 Bot API 的 -100 前缀频道 ID 还原为 Telegram 原生
+// channel ID；非 -100 前缀的负数 ID（普通群组等）不支持，返回 false。
+func nativeChannelID(chatID int64) (int64, bool) {
+	s := strconv.FormatInt(chatID, 10)
+	if !strings.HasPrefix(s, "-100") {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(s, "-100"), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// ChannelMessagesPresent 校验频道内指定消息是否全部仍存在：channels.getMessages
+// 按 ID 读取，已删除的消息不出现在响应中（或以 MessageEmpty 占位）。缓存频道
+// 副本失效判定（管理端"转存缓存频道"的 already_dumped 预检与执行时复核）用。
+func (c *BotClient) ChannelMessagesPresent(ctx context.Context, channelChatID int64, messageIDs []int) (bool, error) {
+	api, ok := c.current()
+	if !ok {
+		return false, apperr.Wrap(apperr.CodeLargeChannelUnavailable, ErrBotSessionNotReady)
+	}
+	channelID, ok := nativeChannelID(channelChatID)
+	if !ok {
+		return false, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("频道消息校验要求 -100 前缀频道目标，得到 chat_id=%d", channelChatID))
+	}
+	accessHash, err := c.channelAccessHash(ctx, api, channelChatID, channelID)
+	if err != nil {
+		return false, err
+	}
+	ids := make([]tg.InputMessageClass, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		ids = append(ids, &tg.InputMessageID{ID: id})
+	}
+	res, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash},
+		ID:      ids,
+	})
+	if err != nil {
+		return false, classifySendError(err)
+	}
+	messages, ok := res.(*tg.MessagesChannelMessages)
+	if !ok {
+		return false, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("channels.getMessages 响应类型异常: %T", res))
+	}
+	present := 0
+	for _, m := range messages.Messages {
+		if _, isMessage := m.(*tg.Message); isMessage {
+			present++
+		}
+	}
+	return present >= len(messageIDs), nil
+}
+
+// channelAccessHash 返回频道的 access_hash：优先取缓存（peers 表，key 为
+// Bot API 的 -100 形式 chatID），未缓存时经 ChannelsGetChannels 特权反查
+// 并写缓存。
+func (c *BotClient) channelAccessHash(ctx context.Context, api *tg.Client, chatID, channelID int64) (int64, error) {
+	if h, ok := c.cachedPeer(chatID); ok {
+		return h, nil
+	}
+	chats, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+		&tg.InputChannel{ChannelID: channelID},
+	})
+	if err != nil {
+		return 0, classifySendError(err)
+	}
+	for _, ch := range chats.GetChats() {
+		if channel, ok := ch.(*tg.Channel); ok && channel.ID == channelID {
+			c.mu.Lock()
+			c.peers[chatID] = channel.AccessHash
+			c.mu.Unlock()
+			return channel.AccessHash, nil
+		}
+	}
+	return 0, apperr.New(apperr.CodeSendFailed,
+		fmt.Sprintf("ChannelsGetChannels 未返回目标频道 %d", chatID))
 }
 
 func (c *BotClient) cachedPeer(userID int64) (int64, bool) {

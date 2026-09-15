@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -177,4 +178,51 @@ func TestRetryDumpBackfillKeepsDumpOnly(t *testing.T) {
 	if job.CloudDest != "" {
 		t.Errorf("dump 行重试不应携带云盘目的地: %+v", job)
 	}
+}
+
+// TestDumpBackfillSkipMatrixLiveEntry：副本失效自愈——条目存在但消息已被
+// 删除（管理员在缓存频道客户端删除）时放行补写；校验通道未注入或校验故障
+// 时保守维持 already_dumped 跳过。
+func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, _ := newTestService(t, 8, clock.Now)
+	mustEnabledUser(t, st, 1)
+	clock.Advance(time.Minute)
+	src := newTerminalRequest(t, svc, st, 41, store.DeliveryModeUpload)
+	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
+		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+	}); err != nil {
+		t.Fatalf("落缓存条目失败: %v", err)
+	}
+
+	t.Run("校验通道未注入时保守跳过", func(t *testing.T) {
+		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
+		if err != nil || out.SkipReason != DumpBackfillSkipAlreadyDumped {
+			t.Fatalf("应跳过 already_dumped: %+v err=%v", out, err)
+		}
+	})
+
+	t.Run("副本失效放行补写", func(t *testing.T) {
+		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return false, nil })
+		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
+		if err != nil || out.SkipReason != "" || out.CreatedRequestID == 0 {
+			t.Fatalf("失效副本应放行建行: %+v err=%v", out, err)
+		}
+	})
+
+	t.Run("副本仍有效维持跳过", func(t *testing.T) {
+		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return true, nil })
+		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
+		if err != nil || out.SkipReason != DumpBackfillSkipAlreadyDumped {
+			t.Fatalf("有效副本应跳过: %+v err=%v", out, err)
+		}
+	})
+
+	t.Run("校验故障保守跳过", func(t *testing.T) {
+		svc.SetDumpLive(func(context.Context, string, int) (bool, error) { return false, errors.New("offline") })
+		out, err := svc.DumpBackfill(context.Background(), "admin", src.ID)
+		if err != nil || out.SkipReason != DumpBackfillSkipAlreadyDumped {
+			t.Fatalf("校验故障应保守跳过: %+v err=%v", out, err)
+		}
+	})
 }
