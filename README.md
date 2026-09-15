@@ -79,7 +79,7 @@ make dev
 curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/install-spore.sh | bash
 ```
 
-运行后出现管理菜单，选 **1** 安装：自动下载配置到 `~/spore` → 交互式填写 `BOT_TOKEN` / `TG_API_ID` / `TG_API_HASH`（可留空回车跳过，之后在 `.env` 补填）→ 授权 `data/` → 拉取镜像并启动 → 打印首次访问密钥。安装完成后会把脚本注册为 **`spore` 命令**，之后直接输入 `spore` 打开管理菜单，或 `spore status` / `spore upgrade` 等子命令完成**升级、验证、状态、日志、查看/重设密钥、清理临时文件、磁盘检查、重启、停止、卸载**等运维操作；部署目录可经 `curl ... | SPORE_DIR=/opt/spore bash` 覆盖。详见[部署指南](docs/guide/deployment.md)。
+运行后出现管理菜单，选 **1** 安装：自动下载配置到 `~/spore` → 交互式填写 `BOT_TOKEN` / `TG_API_ID` / `TG_API_HASH`（可留空回车跳过，之后在 `.env` 补填）→ 选择宿主端口（默认 8080，自动检测占用）→ 授权 `data/` → 自选是否立即启动（不启动则稍后 `spore restart` 首启）→ 启动时打印首次访问密钥。安装完成后会把脚本注册为 **`spore` 命令**，之后直接输入 `spore` 打开管理菜单，或 `spore status` / `spore upgrade` 等子命令完成**升级、验证、状态、日志、查看/重设密钥、清理临时文件、磁盘检查、重启、停止、卸载**等运维操作；部署目录可经 `curl ... | SPORE_DIR=/opt/spore bash` 覆盖。详见[部署指南](docs/guide/deployment.md)。
 
 ```bash
 spore             # 打开管理菜单（安装/升级/验证/状态/日志/密钥/清理/重启/停止/卸载）

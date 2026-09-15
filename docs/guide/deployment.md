@@ -159,6 +159,11 @@ curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/insta
 - 凭据提问支持留空回车**跳过**：部署会继续，但 Telegram 登录会失败；之后编辑
   `~/spore/.env` 填入凭据，再运行 `spore upgrade`（或菜单「2) 升级 Spore」）使其生效；
   重跑 install 只会补问缺失项；
+- 安装时询问宿主访问端口，默认 `8080`，脚本会实时探测占用、被占时要求更换；服务已
+  运行时改端口会自动重建容器使其生效。已安装后改端口：编辑 `.env` 的 `WEB_HOST_PORT`
+  后执行 `docker compose up -d`（或 `spore upgrade`）；
+- 安装结束询问**是否立即启动**：选择「否」只完成配置与 `spore` 命令注册，之后运行
+  `spore restart`（未运行时会直接启动）完成首次启动；
 - Docker 未安装时脚本会询问是否用 get.docker.com 官方脚本自动安装；
 - 菜单「升级」不改任何配置，仅拉取新镜像并滚动更新；「卸载」默认保留 `.env` 与
   `data/`，按提示二次确认后才删除；
