@@ -46,6 +46,7 @@ Spore 的配置有三个来源：
 | 变量 | 默认值与校验 | 生效方式 | 说明与边界 |
 | --- | --- | --- | --- |
 | `ALLOWED_USER_IDS` | 默认空；逗号分隔的正整数 | 仅首次启动 | 只在 `users` 表为空时导入为已启用用户；此后白名单以数据库为准，修改该变量不会同步 |
+| `MAX_LINKS_PER_MESSAGE` | 默认 10；1–50 | 环境默认；数据库覆盖即时生效 | 一条普通消息或 `/download` 命令允许的有效链接数；超过上限整批拒绝，不创建任务或扣额度 |
 | `BOT_API_URL` | 默认空（官方 Bot API）；非空必须是 `http`/`https` 且含 host | 启动 | 配置后（本地 Bot API 模式）上传上限放宽到 `MAX_FILE_SIZE`，并停用 Bot 身份 MTProto 大文件直传；Compose bigfile 路线设为 `http://bot-api:<BOT_API_PORT>`（默认 8081） |
 | `DUMP_CHANNEL_ID` | 默认 0（关闭）；非空解析为整数频道 ID | 见第 3 节 | 数据库设置存在时优先（包括显式 0）；管理端保存后即时影响新任务与复用 |
 
@@ -111,6 +112,7 @@ Spore 的配置有三个来源：
 
 1. 以下设置在数据库中存在合法值时**覆盖环境默认**：
    - `worker_count`（合法范围 1–16）；
+   - `max_links_per_message`（合法范围 1–50；管理端「运行设置」修改后即时生效）；
    - 媒体三项 `max_file_size` / `stream_limit` / `temp_dir_max_size`：三项**整体校验**，任一非法则整套回退环境配置并产生 `media.config_invalid` 事件；
    - 传输四项 `download_threads` / `upload_threads` / `download_connections` / `upload_connections`：逐键覆盖，非法、越界或损坏的值被忽略并回退环境默认；
    - `dump_channel_id`：数据库键存在即优先，**包括显式 0（关闭）**；键缺失或非法时回落 `DUMP_CHANNEL_ID`；
@@ -127,7 +129,7 @@ Spore 的配置有三个来源：
 | 修改 `.env` / 环境变量 | 重启进程（或重建容器） |
 | `queue_capacity`、`worker_count` | 重启生效 |
 | 媒体三项（`max_file_size` / `stream_limit` / `temp_dir_max_size`） | 重启生效；当前进程的媒体配置不会在线替换 |
-| `timezone`、`dedup_window_min`、`system_name` | 即时（每次提交、查询或文案渲染时读取） |
+| `timezone`、`dedup_window_min`、`max_links_per_message`、`system_name` | 即时（每次提交、查询或文案渲染时读取） |
 | `channel_copy_enabled`、`tg_reuse_enabled`、缓存频道 ID | 即时（每次任务成功副本、复用前读取，影响新任务） |
 | 受邀频道 `join_*` 六项 | 即时 |
 | 传输四项 | 即时发布；细节见下 |

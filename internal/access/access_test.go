@@ -207,6 +207,32 @@ func TestSubmitAllowedRecordsAndEnqueues(t *testing.T) {
 	}
 }
 
+func TestSubmitBatchContinuationSkipsOnlySubmitInterval(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 4, clock.Now)
+	jobs := startWorkers(t, q)
+	ctx := context.Background()
+	if _, err := st.CreateUser(ctx, store.User{
+		ID: 1, Status: store.UserEnabled, SubmitIntervalSec: 30, DailyLimit: 10, ConcurrentLimit: 3,
+	}); err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+
+	mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(41)})
+	waitJob(t, jobs)
+	mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(42), BatchContinuation: true})
+	waitJob(t, jobs)
+
+	day := baseTime.In(defaultLoc).Format(dayFormat)
+	usage, err := st.GetUsage(ctx, 1, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Used != 2 || countRequests(t, st, 1) != 2 {
+		t.Fatalf("批量续项仍应逐条扣额度并落请求，usage=%d requests=%d", usage.Used, countRequests(t, st, 1))
+	}
+}
+
 func TestSubmitProfileProvidedCanClearExistingProfile(t *testing.T) {
 	clock := newClock(baseTime)
 	svc, st, q := newTestService(t, 4, clock.Now)

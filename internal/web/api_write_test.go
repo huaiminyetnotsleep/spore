@@ -817,12 +817,13 @@ func TestAPISettingsReadAndSave(t *testing.T) {
 
 	var before apiSettingsView
 	getAPIJSON(t, e, j, "/api/v1/settings", &before)
-	if before.Timezone != "Asia/Shanghai" || before.QueueCapacity != 64 || before.MaxFileSizeBytes == 0 {
+	if before.Timezone != "Asia/Shanghai" || before.MaxLinksPerMessage != config.DefaultMaxLinksPerMessage ||
+		before.QueueCapacity != 64 || before.MaxFileSizeBytes == 0 {
 		t.Fatalf("设置读取不对: %+v", before)
 	}
 
 	// 合法保存：时区 + 去重窗口 + 队列容量 + 媒体参数
-	body := `{"timezone":"UTC","dedup_window_min":20,"queue_capacity":128,` +
+	body := `{"timezone":"UTC","dedup_window_min":20,"max_links_per_message":12,"queue_capacity":128,` +
 		`"max_file_size":"40","max_file_unit":"MB","stream_limit":"10","stream_limit_unit":"MB"}`
 	resp := e.apiPost(j, "/api/v1/settings", csrf, body)
 	if resp.StatusCode != http.StatusOK {
@@ -834,7 +835,8 @@ func TestAPISettingsReadAndSave(t *testing.T) {
 	}
 	decodeAPIJSON(t, bodyOf(t, resp), &out)
 	if !out.OK || out.Settings.Timezone != "UTC" || out.Settings.DedupWindowMin != 20 ||
-		out.Settings.QueueCapacity != 128 || out.Settings.MaxFileSizeBytes != 40<<20 {
+		out.Settings.MaxLinksPerMessage != 12 || out.Settings.QueueCapacity != 128 ||
+		out.Settings.MaxFileSizeBytes != 40<<20 {
 		t.Errorf("保存结果摘要不对: %+v", out)
 	}
 	ctx := context.Background()
@@ -844,13 +846,16 @@ func TestAPISettingsReadAndSave(t *testing.T) {
 	if m := e.srv.access.DedupWindowMinutes(ctx); m != 20 {
 		t.Errorf("去重窗口应即时生效，得到 %d", m)
 	}
+	if got := LoadMaxLinksPerMessage(ctx, e.st, config.DefaultMaxLinksPerMessage); got != 12 {
+		t.Errorf("单次最大链接数应即时生效，得到 %d", got)
+	}
 	if cap := LoadQueueCapacity(ctx, e.st); cap != 128 {
 		t.Errorf("队列容量应已保存，得到 %d", cap)
 	}
 	if raw, ok, _ := e.st.GetSetting(ctx, settingKeyMaxFileSize); !ok || raw != "41943040" {
 		t.Errorf("媒体上限应按字节保存: %q %v", raw, ok)
 	}
-	for _, action := range []string{"settings.timezone", "settings.dedup_window", "settings.queue_capacity", "settings.media"} {
+	for _, action := range []string{"settings.timezone", "settings.dedup_window", "settings.max_links_per_message", "settings.queue_capacity", "settings.media"} {
 		if !e.containsAction(action) {
 			t.Errorf("设置变更应写审计 %s", action)
 		}
@@ -861,6 +866,7 @@ func TestAPISettingsReadAndSave(t *testing.T) {
 	for name, bad := range map[string]string{
 		"非法时区":      `{"timezone":"Mars/Olympus"}`,
 		"去重窗口越界":    `{"dedup_window_min":0}`,
+		"单次链接数越界":   `{"max_links_per_message":51}`,
 		"队列容量越界":    `{"queue_capacity":4097}`,
 		"媒体只填一项":    `{"max_file_size":"40","max_file_unit":"MB"}`,
 		"媒体单位非法":    `{"max_file_size":"40","max_file_unit":"TB","stream_limit":"10","stream_limit_unit":"MB"}`,

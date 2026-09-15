@@ -21,6 +21,10 @@ var botTokenPattern = regexp.MustCompile(`^\d+:[A-Za-z0-9_-]{20,}$`)
 const (
 	defaultWorkerCount = 1
 	defaultDataDir     = "data"
+
+	DefaultMaxLinksPerMessage = 10
+	MinLinksPerMessage        = 1
+	MaxLinksPerMessage        = 50
 	// defaultMaxFileSize 默认发送大小上限：2000MB（MTProto 上传硬上限）。
 	// 超过 Bot API 50MB 上限的文件自动经 Bot 号 MTProto 会话直传（见
 	// delivery/router.go），未配置本地 Bot API 服务器也可发大文件。
@@ -76,23 +80,24 @@ const (
 
 // Config 保存全部运行时配置。
 type Config struct {
-	BotToken        string
-	BotAPIURL       string // 自定义 Bot API 服务器（本地模式）；空 = 官方服务器
-	TGAPIID         int
-	TGAPIHash       string
-	TGPhone         string             // 仅 phone 模式必填；auto 下作为回退凭据
-	LoginMode       string             // auto / qr / phone
-	AllowedUserIDs  map[int64]struct{} // 旧白名单：仅首次启动导入数据库（users 表为空时），此后以数据库为准
-	WorkerCount     int
-	DataDir         string // session.json / peers.json 存放目录
-	TempDir         string // 临时媒体目录
-	FFmpegPath      string // 视频封面兜底抽帧的 ffmpeg 可执行路径（默认 PATH 查找）
-	MaxFileSize     int64  // 发送大小上限（字节）
-	StreamLimit     int64  // 流式下载上限（字节），超过走内存缓冲或临时文件
-	InMemoryLimit   int64  // 内存重排序缓冲上限（字节）；超过走临时文件多线程落盘
-	MemoryBudget    int64  // 进程级内存管道总额度（字节）；预算不足自动降级临时文件路径
-	DownloadThreads int    // 并行下载分片线程数（流式路径固定单流，不受影响）
-	UploadThreads   int    // MTProto 大文件上传并发分片线程数
+	BotToken           string
+	BotAPIURL          string // 自定义 Bot API 服务器（本地模式）；空 = 官方服务器
+	TGAPIID            int
+	TGAPIHash          string
+	TGPhone            string             // 仅 phone 模式必填；auto 下作为回退凭据
+	LoginMode          string             // auto / qr / phone
+	AllowedUserIDs     map[int64]struct{} // 旧白名单：仅首次启动导入数据库（users 表为空时），此后以数据库为准
+	WorkerCount        int
+	MaxLinksPerMessage int    // 一条 Bot 输入消息允许的有效链接数；Web settings 可即时覆盖
+	DataDir            string // session.json / peers.json 存放目录
+	TempDir            string // 临时媒体目录
+	FFmpegPath         string // 视频封面兜底抽帧的 ffmpeg 可执行路径（默认 PATH 查找）
+	MaxFileSize        int64  // 发送大小上限（字节）
+	StreamLimit        int64  // 流式下载上限（字节），超过走内存缓冲或临时文件
+	InMemoryLimit      int64  // 内存重排序缓冲上限（字节）；超过走临时文件多线程落盘
+	MemoryBudget       int64  // 进程级内存管道总额度（字节）；预算不足自动降级临时文件路径
+	DownloadThreads    int    // 并行下载分片线程数（流式路径固定单流，不受影响）
+	UploadThreads      int    // MTProto 大文件上传并发分片线程数
 	// MTProto 连接池上限（下载在用户会话、上传在 Bot 会话）：分片线程默认
 	// 全部复用单条 TCP 连接，带宽富余时单连接是吞吐瓶颈；池让并发分片各走
 	// 独立连接（并行 TCP 窗口 + 并行加解密）。与线程数解耦——线程是
@@ -185,6 +190,15 @@ func Load(getenv func(string) string) (Config, error) {
 			return cfg, fmt.Errorf("WORKER_COUNT 必须是不小于 1 的整数")
 		}
 		cfg.WorkerCount = n
+	}
+
+	cfg.MaxLinksPerMessage = DefaultMaxLinksPerMessage
+	if v := strings.TrimSpace(getenv("MAX_LINKS_PER_MESSAGE")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < MinLinksPerMessage || n > MaxLinksPerMessage {
+			return cfg, fmt.Errorf("MAX_LINKS_PER_MESSAGE 必须为 %d–%d 的整数", MinLinksPerMessage, MaxLinksPerMessage)
+		}
+		cfg.MaxLinksPerMessage = n
 	}
 
 	if v := strings.TrimSpace(getenv("DUMP_CHANNEL_ID")); v != "" {

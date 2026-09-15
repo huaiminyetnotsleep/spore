@@ -35,6 +35,7 @@ const { Text } = Typography;
 
 interface SettingsFormValues {
   timezone?: string;
+  max_links_per_message?: number;
   queue_capacity?: number;
   worker_count?: number;
   max_file_size?: string;
@@ -104,6 +105,7 @@ export function SettingsPage() {
     if (!data) return;
     form.setFieldsValue({
       timezone: data.timezone,
+      max_links_per_message: data.max_links_per_message,
       queue_capacity: data.queue_capacity,
       worker_count: data.worker_count,
       download_threads: data.download_threads,
@@ -118,6 +120,9 @@ export function SettingsPage() {
       const input: SettingsSaveInput = {};
       if (dirtyFields.has("timezone") && values.timezone !== undefined && values.timezone.trim() !== "") {
         input.timezone = values.timezone.trim();
+      }
+      if (dirtyFields.has("max_links_per_message") && values.max_links_per_message != null) {
+        input.max_links_per_message = values.max_links_per_message;
       }
       if (dirtyFields.has("queue_capacity") && values.queue_capacity != null) {
         input.queue_capacity = values.queue_capacity;
@@ -223,6 +228,7 @@ export function SettingsPage() {
           disabled={isPending}
           initialValues={{
             timezone: data?.timezone,
+            max_links_per_message: data?.max_links_per_message,
             queue_capacity: data?.queue_capacity,
             worker_count: data?.worker_count,
             download_threads: data?.download_threads,
@@ -254,6 +260,15 @@ export function SettingsPage() {
                 extra="日额度按该时区 00:00 切换，页面时间统一按该时区显示；IANA 名称合法性由服务端校验。"
               >
                 <Input placeholder="如 Asia/Shanghai" allowClear />
+              </Form.Item>
+
+              <Form.Item
+                name="max_links_per_message"
+                label="单次最大链接数（1–50）"
+                rules={[{ type: "integer", min: 1, max: 50, message: "单次最大链接数必须为 1–50 的整数。" }]}
+                extra="一条普通消息或 /download 命令可提交的有效链接数；超过上限时整批拒绝。保存后即时生效。"
+              >
+                <InputNumber min={1} max={50} precision={0} className="field-width-160" />
               </Form.Item>
 
               <Form.Item

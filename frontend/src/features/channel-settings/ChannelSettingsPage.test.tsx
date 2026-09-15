@@ -34,6 +34,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
     timezone: "Asia/Shanghai",
     dedup_window_min: 30,
+    max_links_per_message: 10,
     queue_capacity: 64,
     queue_runtime: 64,
     queue_same: true,
