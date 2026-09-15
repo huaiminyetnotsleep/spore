@@ -82,7 +82,7 @@ function VersionCheckHint({
     return null;
   }
   return (
-    <Tag data-testid="version-latest">
+    <Tag color="success" data-testid="version-latest">
       {releaseUrl ? (
         <a href={releaseUrl} target="_blank" rel="noreferrer">
           最新 {latestVersion}

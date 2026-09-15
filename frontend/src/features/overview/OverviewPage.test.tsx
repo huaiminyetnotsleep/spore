@@ -185,6 +185,7 @@ describe("总览页", () => {
     renderPage();
 
     expect(await screen.findByTestId("version-latest")).toBeInTheDocument();
+    expect(screen.getByTestId("version-latest")).toHaveClass("ant-tag-success");
     expect(screen.getByRole("link", { name: "最新 v1.2.0" })).toHaveAttribute(
       "href",
       "https://github.com/huaiminyetnotsleep/spore/releases/tag/v1.2.0",
