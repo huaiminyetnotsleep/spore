@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/sync-changelog.mjs && vitepress dev --port 5163",
-    "build": "node scripts/sync-changelog.mjs && vitepress build",
+    "dev": "vitepress dev --port 5163",
+    "build": "vitepress build",
     "preview": "vitepress preview"
   },
   "devDependencies": {

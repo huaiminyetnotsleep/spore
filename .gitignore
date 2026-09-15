@@ -4,8 +4,6 @@
 node_modules/
 /docs/.vitepress/cache/
 /docs/.vitepress/dist/
-# 构建期由 docs/scripts/sync-changelog.mjs 从根目录 CHANGELOG.md 生成
-/docs/reference/changelog.md
 /frontend/dist/
 /frontend/test-results/
 /internal/web/frontend-dist/*

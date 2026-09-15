@@ -25,7 +25,7 @@ export default defineConfig({
       { text: '配置参考', link: '/reference/configuration', activeMatch: '/reference/' },
       { text: '运维手册', link: '/ops/operations', activeMatch: '/ops/' },
       { text: '开发', link: '/guide/development', activeMatch: '/guide/development' },
-      { text: '更新日志', link: '/reference/changelog', activeMatch: '/reference/changelog' }
+      { text: '更新日志', link: 'https://github.com/huaiminyetnotsleep/spore/blob/main/CHANGELOG.md' }
     ],
     sidebar: {
       '/guide/': [
@@ -64,15 +64,15 @@ export default defineConfig({
             { text: '架构文档', link: '/reference/architecture' },
             { text: 'SPA 管理端验收契约', link: '/reference/admin-acceptance' }
           ]
-        },
-        { text: '更新日志', link: '/reference/changelog' },
+        }
       ],
       '/ops/': [
         {
           text: '运维',
           items: [
             { text: '运维手册', link: '/ops/operations' },
-            { text: '问题与解决记录', link: '/ops/troubleshooting' }
+            { text: '问题与解决记录', link: '/ops/troubleshooting' },
+            { text: '发版流程', link: '/ops/release' }
           ]
         }
       ]
