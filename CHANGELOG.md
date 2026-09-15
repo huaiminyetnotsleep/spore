@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.3.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.2.1...v1.3.0) (2026-09-15)
+
+
+### Features
+
+* **web:** 总览页展示机器人身份与真实服务版本，支持检查更新 ([d208249](https://github.com/huaiminyetnotsleep/spore/commit/d208249911930a2196d240b71a5f98e75dac6ede))
+
 ## [1.2.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.2.0...v1.2.1) (2026-09-15)
 
 
