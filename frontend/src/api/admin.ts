@@ -152,8 +152,9 @@ export interface VersionCheckResponse {
   checked_at: number;
 }
 
-export async function fetchVersionCheck(): Promise<VersionCheckResponse> {
-  return apiRequest<VersionCheckResponse>("/api/v1/version/check");
+/** force=true：手动刷新，跳过服务端缓存直接查询上游。 */
+export async function fetchVersionCheck(force = false): Promise<VersionCheckResponse> {
+  return apiRequest<VersionCheckResponse>(`/api/v1/version/check${force ? "?force=1" : ""}`);
 }
 
 // ---- 系统资源与传输监控 ----

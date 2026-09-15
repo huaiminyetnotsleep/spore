@@ -4,7 +4,7 @@
  * 服务版本支持手动检查更新（点击刷新按钮查询上游最新发布，落后时给出
  * 升级提示图标）。用户计数与频道加入快照已迁至 /stats 的「全时段快照」区。
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button, Card, Descriptions, Space, Spin, Tag, Typography } from "antd";
 import { ArrowUpOutlined, ReloadOutlined } from "@ant-design/icons";
 import { lazy, Suspense, type ReactNode } from "react";
@@ -129,13 +129,14 @@ export function OverviewPage() {
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
   });
-  // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞），
-  // 管理员仍可随时点刷新按钮重查
+  // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞）；
+  // 管理员点刷新按钮时强制绕过缓存重查（点了就要最新结果）
   const versionCheck = useQuery({
     queryKey: ["version-check"],
-    queryFn: fetchVersionCheck,
+    queryFn: () => fetchVersionCheck(false),
     retry: false,
   });
+  const forceCheck = useMutation({ mutationFn: () => fetchVersionCheck(true) });
 
   if (isPending) {
     return (
@@ -223,17 +224,17 @@ export function OverviewPage() {
                 size="small"
                 type="text"
                 aria-label="检查更新"
-                title="检查更新"
+                title="检查更新（跳过缓存）"
                 icon={<ReloadOutlined />}
-                loading={versionCheck.fetchStatus === "fetching"}
-                onClick={() => void versionCheck.refetch()}
+                loading={forceCheck.isPending}
+                onClick={() => forceCheck.mutate()}
               />
-              {/* 未点击过检查更新时 data 与 error 均为空，提示组件渲染 null */}
+              {/* 手动刷新结果优先于进入页面的自动检查 */}
               <VersionCheckHint
-                status={versionCheck.data?.status}
-                latestVersion={versionCheck.data?.latest_version}
-                releaseUrl={versionCheck.data?.release_url}
-                error={versionCheck.isError ? versionCheck.error.message : null}
+                status={forceCheck.data?.status ?? versionCheck.data?.status}
+                latestVersion={forceCheck.data?.latest_version ?? versionCheck.data?.latest_version}
+                releaseUrl={forceCheck.data?.release_url ?? versionCheck.data?.release_url}
+                error={forceCheck.error?.message ?? versionCheck.error?.message ?? null}
               />
             </Space>
           </Descriptions.Item>

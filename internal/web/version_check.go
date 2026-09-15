@@ -31,7 +31,9 @@ type ReleaseInfo struct {
 // ReleaseChecker 查询上游最新发布版本（总览页"检查更新"的数据源）。
 // 实现应自带缓存与超时，不要求调用方控制频度。
 type ReleaseChecker interface {
-	LatestRelease(ctx context.Context) ReleaseInfo
+	// LatestRelease 返回上游最新发布；force 为 true 时跳过缓存直接查询
+	// 上游（总览页手动刷新，管理员预期"点了就要最新结果"）。
+	LatestRelease(ctx context.Context, force bool) ReleaseInfo
 }
 
 // NewGitHubReleaseChecker 创建查询本项目上游仓库最新 Release 的检查器
@@ -59,15 +61,18 @@ func newGitHubReleaseChecker(apiURL string, client *http.Client, ttl time.Durati
 	return &GitHubReleaseChecker{apiURL: apiURL, client: client, ttl: ttl, now: now}
 }
 
-// LatestRelease 返回上游最新发布；Version 为空串表示查询失败。
-func (g *GitHubReleaseChecker) LatestRelease(ctx context.Context) ReleaseInfo {
-	g.mu.Lock()
-	if g.cached.Version != "" && g.now().Sub(g.cached.CheckedAt) < g.ttl {
-		cached := g.cached
+// LatestRelease 返回上游最新发布；Version 为空串表示查询失败。缺省命中
+// TTL 缓存；force=true 跳过缓存读（结果成功时仍回写缓存，惠及后续自动检查）。
+func (g *GitHubReleaseChecker) LatestRelease(ctx context.Context, force bool) ReleaseInfo {
+	if !force {
+		g.mu.Lock()
+		if g.cached.Version != "" && g.now().Sub(g.cached.CheckedAt) < g.ttl {
+			cached := g.cached
+			g.mu.Unlock()
+			return cached
+		}
 		g.mu.Unlock()
-		return cached
 	}
-	g.mu.Unlock()
 
 	info := g.fetch(ctx)
 	g.mu.Lock()

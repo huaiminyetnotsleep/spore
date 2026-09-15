@@ -26,7 +26,9 @@ func (s *Server) handleAPIVersionCheck(w http.ResponseWriter, r *http.Request, _
 		writeAPIError(w, http.StatusServiceUnavailable, apiCodeUnavailable, apiUserMessage(apiCodeUnavailable))
 		return
 	}
-	info := s.release.LatestRelease(r.Context())
+	// force=1：手动刷新，跳过服务端缓存直接查询上游
+	force := r.URL.Query().Get("force") == "1"
+	info := s.release.LatestRelease(r.Context(), force)
 	if info.Version == "" {
 		s.log.Warn("查询上游最新发布失败", "op", op)
 		writeAPIError(w, http.StatusServiceUnavailable, apiCodeUnavailable, "查询最新版本失败，请检查服务器到 GitHub 的网络后重试。")

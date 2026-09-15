@@ -202,7 +202,7 @@ describe("总览页", () => {
     // 自动检查已给出升级提示
     const hint = await screen.findByTestId("version-upgrade-hint");
     expect(hint).toBeInTheDocument();
-    // 手动点击刷新按钮重查，结果保持
+    // 手动点击刷新按钮重查，请求带 force=1（跳过服务端缓存），结果保持
     fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
     const link = await screen.findByRole("link", { name: "可升级 v1.2.0" });
     expect(link).toHaveAttribute(
@@ -211,6 +211,7 @@ describe("总览页", () => {
     );
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("force=1"))).toBe(true);
   });
 
   it("点击检查更新后仍是最新时展示绿色标签", async () => {

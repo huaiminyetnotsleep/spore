@@ -194,7 +194,7 @@
 
 ### GET /api/v1/version/check
 
-检查更新（认证）。把当前服务版本与上游最新发布（GitHub Releases）比较，供总览页"服务版本"旁的刷新按钮与升级提示使用。无查询参数。上游查询在服务端有 1 小时缓存窗口，`checked_at` 为原始查询时间（可能早于本次请求）。
+检查更新（认证）。把当前服务版本与上游最新发布（GitHub Releases）比较，供总览页"服务版本"旁的刷新按钮与升级提示使用。查询参数 `force=1`（可选）：跳过服务端缓存直接查询上游（手动刷新按钮使用）；缺省命中缓存窗口（1 小时），`checked_at` 为原始查询时间（可能早于本次请求）。
 
 响应：
 
@@ -410,6 +410,8 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` / `user_id` | int64 | 记录与用户 ID |
+| `username` | string | 所属用户的用户名（可为空） |
+| `display_name` | string | 所属用户的显示名（可为空） |
 | `source_kind` | string | `public \| private` |
 | `channel_key` | string | 频道标识（私有频道为 `-100` 前缀内部 ID） |
 | `message_id` | int | 源消息 ID |
@@ -431,7 +433,8 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `channel_link_text` | string | 链接显示文本（频道标识#消息ID） |
-| `username` | string | 所属用户名（可为空） |
+| `username` | string | 所属用户的用户名（可为空） |
+| `display_name` | string | 所属用户的显示名（可为空） |
 | `error_text` | string | 错误码对应的受控中文文案 |
 | `attempt_max` | int | 尝试上限（累计含首次） |
 | `file_name` / `file_size` | string / int64 | 媒体文件名与大小 |
@@ -791,7 +794,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/channel-bindings
 
-频道绑定列表（认证）：全部用户的绑定记录，按绑定时间倒序，不分页（量级与用户同阶）。响应 `{"items":[apiChannelBindingRow]}`：
+频道绑定列表（认证）：全部用户的绑定记录，按绑定时间倒序，不分页（量级与用户同阶）。可选查询参数 `user_id`（正整数）按归属用户筛选。响应 `{"items":[apiChannelBindingRow]}`：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

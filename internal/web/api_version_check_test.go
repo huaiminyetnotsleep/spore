@@ -15,9 +15,15 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/config"
 )
 
-type fakeReleaseChecker struct{ info ReleaseInfo }
+type fakeReleaseChecker struct {
+	info  ReleaseInfo
+	force []bool // 记录每次调用收到的 force 标记
+}
 
-func (f fakeReleaseChecker) LatestRelease(context.Context) ReleaseInfo { return f.info }
+func (f *fakeReleaseChecker) LatestRelease(_ context.Context, force bool) ReleaseInfo {
+	f.force = append(f.force, force)
+	return f.info
+}
 
 // 三态比较：注入构建期版本 + 假检查器，校验 status/latest_version/release_url。
 func TestAPIVersionCheckStatuses(t *testing.T) {
@@ -36,13 +42,14 @@ func TestAPIVersionCheckStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeReleaseChecker{info: ReleaseInfo{
+				Version:   tc.latest,
+				URL:       "https://github.com/huaiminyetnotsleep/spore/releases/tag/" + tc.latest,
+				CheckedAt: time.UnixMilli(1700000000000),
+			}}
 			e := newTestEnvOpts(t, func(_ *config.Config, opt *Options) {
 				opt.Version = tc.current
-				opt.ReleaseCheck = fakeReleaseChecker{info: ReleaseInfo{
-					Version:   tc.latest,
-					URL:       "https://github.com/huaiminyetnotsleep/spore/releases/tag/" + tc.latest,
-					CheckedAt: time.UnixMilli(1700000000000),
-				}}
+				opt.ReleaseCheck = fake
 			})
 			j := e.login(t)
 			var view apiVersionCheckView
@@ -77,11 +84,32 @@ func bodyHeader(t *testing.T, e *testEnv, j *jar) string {
 	return resp.Header.Get("Cache-Control")
 }
 
+// force=1 透传给检查器跳过缓存（手动刷新语义）；缺省 false 走缓存。
+func TestAPIVersionCheckForceParam(t *testing.T) {
+	fake := &fakeReleaseChecker{info: ReleaseInfo{
+		Version:   "v1.2.0",
+		CheckedAt: time.UnixMilli(1700000000000),
+	}}
+	e := newTestEnvOpts(t, func(_ *config.Config, opt *Options) {
+		opt.Version = "v1.0.0"
+		opt.ReleaseCheck = fake
+	})
+	j := e.login(t)
+
+	var view apiVersionCheckView
+	getAPIJSON(t, e, j, "/api/v1/version/check", &view)
+	getAPIJSON(t, e, j, "/api/v1/version/check?force=1", &view)
+
+	if len(fake.force) != 2 || fake.force[0] || !fake.force[1] {
+		t.Fatalf("force 标记透传不符: %v", fake.force)
+	}
+}
+
 // 上游查询失败（Version 空串）→ 受控 503。
 func TestAPIVersionCheckUpstreamFailure(t *testing.T) {
 	e := newTestEnvOpts(t, func(_ *config.Config, opt *Options) {
 		opt.Version = "v1.0.0"
-		opt.ReleaseCheck = fakeReleaseChecker{}
+		opt.ReleaseCheck = &fakeReleaseChecker{}
 	})
 	j := e.login(t)
 	resp := e.do(j, http.MethodGet, "/api/v1/version/check", "", "")
@@ -130,13 +158,14 @@ func TestCompareSemver(t *testing.T) {
 	}
 }
 
-// GitHub 查询器：TTL 内复用缓存不打上游；过期后重新查询；失败不缓存。
+// GitHub 查询器：TTL 内复用缓存不打上游；force=true 跳过缓存直接查询并
+// 回写缓存（TTL 自新查询时间起算）；过期后重新查询；失败不缓存。
 func TestGitHubReleaseCheckerCache(t *testing.T) {
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
-		if hits == 3 {
-			// 第三轮模拟上游故障
+		if hits == 4 {
+			// 第四轮模拟上游故障
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
@@ -148,41 +177,56 @@ func TestGitHubReleaseCheckerCache(t *testing.T) {
 	current := now
 	checker := newGitHubReleaseChecker(srv.URL, srv.Client(), time.Hour, func() time.Time { return current })
 
-	// 第一次查询打上游
-	info := checker.LatestRelease(context.Background())
+	// 首次查询打上游
+	info := checker.LatestRelease(context.Background(), false)
 	if info.Version != "v1.2.0" || info.URL != "https://example.com/rel" {
 		t.Fatalf("首次查询结果不符: %+v", info)
 	}
 	// TTL 内命中缓存
 	current = now.Add(30 * time.Minute)
-	if info := checker.LatestRelease(context.Background()); info.Version != "v1.2.0" {
+	if info := checker.LatestRelease(context.Background(), false); info.Version != "v1.2.0" {
 		t.Fatalf("缓存命中结果不符: %+v", info)
 	}
 	if hits != 1 {
 		t.Fatalf("TTL 内不应再打上游，hits=%d", hits)
 	}
-	// 过期后重新查询
-	current = now.Add(2 * time.Hour)
-	if info := checker.LatestRelease(context.Background()); info.Version != "v1.2.0" {
-		t.Fatalf("过期后查询结果不符: %+v", info)
+	// force=true 跳过缓存：即便 TTL 内也直接查上游，成功后回写
+	if info := checker.LatestRelease(context.Background(), true); info.Version != "v1.2.0" {
+		t.Fatalf("强制刷新结果不符: %+v", info)
 	}
 	if hits != 2 {
+		t.Fatalf("force 应直接打上游，hits=%d", hits)
+	}
+	// 缓存自 force 刷新时间起算
+	current = now.Add(59 * time.Minute)
+	if info := checker.LatestRelease(context.Background(), false); info.Version != "v1.2.0" {
+		t.Fatalf("force 后 TTL 内应命中缓存: %+v", info)
+	}
+	if hits != 2 {
+		t.Fatalf("force 刷新后的 TTL 内不应打上游，hits=%d", hits)
+	}
+	// 过期后重新查询
+	current = now.Add(2 * time.Hour)
+	if info := checker.LatestRelease(context.Background(), false); info.Version != "v1.2.0" {
+		t.Fatalf("过期后查询结果不符: %+v", info)
+	}
+	if hits != 3 {
 		t.Fatalf("过期后应重新查询，hits=%d", hits)
 	}
 	// 上游故障返回空 Version 且不缓存（下次调用重试上游）
 	current = now.Add(3 * time.Hour)
-	if info := checker.LatestRelease(context.Background()); info.Version != "" {
+	if info := checker.LatestRelease(context.Background(), false); info.Version != "" {
 		t.Fatalf("上游故障应返回空 Version: %+v", info)
 	}
-	if hits != 3 {
+	if hits != 4 {
 		t.Fatalf("故障时应已打上游一次，hits=%d", hits)
 	}
 	// 故障未被缓存：下次调用重新打上游（此时上游已恢复）
 	current = now.Add(4 * time.Hour)
-	if info := checker.LatestRelease(context.Background()); info.Version != "v1.2.0" {
+	if info := checker.LatestRelease(context.Background(), false); info.Version != "v1.2.0" {
 		t.Fatalf("故障后重试结果不符: %+v", info)
 	}
-	if hits != 4 {
+	if hits != 5 {
 		t.Fatalf("故障后再次查询应重试上游，hits=%d", hits)
 	}
 }
