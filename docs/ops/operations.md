@@ -22,17 +22,23 @@
 安装（或升级）完成时，脚本会把自身注册为系统的 **`spore` 命令**（软链
 `/usr/local/bin/spore`）。之后在服务器任意目录：
 
-- 输入 `spore` —— 打开交互菜单：
+- 输入 `spore` —— 打开交互菜单（菜单项均为四字短语，与子命令一一对应）：
 
 ```text
 请选择操作：
-   1) 安装 Spore          8) 清理临时文件
-   2) 升级 Spore          9) 磁盘与数据检查
-   3) 升级后验证         10) 重启服务
-   4) 查看状态           11) 停止服务
-   5) 查看日志           12) 卸载 Spore
-   6) 查看访问密钥       13) 退出
+   1) 安装服务
+   2) 升级服务
+   3) 升级验证
+   4) 查看状态
+   5) 查看日志
+   6) 查看密钥
    7) 重设密钥
+   8) 清理临时
+   9) 磁盘检查
+  10) 重启服务
+  11) 停止服务
+  12) 卸载服务
+  13) 退出脚本
 ```
 
 - 或使用子命令直接调用（便于放进 cron 或工单流程；`uninstall` 仍会交互确认，
@@ -40,19 +46,19 @@
 
 | 子命令 | 作用 | 等价的原始操作 |
 | --- | --- | --- |
-| `spore install` | 首次安装：凭据、端口、数据目录、可选启动 | [deployment.md §4.2](../guide/deployment.md) |
-| `spore upgrade` | 升级：拉取新镜像并滚动更新（不改配置） | `docker compose pull && docker compose up -d` |
-| `spore verify` | 升级后验证：探针、容器健康、MTProto 通道 | §2.4 |
+| `spore install` | 安装服务：交互填写凭据、选择端口、授权数据目录 | [deployment.md §4.2](../guide/deployment.md) |
+| `spore upgrade` | 升级服务：拉取新镜像并滚动更新（不改配置） | `docker compose pull && docker compose up -d` |
+| `spore verify` | 升级验证：探针、容器健康、MTProto 通道 | §2.4 |
 | `spore status` | 查看状态：容器列表与 `/healthz` 探活 | `docker compose ps` |
 | `spore logs` | 查看日志：跟踪 bot 输出（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
-| `spore show-key` | 查看访问密钥：从日志检索首启密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
-| `spore reset-key` | 重置访问密钥（新密钥仅打印一次） | `docker compose exec bot spore admin reset-key` |
-| `spore clean-tmp` | 清理临时文件：停机清空 `data/tmp` | §6.5 |
-| `spore diskcheck` | 体检磁盘：容量、数据文件、`.env` 权限 | §3.1 |
-| `spore restart` | 重启应用（未运行则直接启动） | `docker compose restart bot` |
-| `spore stop` | 停止服务（保留容器与数据） | `docker compose stop` |
-| `spore uninstall` | 卸载 Spore（数据与配置按提示保留/删除） | §5 |
-| `spore exit` | 退出脚本（等价菜单 13） | — |
+| `spore show-key` | 查看密钥：从日志检索首启密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
+| `spore reset-key` | 重设密钥：生成新密钥（仅打印一次，旧的立即失效） | `docker compose exec bot spore admin reset-key` |
+| `spore clean-tmp` | 清理临时：停机清空 `data/tmp` | §6.5 |
+| `spore diskcheck` | 磁盘检查：容量、数据文件、`.env` 权限 | §3.1 |
+| `spore restart` | 重启服务：未运行时直接启动 | `docker compose restart bot` |
+| `spore stop` | 停止服务：保留容器与数据 | `docker compose stop` |
+| `spore uninstall` | 卸载服务：数据与配置按提示保留或删除 | §5 |
+| `spore exit` | 退出脚本：等价菜单 13 | — |
 
 `spore` 命令等价于部署目录内的 `install-spore.sh`（如 `~/spore/install-spore.sh status`）。
 软链被误删时恢复：`sudo ln -sf ~/spore/install-spore.sh /usr/local/bin/spore`。
