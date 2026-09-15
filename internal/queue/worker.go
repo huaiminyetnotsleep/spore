@@ -170,22 +170,30 @@ func Process(d Deps) Processor {
 			snap := d.Transfer.Snapshot()
 			jobDeps.Media.DownloadThreads = snap.DownloadThreads
 		}
-		// 云盘任务分流：/download 指令的媒体上传到网盘而不重发回 Telegram；
-		// 两条路径共享上面的开始埋点、进度注册与编辑器、取消标记与超时治理。
+		// 任务分流：云盘任务把媒体上传到网盘而不重发回 Telegram；仅缓存
+		// 补写任务直接向缓存频道写干净副本而不投递用户。多条路径共享上面
+		// 的开始埋点、进度注册与编辑器、取消标记与超时治理。
 		var cloudPaths []string
 		var cloudSkipped bool
 		var meta mediaMeta
 		var err error
-		if j.CloudDest != "" {
+		switch {
+		case j.DumpOnly:
+			meta, err = runDumpJob(ctx, jobDeps, j)
+		case j.CloudDest != "":
 			meta, cloudPaths, cloudSkipped, err = runCloudJob(ctx, jobDeps, j)
-		} else {
+		default:
 			meta, err = runJob(ctx, jobDeps, j)
 		}
 		// 云盘请求无论成败都保持 cloud 投递标记（失败行不回落 upload 占位，
-		// 列表筛选"网盘"语义完整；失败早于转换时元数据为零值）。
+		// 列表筛选"网盘"语义完整；失败早于转换时元数据为零值）；仅缓存
+		// 补写任务同款语义保持 dump 标记（列表筛选"缓存补写"口径完整）。
 		deliveryMode := meta.deliveryMode()
 		if j.CloudDest != "" {
 			deliveryMode = store.DeliveryModeCloud
+		}
+		if j.DumpOnly {
+			deliveryMode = store.DeliveryModeDump
 		}
 		if err != nil {
 			if IsRequestCancelled(ctx) {
@@ -222,10 +230,16 @@ func Process(d Deps) Processor {
 			// 进程正在退出（ctx 已取消）：在途任务的收尾由 drain 路径的
 			// WithoutCancel 窗口接管，这里不再用死 ctx 白打两次 Bot API
 			if ctx.Err() == nil {
-				if _, sendErr := d.Sender.SendMessage(ctx, j.ChatID, apperr.UserText(ae.Code)); sendErr != nil {
-					d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+				if j.DumpOnly {
+					// 仅缓存补写任务不打扰用户：失败只落库（Web 列表可见
+					// 原因与错误码），不发错误提示
+					delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+				} else {
+					if _, sendErr := d.Sender.SendMessage(ctx, j.ChatID, apperr.UserText(ae.Code)); sendErr != nil {
+						d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+					}
+					delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
 				}
-				delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
 			}
 		} else {
 			if finishErr := finishRequest(d, ctx, j, store.RequestResult{
@@ -241,12 +255,16 @@ func Process(d Deps) Processor {
 				return
 			}
 			delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
-			if j.CloudDest != "" {
+			switch {
+			case j.DumpOnly:
+				// 副本已由任务直接发送进缓存频道（发送即写入）：无用户消息
+				// 产生，缓存重写、频道副本与脚注、确认文案均不适用
+			case j.CloudDest != "":
 				// 云盘任务：发确认文本（含目的地、远端路径、原链接与网盘官网；
 				// 跳过重复上传时附说明）；无 TG 媒体消息产生，频道副本与脚注
 				// 天然不适用
 				sendCloudConfirm(ctx, d, j, cloudPaths, cloudSkipped)
-			} else {
+			default:
 				// 缓存频道干净副本：同链接后续提交直接复制的来源（尽力而为）
 				d.writeCleanDump(ctx, j, meta)
 				// 频道副本：任务整体成功后，把刚发给用户的消息复制到该用户
@@ -337,7 +355,7 @@ func (s *sentIDs) addAll(ids []int) {
 // 转换之后的失败（发送/下载）仍能带上媒体类型、大小与文件名。
 // 取数之前先尝试从缓存频道复用同链接的干净副本（copyMessages 直拷，见
 // reuse.go）：命中则跳过整个 fetch/下载/上传，未命中继续完整链路。
-func runJob(ctx context.Context, d Deps, j Job) (meta mediaMeta, err error) {
+func runJob(ctx context.Context, d Deps, j Job) (mediaMeta, error) {
 	if m, sent, ok := tryReuseFromDump(ctx, d, j); ok {
 		m.SentIDs = sent
 		return m, nil
@@ -350,7 +368,18 @@ func runJob(ctx context.Context, d Deps, j Job) (meta mediaMeta, err error) {
 	if err != nil {
 		return mediaMeta{}, err
 	}
+	// 频道脚注：与原消息链接同位织入
+	return sendConverted(ctx, d, j, j.ChatID, msgs, d.channelLinks(ctx, j))
+}
 
+// sendConverted 把取到的源消息转换并发送到 target 聊天，返回媒体诊断元数据
+// （SentIDs 是按发送顺序的已发送消息 ID）。普通投递 target 为用户私聊，
+// links 织频道脚注；仅缓存补写（dumpjob.go）target 为缓存频道，links 传
+// nil——caption 构造对 nil links 天然无脚注，副本与 writeCleanDump 的干净
+// 语义一致。转换后无可提取内容/含不支持类型返回明确错误。
+// meta 必须是命名返回值：defer 在 return 后回填 SentIDs（失败时保留部分
+// 已发送坐标，成功后供频道副本/缓存条目落库续用）。
+func sendConverted(ctx context.Context, d Deps, j Job, target int64, msgs []*tg.Message, links []message.ChannelLink) (meta mediaMeta, err error) {
 	items := message.Convert(msgs)
 	if len(items) == 0 {
 		return mediaMeta{}, apperr.New(apperr.CodeServiceMessage, "源消息无可提取内容")
@@ -359,7 +388,6 @@ func runJob(ctx context.Context, d Deps, j Job) (meta mediaMeta, err error) {
 	meta.Items = items
 	sent := &sentIDs{}
 	defer func() { meta.SentIDs = sent.items }()
-	links := d.channelLinks(ctx, j) // 频道脚注：与原消息链接同位织入
 	// 进度总量 = 全部媒体大小之和（相册为成员累加）；未注册 ID（无持久化
 	// 记录）经 Registry 的 no-op 语义自动跳过
 	d.Progress.AddTotal(j.RequestID, meta.FileSize)
@@ -369,14 +397,14 @@ func runJob(ctx context.Context, d Deps, j Job) (meta mediaMeta, err error) {
 	defer cancelSend()
 
 	if isAlbum(items) {
-		return meta, sendAlbumGroup(sendCtx, d, j, items, sourceURL, links, &meta.Track, sent)
+		return meta, sendAlbumGroup(sendCtx, d, j, target, items, sourceURL, links, &meta.Track, sent)
 	}
 
 	for _, it := range items {
 		switch {
 		case it.Media == nil:
 			// 文本消息（网页预览视为纯文本）
-			id, serr := d.Sender.SendMessage(sendCtx, j.ChatID, it.RenderHTMLWithSource(sourceURL, links))
+			id, serr := d.Sender.SendMessage(sendCtx, target, it.RenderHTMLWithSource(sourceURL, links))
 			if serr != nil {
 				return meta, serr
 			}
@@ -385,7 +413,7 @@ func runJob(ctx context.Context, d Deps, j Job) (meta mediaMeta, err error) {
 			return meta, apperr.New(apperr.CodeMediaUnsupported,
 				"该消息包含暂不支持的内容类型")
 		default:
-			if serr := sendMediaItem(sendCtx, d, j, it, sourceURL, links, &meta.Track, sent); serr != nil {
+			if serr := sendMediaItem(sendCtx, d, j, target, it, sourceURL, links, &meta.Track, sent); serr != nil {
 				return meta, serr
 			}
 		}
@@ -581,8 +609,10 @@ func Discard(d Deps) Processor {
 			}
 		}
 		d.Log.Warn("进程退出，丢弃排队任务", "job_id", j.ID, "user_id", j.UserID)
-		if _, err := d.Sender.SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
-			d.Log.Warn("丢弃通知发送失败", "job_id", j.ID, "error", err.Error())
+		if !j.DumpOnly { // 仅缓存补写任务全程不打扰用户（含退出丢弃）
+			if _, err := d.Sender.SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
+				d.Log.Warn("丢弃通知发送失败", "job_id", j.ID, "error", err.Error())
+			}
 		}
 		delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
 		discard := store.RequestResult{
@@ -610,7 +640,8 @@ func Discard(d Deps) Processor {
 // 解耦——若按成员数×下载线程放大 invoke 并发，会显著提高 FLOOD_WAIT 概率。
 const albumOpenConcurrency = 2
 
-// sendAlbumGroup 相册整组发送：
+// sendAlbumGroup 相册整组发送到 target 聊天（普通投递为用户私聊，仅缓存
+// 补写为缓存频道；links 为 nil 时成员 caption 无脚注）：
 // 发送前先按元数据预检能否整组（Sender.AlbumGroupable，与 SendAlbum 分流
 // 判定同源；全员 photo/video 且超限成员 ≤2000MB——含大视频的混合相册经
 // Bot 号 MTProto 整组直传统一成一组的相册），不可整组时直接走逐条路径，
@@ -625,11 +656,11 @@ const albumOpenConcurrency = 2
 // 全部被取消，上传读源时以 MEDIA_DOWNLOAD_FAILED(context canceled) 失败
 // （真机结论 2026-09-03）。openCtx 覆盖整组发送全程；任一成员失败时
 // 显式取消以停止其余在途下载（含分钟级 ToPath），函数返回时兜底取消。
-func sendAlbumGroup(ctx context.Context, d Deps, j Job, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
+func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	for _, it := range items {
 		if !d.Sender.AlbumGroupable(*it.Media) {
 			d.Log.Info("相册含不可整组项，直接逐条发送", "job_id", j.ID, "items", len(items))
-			return sendItemsIndividually(ctx, d, j, items, sourceURL, links, track, sent)
+			return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
 		}
 	}
 
@@ -683,7 +714,7 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, items []message.Item, so
 		return err
 	}
 	// 全员打开成功：openCtx 仍存活，SendAlbum 消费期间后台下载持续推进
-	ids, err := d.Sender.SendAlbum(ctx, j.ChatID, entries)
+	ids, err := d.Sender.SendAlbum(ctx, target, entries)
 	if err != nil {
 		return err
 	}
@@ -692,9 +723,9 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, items []message.Item, so
 	return nil
 }
 
-// sendItemsIndividually 逐条发送（各自打开句柄、过期刷新重试）。
-// 与 runJob 主循环一致地拦截不支持类型，避免无 Location 的媒体进入下载。
-func sendItemsIndividually(ctx context.Context, d Deps, j Job, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
+// sendItemsIndividually 逐条发送到 target 聊天（各自打开句柄、过期刷新重试）。
+// 与 sendConverted 主循环一致地拦截不支持类型，避免无 Location 的媒体进入下载。
+func sendItemsIndividually(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	for i, it := range items {
 		if it.Media != nil && it.Media.Kind == message.KindUnsupported {
 			return apperr.New(apperr.CodeMediaUnsupported,
@@ -704,20 +735,20 @@ func sendItemsIndividually(ctx context.Context, d Deps, j Job, items []message.I
 		if i == 0 {
 			itemSourceURL = sourceURL
 		}
-		if err := sendMediaItem(ctx, d, j, it, itemSourceURL, links, track, sent); err != nil {
+		if err := sendMediaItem(ctx, d, j, target, it, itemSourceURL, links, track, sent); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// sendMediaItem 发送单个媒体：打开下载句柄 → 经 Sender 发送（路由层按
-// 大小选择 Bot API 上传或 Bot 号 MTProto 大文件直传）→ 清理；下载或发送
-// 因 file reference 过期失败时，刷新源消息后重试一次（Location 等元数据
-// 同步更新）。大小上限预检在 media.Open 内执行。
+// sendMediaItem 发送单个媒体到 target 聊天：打开下载句柄 → 经 Sender 发送
+// （路由层按大小选择 Bot API 上传或 Bot 号 MTProto 大文件直传）→ 清理；
+// 下载或发送因 file reference 过期失败时，刷新源消息后重试一次（Location
+// 等元数据同步更新）。大小上限预检在 media.Open 内执行。
 // 投递观测的上传尝试与送达在 openAndSend 内计入。
-func sendMediaItem(ctx context.Context, d Deps, j Job, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
-	err := openAndSend(ctx, d, j, it, sourceURL, links, track, sent)
+func sendMediaItem(ctx context.Context, d Deps, j Job, target int64, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
+	err := openAndSend(ctx, d, j, target, it, sourceURL, links, track, sent)
 	if err == nil || !mtproto.IsFileReferenceExpired(err) {
 		return err
 	}
@@ -726,13 +757,13 @@ func sendMediaItem(ctx context.Context, d Deps, j Job, it message.Item, sourceUR
 		return err // 以原始错误为准
 	}
 	it.Media = &fresh
-	return openAndSend(ctx, d, j, it, sourceURL, links, track, sent)
+	return openAndSend(ctx, d, j, target, it, sourceURL, links, track, sent)
 }
 
-// openAndSend 打开句柄 → 发送 → 清理（无论成败）。
+// openAndSend 打开句柄 → 发送到 target → 清理（无论成败）。
 // 视频媒体在发送前就地解析缩略图（源缩略图优先、ffmpeg 抽帧兜底，见
 // thumb.go）；上传路径的尝试与送达在此计入投递观测。
-func openAndSend(ctx context.Context, d Deps, j Job, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
+func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	h, err := media.Open(ctx, d.Fetcher.API(), *it.Media, tempKey(j, it), d.Media, d.Log, downloadReporter(d, j))
 	if err != nil {
 		return err
@@ -752,7 +783,7 @@ func openAndSend(ctx context.Context, d Deps, j Job, it message.Item, sourceURL 
 		// 脚注与原消息链接同位：只出现在组首/带来源的条目上
 		caption = caption.WithChannels(links)
 	}
-	id, err := d.Sender.SendMedia(ctx, j.ChatID, m, caption, uploadReader(d, j, src))
+	id, err := d.Sender.SendMedia(ctx, target, m, caption, uploadReader(d, j, src))
 	if err != nil {
 		return err
 	}

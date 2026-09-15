@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchRequestDetail, type RequestDetail } from "../../api/admin";
+import { fetchRequestDetail, fetchSettings, type RequestDetail } from "../../api/admin";
+import { dumpBackfillRequest } from "../../api/mutations";
 import { RequestDetailPage } from "./RequestDetailPage";
 
 vi.mock("../../api/admin", async () => {
@@ -12,10 +13,21 @@ vi.mock("../../api/admin", async () => {
   return {
     ...actual,
     fetchRequestDetail: vi.fn(),
+    fetchSettings: vi.fn(),
+  };
+});
+
+vi.mock("../../api/mutations", async () => {
+  const actual = await vi.importActual<typeof import("../../api/mutations")>("../../api/mutations");
+  return {
+    ...actual,
+    dumpBackfillRequest: vi.fn(),
   };
 });
 
 const fetchRequestDetailMock = vi.mocked(fetchRequestDetail);
+const fetchSettingsMock = vi.mocked(fetchSettings);
+const dumpBackfillRequestMock = vi.mocked(dumpBackfillRequest);
 
 function detail(overrides: Partial<RequestDetail> = {}): RequestDetail {
   return {
@@ -68,6 +80,10 @@ function renderPage() {
 describe("请求记录详情页", () => {
   beforeEach(() => {
     fetchRequestDetailMock.mockReset();
+    fetchSettingsMock
+      .mockReset()
+      .mockResolvedValue({ dump_channel_id: -1001234567890 } as never);
+    dumpBackfillRequestMock.mockReset();
   });
 
   it("展示相册成员类型和独立的源媒体 DC", async () => {
@@ -140,5 +156,39 @@ describe("请求记录详情页", () => {
     expect(await screen.findByText("相册内容")).toBeInTheDocument();
     expect(screen.queryByText(/云盘上传/)).not.toBeInTheDocument();
     expect(screen.queryByText(/补存自/)).not.toBeInTheDocument();
+  });
+
+  it("终态记录展示转存入口：确认后提交并提示成功", async () => {
+    dumpBackfillRequestMock.mockResolvedValue({ ok: true });
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "failed" }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "转存缓存频道" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(dumpBackfillRequestMock).toHaveBeenCalledWith(1));
+    expect(
+      await screen.findByText(/已创建缓存补写任务，完成后副本写入缓存频道/),
+    ).toBeInTheDocument();
+  });
+
+  it("缓存频道未配置时转存入口禁用", async () => {
+    fetchSettingsMock.mockResolvedValue({ dump_channel_id: 0 } as never);
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "succeeded" }));
+
+    renderPage();
+
+    expect(await screen.findByText(/缓存频道未配置，可先在「运行设置」页配置缓存频道/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "转存缓存频道" })).toBeDisabled();
+  });
+
+  it("处理中记录不展示转存入口", async () => {
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "processing" }));
+
+    renderPage();
+
+    expect(await screen.findByText("该请求仍在执行，可以取消")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "转存缓存频道" })).not.toBeInTheDocument();
   });
 });

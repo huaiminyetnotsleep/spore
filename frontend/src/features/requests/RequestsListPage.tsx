@@ -4,6 +4,8 @@
  * 筛选字段与 SSR 页面一一对应；来源链接跳详情页（message_url 在详情展示）。
  * 云盘补存：终态非纯文本行可单条「存到网盘」，批量模式多选后批量补存，
  * 目的地弹层默认选中云盘配置的默认目的地。
+ * 缓存补写（转存缓存频道）：终态行（含纯文本）批量写入缓存频道干净副本，
+ * 全程不向用户发送消息；需在系统设置中配置缓存频道。
  */
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -25,7 +27,13 @@ import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { buildExportURL, fetchCloudDrive, fetchRequests, type RequestRow } from "../../api/admin";
+import {
+  buildExportURL,
+  fetchCloudDrive,
+  fetchRequests,
+  fetchSettings,
+  type RequestRow,
+} from "../../api/admin";
 import {
   cancelRequest,
   cancelRequests,
@@ -33,12 +41,16 @@ import {
   cloudArchiveRequest,
   deleteRequest,
   deleteRequests,
+  dumpBackfillRequest,
+  dumpBackfillRequests,
   type CancelManyResult,
   type CloudArchiveBatchResult,
   type DeleteManyResult,
+  type DumpBackfillBatchResult,
 } from "../../api/mutations";
 import {
   CLOUD_ARCHIVE_SKIP_LABELS,
+  DUMP_BACKFILL_SKIP_LABELS,
   DELIVERY_MODE_LABELS,
   DELIVERY_MODE_TAG_COLORS,
   REQUEST_STATUS_LABELS,
@@ -64,8 +76,23 @@ const DELIVERY_MODE_OPTIONS = Object.entries(DELIVERY_MODE_LABELS).map(([value, 
   label,
 }));
 
-/** 批量操作模式：取消（活动行）/ 删除（终态行）/ 存到网盘（终态非纯文本行）。 */
-type BatchMode = "cancel" | "delete" | "archive";
+/** 批量操作模式：取消（活动行）/ 删除（终态行）/ 存到网盘（终态非纯文本行）/
+ * 转存缓存频道（终态行，含纯文本）。 */
+type BatchMode = "cancel" | "delete" | "archive" | "dump";
+
+/** 批量操作逐条结果摘要的展示状态：两类批量动作（网盘补存/缓存补写）共用
+ * 同一结果弹层，标题、逐条结果与跳过原因标签表随动作携带。 */
+interface BatchSummaryState {
+  title: string;
+  createdNoun: string;
+  skipLabels: Record<string, string>;
+  results: {
+    request_id: number;
+    created_request_id?: number;
+    skip_reason?: string;
+    queue_full?: boolean;
+  }[];
+}
 
 const TERMINAL_STATUSES = ["succeeded", "failed", "cancelled"];
 
@@ -153,11 +180,14 @@ export function RequestsListPage() {
 
   // 云盘配置只用于补存入口的可用性判断与目的地选择；查询失败不阻塞列表。
   const cloudDrive = useQuery({ queryKey: ["cloud-drive"], queryFn: fetchCloudDrive });
+  // 缓存频道配置只用于缓存补写入口的可用性判断；查询失败不阻塞列表。
+  const settings = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
+  const dumpChannelReady = (settings.data?.dump_channel_id ?? 0) !== 0;
 
   // 补存目的地弹层（单条/批量共用）：目标 ID 集合 + 当前选中的目的地。
   const [archiveTarget, setArchiveTarget] = useState<number[] | null>(null);
   const [archiveDestination, setArchiveDestination] = useState("");
-  const [batchSummary, setBatchSummary] = useState<CloudArchiveBatchResult | null>(null);
+  const [batchSummary, setBatchSummary] = useState<BatchSummaryState | null>(null);
 
   const destinationOptions = (cloudDrive.data?.destinations ?? [])
     .filter((dest) => dest.enabled)
@@ -190,6 +220,18 @@ export function RequestsListPage() {
     return undefined;
   };
 
+  /** 行级「转存缓存频道」可用性：终态即可（纯文本同样可写副本），另要求
+   * 缓存频道已配置。返回 undefined 表示可用，否则为禁用原因（Tooltip）。 */
+  const dumpDisabledReason = (row: RequestRow): string | undefined => {
+    if (!TERMINAL_STATUSES.includes(row.status)) {
+      return "仅已结束（成功/失败/取消）的请求可转存缓存频道";
+    }
+    if (settings.data && !dumpChannelReady) {
+      return "缓存频道未配置，可在「运行设置」页配置";
+    }
+    return undefined;
+  };
+
   const invalidateRequestQueries = [["requests"], ["channels"], ["users"], ["overview"]];
   const remove = useAdminAction({
     action: (id: number) => deleteRequest(id),
@@ -218,11 +260,39 @@ export function RequestsListPage() {
       onDone: (data) => {
         setSelectedIDs([]);
         if (data) {
-          setBatchSummary(data);
+          setBatchSummary({
+            title: "批量存到网盘结果",
+            createdNoun: "云盘补存任务",
+            skipLabels: CLOUD_ARCHIVE_SKIP_LABELS,
+            results: data.results,
+          });
         }
       },
     },
   );
+  // 缓存补写：管理端动作绕过用户配额与去重窗口；已有副本/未配置等服务端
+  // 校验（409/503 受控文案），列表行数据不含副本信息，前端不禁用该情形。
+  const dumpBackfill = useAdminAction({
+    action: (id: number) => dumpBackfillRequest(id),
+    invalidate: invalidateRequestQueries,
+    successText: "已创建缓存补写任务，新请求行将以「缓存补写」投递方式出现在列表中。",
+  });
+  const dumpBackfillMany = useAdminAction<DumpBackfillBatchResult, number[]>({
+    action: (ids) => dumpBackfillRequests(ids),
+    invalidate: invalidateRequestQueries,
+    successText: "批量转存缓存频道已提交。",
+    onDone: (data) => {
+      setSelectedIDs([]);
+      if (data) {
+        setBatchSummary({
+          title: "批量转存缓存频道结果",
+          createdNoun: "缓存补写任务",
+          skipLabels: DUMP_BACKFILL_SKIP_LABELS,
+          results: data.results,
+        });
+      }
+    },
+  });
   const cancelMany = useAdminAction<CancelManyResult, number[]>({
     action: (ids) => cancelRequests(ids),
     invalidate: invalidateRequestQueries,
@@ -376,10 +446,11 @@ export function RequestsListPage() {
       title: "操作",
       key: "actions",
       fixed: "right",
-      width: 180,
+      width: 240,
       render: (_, row) => {
         const canCancel = row.status === "queued" || row.status === "processing";
         const archiveReason = archiveDisabledReason(row);
+        const dumpReason = dumpDisabledReason(row);
         const actionsPending =
           cancel.pending || remove.pending || cancelMany.pending || removeMany.pending;
         return (
@@ -394,6 +465,25 @@ export function RequestsListPage() {
                   onClick={() => openArchiveModal([row.id])}
                 >
                   存到网盘
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={dumpReason}>
+              <span>
+                <Button
+                  size="small"
+                  loading={dumpBackfill.pending}
+                  disabled={dumpReason !== undefined || actionsPending}
+                  onClick={() =>
+                    confirm(
+                      `确定将记录 #${row.id} 转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息。`,
+                      () => {
+                        void dumpBackfill.run(row.id);
+                      },
+                    )
+                  }
+                >
+                  转存
                 </Button>
               </span>
             </Tooltip>
@@ -511,6 +601,7 @@ export function RequestsListPage() {
               { label: "取消请求", value: "cancel" },
               { label: "删除记录", value: "delete" },
               { label: "存到网盘", value: "archive" },
+              { label: "转存缓存频道", value: "dump" },
             ]}
             onChange={(value) => {
               setBatchMode(value as BatchMode);
@@ -550,6 +641,21 @@ export function RequestsListPage() {
               >
                 批量删除（{selectedIDs.length}）
               </Button>
+            ) : batchMode === "dump" ? (
+              <Button
+                loading={dumpBackfillMany.pending}
+                disabled={dumpBackfill.pending || cancel.pending || remove.pending}
+                onClick={() =>
+                  confirm(
+                    `确定对已选的 ${selectedIDs.length} 条记录转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息；已有副本的记录会自动跳过。`,
+                    () => {
+                      void dumpBackfillMany.run(selectedIDs);
+                    },
+                  )
+                }
+              >
+                批量转存（{selectedIDs.length}）
+              </Button>
             ) : (
               <Button
                 loading={archiveMany.pending}
@@ -565,7 +671,11 @@ export function RequestsListPage() {
               ? "仅可选择当前页仍在排队或处理中的记录。"
               : batchMode === "delete"
                 ? "仅可选择当前页已成功、失败或取消的终态记录。"
-                : "仅可选择当前页已结束且非纯文本的记录；云盘下载需在「云盘下载」页开启。"}
+                : batchMode === "dump"
+                  ? dumpChannelReady
+                    ? "仅可选择当前页已结束的记录；副本写入缓存频道，不向用户发送消息。"
+                    : "缓存频道未配置，可在「运行设置」页配置后使用。"
+                  : "仅可选择当前页已结束且非纯文本的记录；云盘下载需在「云盘下载」页开启。"}
           </Text>
         </Space>
         {isError ? (
@@ -584,6 +694,11 @@ export function RequestsListPage() {
                 }
                 if (batchMode === "delete") {
                   return { disabled: !terminal };
+                }
+                if (batchMode === "dump") {
+                  // 转存缓存频道：终态即可（纯文本同样可写副本）；缓存频道
+                  // 未配置时禁用（在途补写由服务端复核）。
+                  return { disabled: dumpDisabledReason(row) !== undefined };
                 }
                 // 存到网盘：终态 ∧ 非纯文本 ∧ 云盘已开启（在途补存由服务端复核）。
                 return { disabled: archiveDisabledReason(row) !== undefined };
@@ -650,10 +765,10 @@ export function RequestsListPage() {
         </Space>
       </Modal>
 
-      {/* 批量补存逐条结果摘要：成功创建数 + 跳过原因（中文映射）。 */}
+      {/* 批量操作逐条结果摘要（网盘补存/缓存补写共用）：成功创建数 + 跳过原因。 */}
       <Modal
         open={batchSummary !== null}
-        title="批量存到网盘结果"
+        title={batchSummary?.title ?? ""}
         footer={
           <Button onClick={() => setBatchSummary(null)}>关闭</Button>
         }
@@ -666,7 +781,7 @@ export function RequestsListPage() {
                 batchSummary.results.filter(
                   (row) => row.created_request_id && !row.queue_full,
                 ).length
-              } 条云盘补存任务；队列满 ${
+              } 条${batchSummary.createdNoun}；队列满 ${
                 batchSummary.results.filter((row) => row.queue_full).length
               } 条；跳过 ${
                 batchSummary.results.filter((row) => row.skip_reason).length
@@ -681,7 +796,7 @@ export function RequestsListPage() {
                       {row.queue_full
                         ? `#${row.request_id}：已创建任务但队列已满（QUEUE_FULL），可稍后重试`
                         : `#${row.request_id}：${labelOf(
-                            CLOUD_ARCHIVE_SKIP_LABELS,
+                            batchSummary.skipLabels,
                             row.skip_reason ?? "",
                           )}`}
                     </li>
@@ -689,7 +804,7 @@ export function RequestsListPage() {
               </ul>
             ) : null}
             <Text type="secondary">
-              队列已满的行会标记 QUEUE_FULL 失败，可经现有重试入口重试；源消息已被删除时对应新行会以明确错误失败。
+              队列已满的行会标记 QUEUE_FULL 失败，可经现有重试入口重试；源消息已被删除或缓存频道已改配置时，对应新行会以明确错误失败。
             </Text>
           </Space>
         ) : null}

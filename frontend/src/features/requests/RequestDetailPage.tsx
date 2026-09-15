@@ -12,8 +12,8 @@ import { Alert, Button, Descriptions, Space, Table, Tag, Typography } from "antd
 import type { ColumnsType } from "antd/es/table";
 import { Link, useParams } from "react-router-dom";
 
-import { fetchRequestDetail, type CloudUploadRow } from "../../api/admin";
-import { cancelRequest, retryRequest } from "../../api/mutations";
+import { fetchRequestDetail, fetchSettings, type CloudUploadRow } from "../../api/admin";
+import { cancelRequest, dumpBackfillRequest, retryRequest } from "../../api/mutations";
 import {
   CLOUD_UPLOAD_STATUS_LABELS,
   CLOUD_UPLOAD_STATUS_TAG_COLORS,
@@ -120,6 +120,20 @@ export function RequestDetailPage() {
     invalidate: [["requests"], ["channels"], ["overview"]],
     successText: "请求已取消。",
   });
+  // 缓存补写：终态记录可转存缓存频道（已有副本/未配置由服务端复核，
+  // 拒绝时展示服务端受控文案，不误报成功）。
+  const dumpBackfill = useAdminAction({
+    action: (targetId: number) => dumpBackfillRequest(targetId),
+    invalidate: [["requests"], ["overview"]],
+    successText: "已创建缓存补写任务，完成后副本写入缓存频道（不打扰用户）。",
+  });
+  // 缓存频道配置只用于入口可用性判断；查询失败不阻塞详情展示。
+  const settings = useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+    staleTime: 30_000,
+  });
+  const dumpChannelReady = (settings.data?.dump_channel_id ?? 0) !== 0;
 
   // 可重试入口与 SSR 一致：仅 failed 且未达尝试上限（用户启用由服务端复核，
   // 拒绝时展示服务端受控文案，不误报成功）。
@@ -130,6 +144,9 @@ export function RequestDetailPage() {
   const canCancel =
     detail !== undefined &&
     (detail.status === "queued" || detail.status === "processing");
+  const canDumpBackfill =
+    detail !== undefined &&
+    ["succeeded", "failed", "cancelled"].includes(detail.status);
 
   return (
     <Space direction="vertical" size="middle" className="field-width-full">
@@ -268,6 +285,37 @@ export function RequestDetailPage() {
                       }
                     >
                       取消请求
+                    </Button>
+                  </Space>
+                }
+              />
+            ) : null}
+            {canDumpBackfill ? (
+              <Alert
+                type="info"
+                showIcon
+                message="可将该记录转存缓存频道"
+                description={
+                  <Space direction="vertical">
+                    <Text type="secondary">
+                      {dumpChannelReady
+                        ? "按原链接重新获取源消息并写入缓存频道干净副本（不带用户脚注），全程不向用户发送任何消息；缓存频道已有该链接副本时会被跳过。"
+                        : "缓存频道未配置，可先在「运行设置」页配置缓存频道。"}
+                    </Text>
+                    <Button
+                      size="small"
+                      loading={dumpBackfill.pending}
+                      disabled={dumpBackfill.pending || !dumpChannelReady}
+                      onClick={() =>
+                        confirm(
+                          "确定转存缓存频道？将重新获取源消息，不向用户发送任何消息。",
+                          () => {
+                            void dumpBackfill.run(requestIdNum);
+                          },
+                        )
+                      }
+                    >
+                      转存缓存频道
                     </Button>
                   </Space>
                 }

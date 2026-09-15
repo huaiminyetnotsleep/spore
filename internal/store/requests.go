@@ -36,6 +36,7 @@ const (
 	DeliveryModeText      = "text"      // 纯文本请求，无媒体，标记不适用
 	DeliveryModeCloud     = "cloud"     // 云盘下载：媒体上传到管理员配置的网盘
 	DeliveryModeReuse     = "reuse"     // 重复链接复用：经 copyMessages 复制历史已投递消息送达
+	DeliveryModeDump      = "dump"      // 缓存补写：仅向缓存频道写干净副本，不投递给用户
 )
 
 // defaultRequestLimit 是未指定 Limit 时的分页大小。

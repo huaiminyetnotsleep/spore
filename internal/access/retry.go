@@ -71,9 +71,12 @@ func (s *Service) Retry(ctx context.Context, actor string, requestID int64) erro
 	// 私聊回传目标即用户本人（Bot 私聊 chat ID 与 User ID 相同），
 	// 原状态提示消息已随上次执行删除，无需再传。
 	// 云盘请求的目的地名称在 requests 行上，重试时据此恢复任务路由
-	// （裸链接行为零值不变）。
+	// （裸链接行为零值不变）；缓存补写行（delivery_mode=dump，如队列满
+	// 标记 QUEUE_FULL 后的重试）必须保留 DumpOnly 路由，否则会误走普通
+	// 投递路径向用户重发消息。
 	job := queue.NewJob(req.UserID, req.UserID, ref, 0, requestID)
 	job.CloudDest = req.CloudDestination
+	job.DumpOnly = req.DeliveryMode == store.DeliveryModeDump
 	if err := s.queue.Enqueue(job); err != nil {
 		// 队列满竞态：与 Submit 同款收尾，行标 failed(QUEUE_FULL)，
 		// 本次 attempt 已递增（额度口径不受影响——重试本就不扣减）

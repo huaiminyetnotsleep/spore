@@ -23,6 +23,10 @@ type Job struct {
 	// 的网盘目的地而不重发回 Telegram。空值 = 现有 TG 投递路径（零值兼容，
 	// 存量路径行为不变）。
 	CloudDest string
+	// DumpOnly 表示仅缓存补写任务（管理端"转存缓存频道"）：fetch 源消息后
+	// 直接向缓存频道发送干净副本并落 dump_entries，全程不向用户发送任何
+	// 消息。false = 现有路径（零值兼容）。
+	DumpOnly bool
 }
 
 // shutdownWindow 是进程退出后收尾动作（用户通知、状态删除、终态落库）

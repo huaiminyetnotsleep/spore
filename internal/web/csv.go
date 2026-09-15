@@ -198,6 +198,8 @@ func deliveryModeText(mode string) string {
 		return "复用"
 	case store.DeliveryModeCloud:
 		return "网盘"
+	case store.DeliveryModeDump:
+		return "缓存补写"
 	default:
 		return mode
 	}

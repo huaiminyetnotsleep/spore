@@ -32,7 +32,8 @@ export const EVENT_STATUS_LABELS: Record<string, string> = {
  * 投递方式中文标签（requests.delivery_mode，与 CSV deliveryModeText 同源语义）：
  * reference = 全部媒体经引用送达；upload = 全部经下载上传；mixed = 两者兼有；
  * text = 纯文本请求，无媒体；reuse = 重复链接复用（copyMessages 直拷历史
- * 已投递消息）；cloud = 云盘下载（/download 指令或管理端补存创建）。
+ * 已投递消息）；cloud = 云盘下载（/download 指令或管理端补存创建）；
+ * dump = 缓存补写（管理端转存缓存频道，不向用户投递）。
  */
 export const DELIVERY_MODE_LABELS: Record<string, string> = {
   reference: "引用",
@@ -41,6 +42,7 @@ export const DELIVERY_MODE_LABELS: Record<string, string> = {
   text: "文本",
   reuse: "复用",
   cloud: "网盘",
+  dump: "缓存补写",
 };
 
 /**
@@ -95,6 +97,7 @@ export const DELIVERY_MODE_TAG_COLORS: Record<string, string> = {
   text: "default",
   reuse: "cyan",
   cloud: "purple",
+  dump: "geekblue",
 };
 
 /** 云盘上传记录状态中文标签（cloud_uploads.status，后端只下发 raw key）。 */
@@ -119,6 +122,14 @@ export const CLOUD_ARCHIVE_SKIP_LABELS: Record<string, string> = {
   cloud_disabled: "云盘下载功能未开启",
   rclone_unavailable: "rclone 不可用",
   already_archiving: "已有在途补存任务",
+};
+
+/** 缓存补写跳过原因中文标签（与服务端 skip_reason 枚举一一对应）。 */
+export const DUMP_BACKFILL_SKIP_LABELS: Record<string, string> = {
+  not_found: "请求不存在",
+  not_finished: "请求未结束（排队或处理中）",
+  already_dumped: "缓存频道已有该链接副本",
+  dump_disabled: "缓存频道未配置",
 };
 
 /** 从标签表取中文标签；未知原样返回（与 SSR statusText 回退一致）。 */

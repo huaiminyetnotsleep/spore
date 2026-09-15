@@ -611,3 +611,33 @@ export const cloudArchiveBatch = (
     request_ids: ids,
     ...(destination ? { destination } : {}),
   });
+
+/** 缓存补写资格不满足的跳过原因（与服务端 skip_reason 枚举一一对应）。 */
+export type DumpBackfillSkipReason =
+  | "not_found"
+  | "not_finished"
+  | "already_dumped"
+  | "dump_disabled";
+
+/** 缓存补写逐条摘要：字段语义与云盘补存一致（行已建但未入队时 queue_full=true）。 */
+export interface DumpBackfillBatchResultRow {
+  request_id: number;
+  created_request_id?: number;
+  skip_reason?: DumpBackfillSkipReason;
+  queue_full?: boolean;
+}
+
+export interface DumpBackfillBatchResult extends WriteOK {
+  results: DumpBackfillBatchResultRow[];
+}
+
+/** 单条缓存补写：对终态请求按原链接重取源消息，把干净副本直接写入缓存频道
+ * （不向用户发送任何消息）。 */
+export const dumpBackfillRequest = (id: number): Promise<WriteOK> =>
+  postJSON<WriteOK>(`/api/v1/requests/${id}/dump-backfill`, {});
+
+/** 批量缓存补写（1–100 条）：逐条独立执行，返回逐条摘要。 */
+export const dumpBackfillRequests = (ids: number[]): Promise<DumpBackfillBatchResult> =>
+  postJSON<DumpBackfillBatchResult>("/api/v1/requests/dump-backfill-batch", {
+    request_ids: ids,
+  });

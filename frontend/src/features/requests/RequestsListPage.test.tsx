@@ -13,9 +13,11 @@ import { ApiError } from "../../api/client";
 import {
   fetchCloudDrive,
   fetchRequests,
+  fetchSettings,
   type CloudDriveView,
   type ListEnvelope,
   type RequestRow,
+  type SettingsView,
 } from "../../api/admin";
 import {
   cancelRequest,
@@ -24,6 +26,8 @@ import {
   cloudArchiveRequest,
   deleteRequest,
   deleteRequests,
+  dumpBackfillRequest,
+  dumpBackfillRequests,
 } from "../../api/mutations";
 import { RequestsListPage } from "./RequestsListPage";
 
@@ -33,6 +37,7 @@ vi.mock("../../api/admin", async () => {
     ...actual,
     fetchRequests: vi.fn(),
     fetchCloudDrive: vi.fn(),
+    fetchSettings: vi.fn(),
   };
 });
 
@@ -46,17 +51,22 @@ vi.mock("../../api/mutations", async () => {
     deleteRequests: vi.fn(),
     cloudArchiveRequest: vi.fn(),
     cloudArchiveBatch: vi.fn(),
+    dumpBackfillRequest: vi.fn(),
+    dumpBackfillRequests: vi.fn(),
   };
 });
 
 const fetchRequestsMock = vi.mocked(fetchRequests);
 const fetchCloudDriveMock = vi.mocked(fetchCloudDrive);
+const fetchSettingsMock = vi.mocked(fetchSettings);
 const deleteRequestMock = vi.mocked(deleteRequest);
 const cancelRequestMock = vi.mocked(cancelRequest);
 const cancelRequestsMock = vi.mocked(cancelRequests);
 const deleteRequestsMock = vi.mocked(deleteRequests);
 const cloudArchiveRequestMock = vi.mocked(cloudArchiveRequest);
 const cloudArchiveBatchMock = vi.mocked(cloudArchiveBatch);
+const dumpBackfillRequestMock = vi.mocked(dumpBackfillRequest);
+const dumpBackfillRequestsMock = vi.mocked(dumpBackfillRequests);
 
 /** 云盘配置：默认开启，mega-1 为默认目的地，s3-1 备选。 */
 function cloudDriveView(overrides: Partial<CloudDriveView> = {}): CloudDriveView {
@@ -74,6 +84,15 @@ function cloudDriveView(overrides: Partial<CloudDriveView> = {}): CloudDriveView
 
 function envelope(items: RequestRow[]): ListEnvelope<RequestRow> {
   return { items, page: 1, page_size: 20, total: items.length, total_pages: 1 };
+}
+
+/** 运行设置：缓存补写用例只关心缓存频道配置（其余字段与页面无关）。 */
+function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
+  return {
+    dump_channel_id: -1001234567890,
+    dump_channel_title: "缓存频道",
+    ...overrides,
+  } as SettingsView;
 }
 
 function requestRow(overrides: Partial<RequestRow>): RequestRow {
@@ -119,12 +138,15 @@ describe("请求记录列表页", () => {
   beforeEach(() => {
     fetchRequestsMock.mockReset();
     fetchCloudDriveMock.mockReset().mockResolvedValue(cloudDriveView({ enabled: false }));
+    fetchSettingsMock.mockReset().mockResolvedValue(settingsView());
     deleteRequestMock.mockReset();
     cancelRequestMock.mockReset();
     cancelRequestsMock.mockReset();
     deleteRequestsMock.mockReset();
     cloudArchiveRequestMock.mockReset();
     cloudArchiveBatchMock.mockReset();
+    dumpBackfillRequestMock.mockReset();
+    dumpBackfillRequestsMock.mockReset();
   });
 
   it("processing 记录渲染实时下载/上传进度，终态记录显示占位", async () => {
@@ -526,5 +548,111 @@ describe("请求记录列表页", () => {
 
     expect(await screen.findByText("该请求已有在途补存任务")).toBeInTheDocument();
     expect(screen.queryByText(/已创建云盘补存任务/)).not.toBeInTheDocument();
+  });
+
+  it("批量转存缓存频道：终态行（含纯文本）可勾选，提交后展示成功/跳过摘要", async () => {
+    dumpBackfillRequestsMock.mockResolvedValue({
+      ok: true,
+      results: [
+        { request_id: 11, created_request_id: 21 },
+        { request_id: 12, skip_reason: "already_dumped" },
+        { request_id: 13, queue_full: true, created_request_id: 22 },
+      ],
+    });
+    fetchRequestsMock.mockResolvedValue(
+      envelope([
+        requestRow({ id: 11, status: "succeeded", delivery_mode: "upload" }),
+        requestRow({ id: 12, status: "cancelled", delivery_mode: "cloud" }),
+        requestRow({ id: 13, status: "succeeded", delivery_mode: "text", media_type: "text" }),
+        requestRow({ id: 14, status: "processing", delivery_mode: "upload" }),
+      ]),
+    );
+    const invalidateSpy = renderPage();
+    await screen.findAllByText("example");
+
+    // 切到「转存缓存频道」批量模式（Segmented 选项）
+    fireEvent.click(screen.getByRole("radio", { name: "转存缓存频道" }));
+    const checkboxes = screen.getAllByRole("checkbox");
+    // [0] 全选；终态的 11/12/13（含纯文本）可选，处理中的 14 禁用
+    expect(checkboxes[1]).not.toBeDisabled();
+    expect(checkboxes[2]).not.toBeDisabled();
+    expect(checkboxes[3]).not.toBeDisabled();
+    expect(checkboxes[4]).toBeDisabled();
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(checkboxes[2]);
+    fireEvent.click(checkboxes[3]);
+
+    fireEvent.click(screen.getByRole("button", { name: /批量转存（3）/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(dumpBackfillRequestsMock).toHaveBeenCalledWith([11, 12, 13]));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["requests"] })),
+    );
+
+    // 结果摘要：创建 1 条、队列满 1 条、跳过 1 条及中文原因
+    const summaryTitle = await screen.findByText("批量转存缓存频道结果");
+    const summary = summaryTitle.closest('[role="dialog"]') as HTMLElement;
+    expect(
+      within(summary).getByText(/成功创建 1 条缓存补写任务；队列满 1 条；跳过 1 条。/),
+    ).toBeInTheDocument();
+    expect(
+      within(summary).getByText("#12：缓存频道已有该链接副本"),
+    ).toBeInTheDocument();
+    expect(
+      within(summary).getByText("#13：已创建任务但队列已满（QUEUE_FULL），可稍后重试"),
+    ).toBeInTheDocument();
+  });
+
+  it("缓存频道未配置时转存模式整列禁用并提示配置位置", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView({ dump_channel_id: 0, dump_channel_title: "" }));
+    fetchRequestsMock.mockResolvedValue(
+      envelope([requestRow({ id: 11, status: "succeeded", delivery_mode: "upload" })]),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "转存缓存频道" }));
+    expect(
+      await screen.findByText("缓存频道未配置，可在「运行设置」页配置后使用。"),
+    ).toBeInTheDocument();
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes[0]).toBeDisabled();
+    expect(checkboxes[1]).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /批量转存/ })).not.toBeInTheDocument();
+  });
+
+  it("单条转存：操作列按钮确认后提交并提示", async () => {
+    dumpBackfillRequestMock.mockResolvedValue({ ok: true });
+    fetchRequestsMock.mockResolvedValue(
+      envelope([requestRow({ id: 11, status: "failed", delivery_mode: "upload" })]),
+    );
+    const invalidateSpy = renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "转 存" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(dumpBackfillRequestMock).toHaveBeenCalledWith(11));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["requests"] })),
+    );
+    expect(
+      await screen.findByText(/已创建缓存补写任务，新请求行将以「缓存补写」投递方式出现在列表中/),
+    ).toBeInTheDocument();
+  });
+
+  it("单条转存被服务端拒绝（409 已有副本）时展示受控文案", async () => {
+    dumpBackfillRequestMock.mockRejectedValue(
+      new ApiError("缓存频道已有该链接的副本，无需重复转存。", 409, "STORE_CONSTRAINT"),
+    );
+    fetchRequestsMock.mockResolvedValue(
+      envelope([requestRow({ id: 11, status: "succeeded", delivery_mode: "upload" })]),
+    );
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "转 存" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    expect(await screen.findByText("缓存频道已有该链接的副本，无需重复转存。")).toBeInTheDocument();
+    expect(screen.queryByText(/已创建缓存补写任务/)).not.toBeInTheDocument();
   });
 });

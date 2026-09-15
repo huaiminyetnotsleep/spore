@@ -110,6 +110,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/requests/{id}/cancel", s.handleAPIRequestCancel)
 	s.mountAPIWrite(mux, "/api/v1/requests/cancel", s.handleAPIRequestsCancel)
 	s.mountAPIWrite(mux, "/api/v1/requests/delete", s.handleAPIRequestsDelete)
+	// 缓存补写（转存缓存频道）：单条 + 批量；请求级资格与特权入队在
+	// access.DumpBackfill，全局配置判定在 handler（见 api_write_dump_backfill.go）
+	s.mountAPIWrite(mux, "/api/v1/requests/{id}/dump-backfill", s.handleAPIRequestDumpBackfill)
+	s.mountAPIWrite(mux, "/api/v1/requests/dump-backfill-batch", s.handleAPIRequestsDumpBackfillBatch)
 	// 记录清理（09-02 admin-delete-actions）：单条删除仅终态；频道删除即
 	// 删除该频道全部请求记录（频道为 requests 纯聚合，无独立频道表）。
 	s.mountAPIWrite(mux, "/api/v1/requests/{id}/delete", s.handleAPIRequestDelete)

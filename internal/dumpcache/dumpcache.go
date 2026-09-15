@@ -45,6 +45,30 @@ func New(snd delivery.Sender, st *store.Store, channelID func() int64, log *slog
 // Enabled 报告缓存频道是否已配置（配置读取失败按未配置处理）。
 func (s *Service) Enabled() bool { return s != nil && s.channelID != nil && s.channelID() != 0 }
 
+// Channel 返回当前配置的缓存频道数字 ID（未配置时 false）。仅缓存补写任务
+// 用它作为直接发送目标；一次任务的发送与落条目应使用同一次调用返回值，
+// 与 WriteClean 的"一次写入同一频道"一致性语义相同。
+func (s *Service) Channel() (int64, bool) {
+	if !s.Enabled() {
+		return 0, false
+	}
+	channel := s.channelID()
+	return channel, channel != 0
+}
+
+// RecordEntry 落缓存频道条目（缓存补写任务在直接发送成功后调用，坐标供
+// 同链接复用）；写失败只记日志——下次成功投递自愈，不影响任务结果。
+func (s *Service) RecordEntry(ctx context.Context, channelKey string, messageID int, dumpIDs []int) {
+	if !s.Enabled() || len(dumpIDs) == 0 {
+		return
+	}
+	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
+		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
+	}); err != nil {
+		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
+	}
+}
+
 // Entry 取同链接最新干净副本坐标；未配置或无条目返回 false。
 func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (store.DumpEntry, bool) {
 	if !s.Enabled() {
