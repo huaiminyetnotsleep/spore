@@ -4,6 +4,9 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# 品牌资源在仓库根 public/，由前端与文档站共享（两处 vite publicDir 均指 ../public）；
+# 缺了它 dist 里没有 favicon.svg/icon.svg，运行时图标 404。
+COPY public/ /src/public/
 RUN npm run build
 
 FROM golang:1.25 AS build
