@@ -10,7 +10,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 
 import { fetchBots, type BotRow } from "../../api/admin";
-import { addBot, deleteBot } from "../../api/mutations";
+import { addBot, deleteBot, pauseBot, resumeBot } from "../../api/mutations";
 import { MTPROTO_STATE_LABELS, botLabel, labelOf } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { LoadError, PageCard } from "../shared/PageStates";
@@ -47,6 +47,14 @@ export function BotsPage() {
     successText: (result) => result.restart_hint,
   });
 
+  // 暂停/恢复：即时生效（暂停停止接收新消息，在途任务由原 bot 正常完成）
+  const runtime = useAdminAction({
+    action: (vars: { botID: number; paused: boolean }) =>
+      (vars.paused ? pauseBot : resumeBot)(vars.botID),
+    invalidate: [["bots"], ["overview"]],
+    successText: (result) => result.message ?? result.restart_hint,
+  });
+
   const columns: ColumnsType<BotRow> = [
     {
       title: "机器人",
@@ -62,12 +70,25 @@ export function BotsPage() {
     {
       title: "长轮询",
       key: "online",
-      render: (_, row) =>
-        row.restart_pending ? (
-          <Tag color="gold">待重启生效</Tag>
-        ) : (
-          <Tag color={row.online ? "green" : "default"}>{row.online ? "在线" : "离线"}</Tag>
-        ),
+      render: (_, row) => (
+        <Space size={4} wrap>
+          {row.restart_pending ? (
+            <Tag color="gold">待重启生效</Tag>
+          ) : (
+            <Tag color={row.online ? "green" : "default"}>{row.online ? "在线" : "离线"}</Tag>
+          )}
+          {row.paused ? (
+            <Tag color="gold" data-testid={`bot-paused-${row.bot_id}`}>
+              已暂停
+            </Tag>
+          ) : null}
+          {row.conflict ? (
+            <Tag color="red" data-testid={`bot-conflict-${row.bot_id}`}>
+              收不到消息
+            </Tag>
+          ) : null}
+        </Space>
+      ),
     },
     {
       title: "MTProto 直传",
@@ -90,28 +111,60 @@ export function BotsPage() {
     {
       title: "操作",
       key: "actions",
-      width: 120,
-      render: (_, row) =>
-        row.source === "file" ? (
-          <Button
-            size="small"
-            danger
-            loading={remove.pending}
-            disabled={remove.pending}
-            onClick={() =>
-              confirm(
-                `确定移除机器人 ${botLabel(row.bot_id, row.username)}？重启进程后生效；生效前该 bot 仍会继续收发消息。`,
-                () => {
-                  void remove.run(row.bot_id);
-                },
-              )
-            }
-          >
-            移除
-          </Button>
-        ) : (
-          <Text type="secondary">环境变量配置，请在部署环境中修改</Text>
-        ),
+      width: 200,
+      render: (_, row) => (
+        <Space size="small" wrap>
+          {!row.restart_pending ? (
+            row.paused ? (
+              <Button
+                size="small"
+                type="primary"
+                loading={runtime.pending}
+                disabled={runtime.pending}
+                onClick={() => void runtime.run({ botID: row.bot_id, paused: false })}
+              >
+                恢复
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                loading={runtime.pending}
+                disabled={runtime.pending}
+                onClick={() =>
+                  confirm(
+                    `确定暂停机器人 ${botLabel(row.bot_id, row.username)}？暂停后停止接收该机器人的新消息（已在处理的任务会正常完成），可随时恢复。`,
+                    () => {
+                      void runtime.run({ botID: row.bot_id, paused: true });
+                    },
+                  )
+                }
+              >
+                暂停
+              </Button>
+            )
+          ) : null}
+          {row.source === "file" ? (
+            <Button
+              size="small"
+              danger
+              loading={remove.pending}
+              disabled={remove.pending}
+              onClick={() =>
+                confirm(
+                  `确定移除机器人 ${botLabel(row.bot_id, row.username)}？重启进程后生效；生效前该 bot 仍会继续收发消息。`,
+                  () => {
+                    void remove.run(row.bot_id);
+                  },
+                )
+              }
+            >
+              移除
+            </Button>
+          ) : (
+            <Text type="secondary">环境变量配置</Text>
+          )}
+        </Space>
+      ),
     },
   ];
 

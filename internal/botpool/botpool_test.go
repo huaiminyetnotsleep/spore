@@ -133,3 +133,36 @@ func TestUserRouterNilWhenPoolEmpty(t *testing.T) {
 		t.Fatalf("空池应返回 ErrPoolUnavailable，得到 %v", err)
 	}
 }
+
+func TestMemberConflictTransitions(t *testing.T) {
+	pool := New()
+	m := &Member{ID: 111}
+	pool.Reset([]*Member{m})
+
+	// 状态转换只在变化时返回 true（调用方据此去重事件）
+	if !m.SetConflict(true) {
+		t.Fatal("首次置冲突应返回 true")
+	}
+	if m.SetConflict(true) {
+		t.Fatal("重复置冲突应返回 false")
+	}
+	if !pool.Snapshots()[0].Conflict {
+		t.Fatal("快照应携带冲突态")
+	}
+	if !m.SetConflict(false) {
+		t.Fatal("清除冲突应返回 true")
+	}
+	if m.SetConflict(false) {
+		t.Fatal("重复清除应返回 false")
+	}
+	if pool.Snapshots()[0].Conflict {
+		t.Fatal("清除后快照不应携带冲突态")
+	}
+	// 精确查找：不存在的 botID 返回 nil（不回退主 bot）
+	if pool.MemberByID(999) != nil {
+		t.Fatal("未命中的 botID 应返回 nil")
+	}
+	if pool.MemberByID(111) != m {
+		t.Fatal("精确查找应返回对应成员")
+	}
+}

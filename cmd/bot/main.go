@@ -268,6 +268,7 @@ func main() {
 	// 每 bot 独立的大文件直传会话（botID 即 token 数字前缀）：跨 MTProto
 	// 重连复用，长轮询重建不影响会话。
 	pool := botpool.New()
+	runtime := newBotRuntime(pool, st, logger)
 	botClients := make(map[int64]*mtproto.BotClient, len(bots))
 	for i, bt := range bots {
 		client := mtproto.NewBotClientFor(cfg, logger, bt.Token,
@@ -309,22 +310,23 @@ func main() {
 	// 结果缓存 1 小时；查询失败时端点受控降级，不影响其他功能。
 	releaseCheck := web.NewGitHubReleaseChecker()
 	webSrv, err := web.New(web.Options{
-		Store:          st,
-		Cfg:            cfg,
-		Log:            logger,
-		Access:         accessSvc,                                        // 管理操作入口（审批/重试/限额/设置）
-		Queue:          q,                                                // 总览页队列指标
-		MTProto:        m.Session(),                                      // 扫码登录状态与重连接口（§6.4）
-		BotMTProto:     primaryClient,                                    // Bot 会话状态与当前 DC（主 bot；多 bot 见 robots 管理页）
-		BotIdentity:    botIdentity,                                      // 总览页展示机器人池身份（Bot 就绪后经 getMe 回填）
-		BotList:        botMgr,                                           // 机器人管理页（env ∪ bots.json 列表/增删）
-		BotMTProtoList: botMTProtoStore{pool: pool, clients: botClients}, // 逐 bot 直传会话状态
-		Profile:        profileLookup,                                    // 已就绪且有上下文时刷新用户资料
-		RestartFunc:    func() error { return syscall.Kill(os.Getpid(), syscall.SIGTERM) },
-		Hub:            hub,              // 事件中心（resolve 统一经它执行并留审计）
-		Progress:       progressRegistry, // 请求记录页实时进度（与 worker 共享）
-		Monitor:        metrics,          // 系统资源与传输监控
-		Bindings:       bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）
+		Store:             st,
+		Cfg:               cfg,
+		Log:               logger,
+		Access:            accessSvc,                                        // 管理操作入口（审批/重试/限额/设置）
+		Queue:             q,                                                // 总览页队列指标
+		MTProto:           m.Session(),                                      // 扫码登录状态与重连接口（§6.4）
+		BotMTProto:        primaryClient,                                    // Bot 会话状态与当前 DC（主 bot；多 bot 见 robots 管理页）
+		BotIdentity:       botIdentity,                                      // 总览页展示机器人池身份（Bot 就绪后经 getMe 回填）
+		BotList:           botMgr,                                           // 机器人管理页（env ∪ bots.json 列表/增删）
+		BotMTProtoList:    botMTProtoStore{pool: pool, clients: botClients}, // 逐 bot 直传会话状态
+		BotRuntimeControl: runtime,                                          // 暂停/恢复（即时生效，settings 持久化）
+		Profile:           profileLookup,                                    // 已就绪且有上下文时刷新用户资料
+		RestartFunc:       func() error { return syscall.Kill(os.Getpid(), syscall.SIGTERM) },
+		Hub:               hub,              // 事件中心（resolve 统一经它执行并留审计）
+		Progress:          progressRegistry, // 请求记录页实时进度（与 worker 共享）
+		Monitor:           metrics,          // 系统资源与传输监控
+		Bindings:          bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）
 
 		ChannelJoin:    joinSvc,                // 频道加入管理页（审批/已加入/退出）
 		Transfer:       transferRuntime,        // 四项传输并发的原子运行时配置
@@ -370,6 +372,7 @@ func main() {
 		pool:        pool,
 		botClients:  botClients,
 		bots:        bots,
+		runtime:     runtime,
 		profile:     profileLookup,
 		membership:  membership,
 		memoryGate:  memoryGate,

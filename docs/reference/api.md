@@ -163,7 +163,7 @@
 | `health` | object | 服务健康快照，见下 |
 | `queue` | object \| 缺省 | 内存队列指标 `{len, cap}`；队列未注入时省略 |
 | `bot` | object \| 缺省 | 接入的 Bot API 机器人身份（主 bot）：`{id, name, username}`（getMe 快照；`name` 为 first_name，`username` 不含 `@`）；Bot 未就绪或身份查询未成功时整体省略，前端显示"未接入" |
-| `bots` | array \| 缺省 | 多机器人池全部成员 `{id, name, username, primary, online}`（装配顺序，主 bot 在前；`primary` 是否主 bot，`online` 长轮询是否在线）；空池或旧后端省略 |
+| `bots` | array \| 缺省 | 多机器人池全部成员 `{id, name, username, primary, online, conflict, paused}`（装配顺序，主 bot 在前；`conflict` 消息拉取冲突，`paused` 管理端手动暂停——均表示该 bot 暂不接收新消息）；空池或旧后端省略 |
 | `requests` | object | 请求行状态计数 `{queued_rows, processing_rows}`（全时段当前值） |
 | `users` | object | 用户状态计数 `{total, enabled, pending, disabled, archived}` |
 | `join` | object | 频道加入全时段快照，见下 |
@@ -1254,6 +1254,8 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 | `username` / `name` | string | getMe 身份（未接入时省略） |
 | `primary` | bool | 是否主 bot（env 首项） |
 | `online` | bool | Bot API 长轮询是否在线 |
+| `conflict` | bool | 消息拉取冲突：token 被 webhook 或另一个轮询实例占用，该 bot 收不到新消息（发送不受影响）。处理方式：让对方服务下线该 bot（webhook 型需由对方删除 webhook），或从本实例移除该 token 后重启；冲突进入/恢复会分别产生/解决 `bot.poll_conflict` 事件 |
+| `paused` | bool | 已暂停：管理端手动暂停后停止接收该 bot 的新消息（在途任务由原 bot 正常完成）；即时生效、重启保持 |
 | `mtproto_state` | string \| 缺省 | 该 bot 的 MTProto 直传会话状态；未接入时省略 |
 | `source` | string | `env`（环境变量，只读）\| `file`（管理端可增删） |
 | `restart_pending` | bool | 已配置但当前进程未接入（等待重启） |
@@ -1269,6 +1271,12 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 ### POST /api/v1/bots/{id}/delete
 
 移除文件来源 bot（认证 + CSRF），无请求体；`{id}` 为 bot 数字 ID。响应同 add。错误：`400`（条目不存在或为 env 来源——env 来源请在部署环境修改后重启）；`503`（未接入管理器）。审计：`bots.remove`。
+
+### POST /api/v1/bots/{id}/pause · /resume
+
+暂停/恢复指定 bot（认证 + CSRF），无请求体。**即时生效**并持久化（settings 键 `bots_paused`，重启/重连后保持）。暂停 = 停止接收该 bot 的新消息（长轮询立即停止）；**已受理的任务仍由原 bot 正常完成**（发送通道保留）。响应：`{"ok":true, "bots":[...], "need_apply":…, "message":"…受控提示…"}`（`bots` 回显最新列表）。
+
+错误：`400`（id 无效）；`503`（未接入机器人列表管理器）。审计：`bot.pause` / `bot.resume`。
 
 ---
 

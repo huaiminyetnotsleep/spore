@@ -49,6 +49,7 @@ type app struct {
 	pool        *botpool.Pool                // 多机器人池：ready 生命周期内 Reset 重建
 	botClients  map[int64]*mtproto.BotClient // botID → 大文件直传会话（main 构建、跨生命周期复用）
 	bots        []botlist.Bot                // 有效 bot 列表（env ∪ bots.json，主 bot 在前）
+	runtime     *botRuntime                  // 暂停/恢复运行时控制（settings 持久化 + 即时生效）
 	profile     *mtproto.ProfileLookup
 	membership  *mtproto.MembershipBridge
 	memoryGate  *media.BudgetGate
@@ -148,14 +149,14 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	a.q.SetPendingCancelHandler(a.notifyPendingCancel)
 
 	a.log.Info("核心链路就绪，启动长轮询", "bots", len(members))
-	// 每 bot 独立长轮询：任一 bot 异常退出只记日志（Start 返回后由库按
-	// 调用方语义结束），其余继续；全部随 ctx 结束而返回，收齐后再 drain。
+	// 每 bot 一条轮询监督循环：支持按 settings 暂停/恢复（即时生效，无需
+	// 重启）；全部随生命周期 ctx 结束而返回，收齐后再 drain。
 	var wg sync.WaitGroup
 	for _, m := range members {
 		wg.Add(1)
 		go func(m *botpool.Member) {
 			defer wg.Done()
-			m.BotAPI.Start(ctx)
+			a.runtime.RunPoller(ctx, m)
 		}(m)
 	}
 	wg.Wait()
@@ -169,15 +170,37 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, primary bool) (*botpool.Member, error) {
 	botID := botlist.BotID(bt.Token)
 	ref := botapi.NewBotRef(botID, "")
+	// OnPollError：轮询（getUpdates）409 冲突识别——token 被 webhook 或另一个
+	// 轮询实例占用时，本实例拿不到任何消息。错误会按库内退避反复出现，仅在
+	// "非冲突 → 冲突"转换时记一次日志与事件（SetConflict 返回是否变化）。
+	onPollError := func(err error) {
+		if !botapi.IsConflictError(err) {
+			return
+		}
+		if m := a.pool.MemberByID(botID); m != nil && m.SetConflict(true) {
+			a.log.Warn("机器人消息拉取冲突（token 被其他服务占用，收不到新消息）", "bot_id", botID)
+			a.hub.Raise(ctx, notify.KeyBotPollConflict, notify.SeverityError,
+				"有机器人收不到新消息：其 token 正被其他服务占用（webhook 或另一个轮询实例）。请让对方服务下线该 bot，或在管理端移除该 token 后重启。")
+		}
+	}
+	// NoteActive：收到该 bot 的 update 即证明轮询已恢复，清除冲突态并解决事件。
+	noteActive := func(userID, botID int64) {
+		a.pool.NoteActive(userID, botID)
+		if m := a.pool.MemberByID(botID); m != nil && m.SetConflict(false) {
+			a.log.Info("机器人消息拉取已恢复", "bot_id", botID)
+			a.hub.Recover(ctx, notify.KeyBotPollConflict)
+		}
+	}
 	b, err := botapi.New(botapi.Options{
-		Cfg:        a.cfg,
-		Token:      bt.Token,
-		Bot:        ref,
-		NoteActive: a.pool.NoteActive,
-		Log:        a.log,
-		Queue:      a.q,
-		Access:     a.access,
-		Channels:   a.bindings,
+		Cfg:         a.cfg,
+		Token:       bt.Token,
+		Bot:         ref,
+		NoteActive:  noteActive,
+		OnPollError: onPollError,
+		Log:         a.log,
+		Queue:       a.q,
+		Access:      a.access,
+		Channels:    a.bindings,
 		WrapSender: func(snd delivery.Sender) delivery.Sender {
 			return notify.NewCountSender(snd, a.hub)
 		},
@@ -230,6 +253,7 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	// 拉取机器人身份（总览/请求归属展示 Name 与 @username）：库的 New 已隐式
 	// getMe 但丢弃了结果，这里再取一次回填；失败不致命——token 数字前缀即
 	// bot id，身份照常入池（用户名留空），请求归属与路由不受影响。
+	conflictAtStart := false
 	meCtx, meCancel := context.WithTimeout(ctx, 10*time.Second)
 	name, username := "", ""
 	if me, meErr := b.GetMe(meCtx); meErr != nil {
@@ -243,6 +267,18 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		ref.Set(me.ID, me.Username)
 		botID = me.ID
 		a.log.Info("已获取机器人身份", "bot_id", me.ID, "bot_username", me.Username, "primary", primary)
+	}
+	// webhook 冲突探测：token 已被其他服务以 webhook 占用时，本实例轮询注定
+	// 409 拿不到消息，接入时即标记冲突并产生事件（冲突解除后随下一次
+	// 轮询成功自动恢复）。
+	if hookURL, hookErr := botapi.WebhookURL(meCtx, b); hookErr != nil {
+		a.log.Warn("查询 webhook 状态失败（跳过冲突探测，运行期轮询错误仍会识别）",
+			"bot_id", botID, "error", hookErr.Error())
+	} else if hookURL != "" {
+		conflictAtStart = true
+		a.log.Warn("机器人 token 已被其他服务以 webhook 方式占用（收不到新消息）", "bot_id", botID)
+		a.hub.Raise(ctx, notify.KeyBotPollConflict, notify.SeverityError,
+			"有机器人收不到新消息：其 token 已被其他服务以 webhook 方式占用。请让对方服务删除 webhook 后下线该 bot，或在管理端移除该 token 后重启。")
 	}
 	meCancel()
 	menuCtx, menuCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -258,7 +294,7 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	counted := notify.NewCountSender(
 		delivery.NewRouter(sender, a.botClients[botID], a.cfg.BotAPIUploadCap(), a.cfg.MaxFileSize),
 		a.hub)
-	return &botpool.Member{
+	member := &botpool.Member{
 		ID:        botID,
 		Username:  username,
 		Name:      name,
@@ -267,7 +303,11 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		Sender:    counted,
 		RawSender: sender,
 		BotClient: a.botClients[botID],
-	}, nil
+	}
+	if conflictAtStart {
+		member.SetConflict(true)
+	}
+	return member, nil
 }
 
 // queueDeps 组装队列消费依赖：Sender 回退主 bot（BotID=0 的存量任务/Web

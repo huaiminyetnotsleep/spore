@@ -16,6 +16,7 @@ describe("SPA 导航信息架构", () => {
       "BotUser受邀频道",
       "用户运营",
       "事件与审计",
+      "机器人",
       "系统运维",
     ]);
     expect(navRoutes).toHaveLength(20);
@@ -35,12 +36,12 @@ describe("SPA 导航信息架构", () => {
       "users",
       "events",
       "audit",
+      "bots",
       "settings",
       "system-config",
       "mtproto",
       "oauth",
       "backup",
-      "bots",
     ]);
   });
 

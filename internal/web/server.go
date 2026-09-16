@@ -63,6 +63,17 @@ type BotMTProtoStatuses interface {
 	BotMTProtoEntries() []BotMTProtoEntry
 }
 
+// BotRuntimeControl 是机器人管理页对池内 bot 的暂停/恢复能力（即时生效）：
+// 暂停取消该 bot 的长轮询（停止接收新消息，在途任务由原 bot 正常完成），
+// 恢复重启轮询。持久化由 settings 承担（handler 落库后调用运行时控制）；
+// 缺失时仅持久化、待下次 MTProto 就绪生命周期应用。
+type BotRuntimeControl interface {
+	// PauseBot 暂停指定 bot 的消息接收（立即停止轮询）。
+	PauseBot(ctx context.Context, botID int64) error
+	// ResumeBot 恢复指定 bot 的消息接收（立即重启轮询）。
+	ResumeBot(ctx context.Context, botID int64) error
+}
+
 // BotIdentity 是总览页展示的 Bot API 机器人身份（脱敏，不含 token）。
 type BotIdentity struct {
 	ID       int64  `json:"id"`
@@ -73,8 +84,10 @@ type BotIdentity struct {
 // BotIdentityEntry 是多机器人池中单个 bot 的展示条目（装配顺序，主 bot 在前）。
 type BotIdentityEntry struct {
 	BotIdentity
-	Primary bool `json:"primary"` // 是否主 bot（env 首项）
-	Online  bool `json:"online"`  // Bot API 长轮询是否在线
+	Primary  bool `json:"primary"`  // 是否主 bot（env 首项）
+	Online   bool `json:"online"`   // Bot API 长轮询是否在线
+	Conflict bool `json:"conflict"` // 消息拉取冲突（token 被其他服务占用；收不到新消息）
+	Paused   bool `json:"paused"`   // 已暂停（停止接收新消息；在途任务正常完成）
 }
 
 // BotIdentityProvider 提供当前接入的 Bot API 机器人身份：BotIdentity 返回
@@ -142,10 +155,13 @@ type Options struct {
 	BotIdentity    BotIdentityProvider // 可选：接入的 Bot API 机器人身份（总览页）；缺失或未就绪时显示未接入
 	// BotList 是机器人池的 token 列表管理器（bots.json 增删）；缺失时
 	// 机器人管理页返回受控不可用。token 只进不出：任何响应不含 token。
-	BotList     *botlist.Manager
-	Profile     UserProfileLookup // 可选：Telegram 用户资料刷新上下文
-	RestartFunc func() error      // 可选：受控优雅重启；生产实现只发送 SIGTERM
-	Hub         *notify.Hub       // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
+	BotList *botlist.Manager
+	// BotRuntimeControl 提供池内 bot 的暂停/恢复（即时生效）；缺失时
+	// 暂停/恢复仅持久化，待下次 MTProto 就绪生命周期应用。
+	BotRuntimeControl BotRuntimeControl
+	Profile           UserProfileLookup // 可选：Telegram 用户资料刷新上下文
+	RestartFunc       func() error      // 可选：受控优雅重启；生产实现只发送 SIGTERM
+	Hub               *notify.Hub       // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
 	// Progress 是处理中请求的实时传输进度注册表，与 worker 共享同一实例
 	// （internal/progress）；nil 时请求记录不携带进度字段。
 	Progress *progress.Registry
@@ -194,6 +210,7 @@ type Server struct {
 	botMTPs          BotMTProtoStatuses
 	botIdentity      BotIdentityProvider
 	botList          *botlist.Manager
+	botRuntime       BotRuntimeControl
 	profile          UserProfileLookup
 	restartFunc      func() error
 	restartMu        sync.Mutex
@@ -263,6 +280,7 @@ func New(opt Options) (*Server, error) {
 		botMTPs:      opt.BotMTProtoList,
 		botIdentity:  opt.BotIdentity,
 		botList:      opt.BotList,
+		botRuntime:   opt.BotRuntimeControl,
 		profile:      opt.Profile,
 		restartFunc:  opt.RestartFunc,
 		nonceFunc:    randomToken,

@@ -250,7 +250,12 @@ export function OverviewPage() {
                 {data.bots.map((b) => (
                   <Space key={b.id} size={6} wrap>
                     {b.primary ? <Tag color="blue">主</Tag> : null}
-                    <Tag color={b.online ? "green" : "default"}>{b.online ? "在线" : "离线"}</Tag>
+                    {b.paused ? (
+                      <Tag color="gold">已暂停</Tag>
+                    ) : (
+                      <Tag color={b.online ? "green" : "default"}>{b.online ? "在线" : "离线"}</Tag>
+                    )}
+                    {b.conflict ? <Tag color="red">收不到消息</Tag> : null}
                     <span>{botIdentityText(b)}</span>
                   </Space>
                 ))}

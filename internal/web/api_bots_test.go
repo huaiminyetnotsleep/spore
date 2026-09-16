@@ -4,6 +4,7 @@ package web
 // bots.json（重启生效）、审计留痕；token 任何响应不回显。
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -133,4 +134,75 @@ type BotMutationResultAlias struct {
 	MaxBots     int         `json:"max_bots"`
 	NeedApply   bool        `json:"need_apply"`
 	RestartHint string      `json:"restart_hint"`
+}
+
+// fakeBotRuntime 记录暂停/恢复调用。
+type fakeBotRuntime struct {
+	pausedIDs  []int64
+	resumedIDs []int64
+}
+
+func (f *fakeBotRuntime) PauseBot(_ context.Context, botID int64) error {
+	f.pausedIDs = append(f.pausedIDs, botID)
+	return nil
+}
+
+func (f *fakeBotRuntime) ResumeBot(_ context.Context, botID int64) error {
+	f.resumedIDs = append(f.resumedIDs, botID)
+	return nil
+}
+
+// TestAPIBotPauseResume：暂停/恢复端点落 settings（重启保持）、调用运行时
+// 控制（即时生效）、写审计，列表回显 paused 状态。
+func TestAPIBotPauseResume(t *testing.T) {
+	var runtime fakeBotRuntime
+	e := newTestEnvOpts(t, func(c *config.Config, opt *Options) {
+		c.BotTokens = []string{testTokenA}
+		opt.BotList = botlist.NewManager(t.TempDir(), testLogger())
+		opt.BotRuntimeControl = &runtime
+	})
+	j := e.login(t)
+	csrf := e.sessionCSRF(t, j)
+
+	// 暂停 → 200 + paused 回显 + 运行时调用 + 审计
+	resp := e.apiPost(j, "/api/v1/bots/1111111111/pause", csrf, "{}")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("暂停应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	var out BotMutationResultAlias
+	decodeAPIJSON(t, bodyOf(t, resp), &out)
+	if len(out.Bots) != 1 || !out.Bots[0].Paused {
+		t.Fatalf("暂停后列表应回显 paused: %+v", out.Bots)
+	}
+	if len(runtime.pausedIDs) != 1 || runtime.pausedIDs[0] != 1111111111 {
+		t.Fatalf("应调用运行时暂停: %+v", runtime.pausedIDs)
+	}
+	if !e.containsAction("bot.pause") {
+		t.Error("暂停应写审计")
+	}
+
+	// 持久化验证：重启语义 = 新 Server 读同一数据库仍看到暂停态
+	paused := LoadPausedBots(context.Background(), e.st)
+	if !paused[1111111111] {
+		t.Fatal("暂停态应持久化在 settings")
+	}
+
+	// 恢复 → 200 + 清除 paused + 运行时恢复调用 + 审计
+	resp = e.apiPost(j, "/api/v1/bots/1111111111/resume", csrf, "{}")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("恢复应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	decodeAPIJSON(t, bodyOf(t, resp), &out)
+	if len(out.Bots) != 1 || out.Bots[0].Paused {
+		t.Fatalf("恢复后 paused 应为 false: %+v", out.Bots)
+	}
+	if len(runtime.resumedIDs) != 1 || runtime.resumedIDs[0] != 1111111111 {
+		t.Fatalf("应调用运行时恢复: %+v", runtime.resumedIDs)
+	}
+	if !e.containsAction("bot.resume") {
+		t.Error("恢复应写审计")
+	}
+	if len(LoadPausedBots(context.Background(), e.st)) != 0 {
+		t.Fatal("恢复后暂停集合应为空")
+	}
 }

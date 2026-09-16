@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	tgbot "github.com/go-telegram/bot"
 
@@ -29,7 +30,24 @@ type Member struct {
 	Sender    delivery.Sender
 	RawSender delivery.Sender
 	BotClient *mtproto.BotClient
+
+	// conflict 标记消息拉取冲突（token 被 webhook 或其他轮询实例占用）：
+	// 该 bot 收不到新消息，但发送通道不受影响。由装配层在轮询错误/启动
+	// 探测时置位、收到该 bot 的 update 时清除。
+	conflict atomic.Bool
 }
+
+// SetConflict 更新冲突标记，返回是否发生了状态变化（true = 进入或退出
+// 冲突态，调用方据此触发一次事件/恢复，避免逐错误刷库）。
+func (m *Member) SetConflict(conflicted bool) bool {
+	if conflicted {
+		return m.conflict.CompareAndSwap(false, true)
+	}
+	return m.conflict.CompareAndSwap(true, false)
+}
+
+// Conflict 返回当前冲突态。
+func (m *Member) Conflict() bool { return m.conflict.Load() }
 
 // Snapshot 是成员的脱敏快照（Web 总览/身份展示用，不含 token 与客户端）。
 type Snapshot struct {
@@ -37,6 +55,7 @@ type Snapshot struct {
 	Name     string
 	Username string
 	Online   bool // Bot API 长轮询是否在线（ready 生命周期内置 true）
+	Conflict bool // 消息拉取冲突（token 被其他服务占用；收不到新消息）
 }
 
 // Pool 是线程安全的 bot 成员表 + 用户最近活跃路由表。
@@ -77,9 +96,26 @@ func (p *Pool) Snapshots() []Snapshot {
 	defer p.mu.RUnlock()
 	out := make([]Snapshot, 0, len(p.members))
 	for _, m := range p.members {
-		out = append(out, Snapshot{ID: m.ID, Name: m.Name, Username: m.Username, Online: p.online})
+		out = append(out, Snapshot{
+			ID: m.ID, Name: m.Name, Username: m.Username,
+			Online: p.online, Conflict: m.Conflict(),
+		})
 	}
 	return out
+}
+
+// MemberByID 返回指定 bot 的成员（精确匹配，不回退主 bot）；未命中返回 nil。
+func (p *Pool) MemberByID(botID int64) *Member {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if botID != 0 {
+		for _, m := range p.members {
+			if m.ID == botID {
+				return m
+			}
+		}
+	}
+	return nil
 }
 
 // Empty 报告池内是否没有成员。

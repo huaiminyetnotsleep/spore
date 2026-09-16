@@ -78,8 +78,10 @@ export interface BotMutationResult extends WriteOK {
   bots: import("./admin").BotRow[];
   max_bots: number;
   need_apply: boolean;
-  /** 受控提示：变更已保存，重启进程后生效。 */
+  /** 受控提示：变更已保存，重启进程后生效（接管端点为恢复提示）。 */
   restart_hint: string;
+  /** 接管端点的受控提示；增删端点缺省。 */
+  message?: string;
 }
 
 /** 新增文件来源 bot（token 写入 bots.json，0600；重启生效）。 */
@@ -89,6 +91,14 @@ export const addBot = (token: string): Promise<BotMutationResult> =>
 /** 移除文件来源 bot（env 来源由服务端拒绝，需改环境变量）。 */
 export const deleteBot = (botId: number): Promise<BotMutationResult> =>
   postJSON<BotMutationResult>(`/api/v1/bots/${botId}/delete`);
+
+/** 暂停 bot：停止接收新消息（在途任务正常完成），即时生效、重启保持。 */
+export const pauseBot = (botId: number): Promise<BotMutationResult> =>
+  postJSON<BotMutationResult>(`/api/v1/bots/${botId}/pause`);
+
+/** 恢复 bot：重新拉起该 bot 的长轮询，即时生效。 */
+export const resumeBot = (botId: number): Promise<BotMutationResult> =>
+  postJSON<BotMutationResult>(`/api/v1/bots/${botId}/resume`);
 
 // ---- 用户管理 ----
 

@@ -274,7 +274,7 @@ export const routeMeta = [
     path: "/bots",
     label: "机器人管理",
     title: "机器人管理",
-    groupKey: "system-operations",
+    groupKey: "bot-management",
     icon: <RobotOutlined />,
     menuVisible: true,
   },
@@ -313,9 +313,14 @@ export const navigationGroups = [
     routeKeys: ["events", "audit"],
   },
   {
+    key: "bot-management",
+    label: "机器人",
+    routeKeys: ["bots"],
+  },
+  {
     key: "system-operations",
     label: "系统运维",
-    routeKeys: ["settings", "system-config", "mtproto", "oauth", "backup", "bots"],
+    routeKeys: ["settings", "system-config", "mtproto", "oauth", "backup"],
   },
 ] as const satisfies readonly NavigationGroup[];
 

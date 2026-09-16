@@ -34,6 +34,7 @@ const (
 	KeyMediaConfigInvalid = "media.config_invalid"        // 数据库媒体覆盖值无效，暂回退环境配置
 	KeyBotListInvalid     = "bot.list_invalid"            // bots.json 损坏，文件条目已忽略（仅 env 生效）
 	KeyBotInitFailed      = "bot.init_failed"             // 有 bot token 接入失败（多机器人池跳过该 bot）
+	KeyBotPollConflict    = "bot.poll_conflict"           // bot token 被其他服务占用（webhook/其他轮询实例），收不到新消息
 
 	// 云盘下载（/download）事件源。
 	KeyCloudUploadFailed  = "cloud.upload_failed"  // 云盘任务连续失败（独立计数）

@@ -73,6 +73,10 @@ export interface OverviewBotEntry extends OverviewBot {
   primary: boolean;
   /** Bot API 长轮询是否在线。 */
   online: boolean;
+  /** 消息拉取冲突（token 被其他服务占用；收不到新消息）。 */
+  conflict: boolean;
+  /** 已暂停（停止接收新消息；在途任务正常完成）。 */
+  paused: boolean;
 }
 
 export interface DistRow {
@@ -875,6 +879,10 @@ export interface BotRow {
   primary: boolean;
   /** Bot API 长轮询在线。 */
   online: boolean;
+  /** 消息拉取冲突（token 被其他服务占用；收不到新消息）。 */
+  conflict: boolean;
+  /** 已暂停（停止接收新消息；在途任务正常完成）。 */
+  paused: boolean;
   /** Bot MTProto 直传会话 raw 状态；空串 = 未接入。 */
   mtproto_state?: string;
   /** env（环境变量，只读）| file（bots.json，可增删）。 */

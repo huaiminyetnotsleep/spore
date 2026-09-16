@@ -153,6 +153,10 @@ type Options struct {
 	// NoteActive 可选：记录用户最近活跃的 bot（多机器人通知路由依据）；
 	// 每条私聊消息调用一次。
 	NoteActive func(userID, botID int64)
+	// OnPollError 可选：长轮询（getUpdates）错误回调（多机器人池据此识别
+	// token 被 webhook/其他轮询实例占用的 409 冲突）。每条错误调用一次，
+	// 调用方自行做状态转换去重。
+	OnPollError func(err error)
 	// Channels 提供频道绑定指令能力（binding.Service）；nil 时相关指令回复不可用。
 	Channels Channels
 	// ChannelJoin 提供频道加入指令能力（joinmgr.Service）；nil 时 /join 回复不可用。
@@ -200,6 +204,14 @@ func New(opt Options) (*tgbot.Bot, error) {
 		// 库默认 http.Client 总超时 60s，会掐断大文件上传（慢上行 30MB 即可超时）；
 		// 改为无总超时（时长由调用方 ctx 控制，任务级 15 分钟），长轮询超时保持默认 60s
 		tgbot.WithHTTPClient(time.Minute, &http.Client{}),
+	}
+	// 轮询错误回调：库内部对 getUpdates 失败只记日志并退避重试（Start 不会
+	// 退出），装配层经此回调识别"token 被其他服务占用"的 409 冲突。
+	if opt.OnPollError != nil {
+		handler := opt.OnPollError
+		opts = append(opts, tgbot.WithErrorsHandler(func(err error) {
+			handler(err)
+		}))
 	}
 	// 本地 Bot API 服务器（--local 模式，可选路线）：Bot API 上传上限 50MB → MaxFileSize；
 	// 未配置时超过 50MB 的媒体由 worker 侧路由到 Bot 号 MTProto 大文件直传
@@ -333,4 +345,24 @@ func senderFor(opt Options, b *tgbot.Bot) delivery.Sender {
 		return opt.WrapSender(snd)
 	}
 	return snd
+}
+
+// IsConflictError 报告错误是否为"消息拉取冲突"（HTTP 409）：该 token 正被
+// webhook 或另一个轮询实例占用，本实例的 getUpdates 拿不到任何消息。
+// 库把 409 包装为 ErrorConflict 哨兵的包装错误。
+func IsConflictError(err error) bool {
+	return errors.Is(err, tgbot.ErrorConflict)
+}
+
+// WebhookURL 返回该 bot 当前登记的 webhook 地址（空串 = 未设置 webhook）。
+// 供装配层在 bot 接入时探测"token 被其他 webhook 服务占用"。
+func WebhookURL(ctx context.Context, b *tgbot.Bot) (string, error) {
+	if b == nil {
+		return "", errors.New("botapi: Bot 为空")
+	}
+	info, err := b.GetWebhookInfo(ctx)
+	if err != nil {
+		return "", err
+	}
+	return info.URL, nil
 }

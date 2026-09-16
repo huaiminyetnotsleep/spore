@@ -144,6 +144,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/bots", s.apiAuth(s.handleAPIBotsGet))
 	s.mountAPIWrite(mux, "/api/v1/bots/add", s.handleAPIBotsAdd)
 	s.mountAPIWrite(mux, "/api/v1/bots/{id}/delete", s.handleAPIBotsDelete)
+	// 暂停/恢复：settings 持久化（重启保持）+ 运行时控制即时生效
+	s.mountAPIWrite(mux, "/api/v1/bots/{id}/pause", s.handleAPIBotRuntime(true))
+	s.mountAPIWrite(mux, "/api/v1/bots/{id}/resume", s.handleAPIBotRuntime(false))
 	// 云盘下载：配置视图/保存/连通性测试
 	// 与请求补存（单条/批量）。保存是 PUT（全量替换语义，无 POST 变体），不能
 	// 经 mountAPIWrite 挂载，直接组合认证 + CSRF 中间件（与 channel-bindings

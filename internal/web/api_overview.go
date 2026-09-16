@@ -144,6 +144,11 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 			view.Bot = &ident
 		}
 		if bots := s.botIdentity.BotIdentities(); len(bots) > 0 {
+			// 暂停态存于 settings（运营动作）：尽力而为合并，读取失败不缺页
+			pausedSet := LoadPausedBots(ctx, s.st)
+			for i := range bots {
+				bots[i].Paused = pausedSet[bots[i].ID]
+			}
 			view.Bots = bots
 		}
 	}

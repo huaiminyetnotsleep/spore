@@ -59,6 +59,7 @@ func (s *botIdentityStore) BotIdentities() []web.BotIdentityEntry {
 			BotIdentity: web.BotIdentity{ID: sn.ID, Name: sn.Name, Username: sn.Username},
 			Primary:     i == 0,
 			Online:      sn.Online,
+			Conflict:    sn.Conflict,
 		})
 	}
 	return out
