@@ -23,7 +23,7 @@ import (
 var errFakeSend = errors.New("测试假发送失败")
 
 // chatRecordingSender 在 fakeSender 之上记录各发送调用的目标 chatID
-//（fakeSender 本身丢弃该参数），供"目标是缓存频道而非用户"断言使用。
+// （fakeSender 本身丢弃该参数），供"目标是缓存频道而非用户"断言使用。
 type chatRecordingSender struct {
 	*fakeSender
 	textChats  []int64
@@ -57,7 +57,7 @@ func dumpDeps(t *testing.T, s *store.Store, fetcher Fetcher, sender *chatRecordi
 		Media:   mediaOptionsForTest(t),
 		Store:   s,
 		Log:     testLog(),
-		Dump:    dumpcache.New(sender, s, func() int64 { return testDumpChannel }, testLog()),
+		Dump:    dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()),
 	}
 }
 

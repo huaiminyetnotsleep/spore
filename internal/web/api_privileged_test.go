@@ -619,6 +619,13 @@ type fakeBotIdentity struct{ id BotIdentity }
 
 func (f fakeBotIdentity) BotIdentity() (BotIdentity, bool) { return f.id, f.id.ID != 0 }
 
+func (f fakeBotIdentity) BotIdentities() []BotIdentityEntry {
+	if f.id.ID == 0 {
+		return nil
+	}
+	return []BotIdentityEntry{{BotIdentity: f.id, Primary: true, Online: true}}
+}
+
 func TestAPIMTProtoStatus(t *testing.T) {
 	e, fake := newMTTestEnv(t)
 	j := e.login(t)

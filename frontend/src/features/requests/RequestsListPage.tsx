@@ -29,6 +29,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import {
   buildExportURL,
+  fetchBots,
   fetchCloudDrive,
   fetchRequests,
   fetchSettings,
@@ -55,6 +56,7 @@ import {
   DELIVERY_MODE_TAG_COLORS,
   REQUEST_STATUS_LABELS,
   REQUEST_STATUS_TAG_COLORS,
+  botLabel,
   fmtDuration,
   fmtTime,
   labelOf,
@@ -110,6 +112,7 @@ function sourceMediaDCs(ids: number[] | undefined) {
 
 interface RequestFormValues {
   user_id?: string;
+  bot_id?: string;
   channel?: string;
   status?: string;
   media_type?: string;
@@ -121,6 +124,7 @@ interface RequestFormValues {
 
 interface RequestQuery {
   user_id?: string;
+  bot_id?: string;
   channel?: string;
   status?: string;
   media_type?: string;
@@ -135,6 +139,7 @@ function toQueryValues(values: RequestFormValues): RequestQuery {
   const day = (d: Dayjs | null | undefined) => (d ? d.format("YYYY-MM-DD") : undefined);
   return {
     user_id: values.user_id?.trim() || undefined,
+    bot_id: values.bot_id?.trim() || undefined,
     channel: values.channel?.trim() || undefined,
     status: values.status || undefined,
     media_type: values.media_type || undefined,
@@ -150,6 +155,7 @@ function filtersFromSearchParams(params: URLSearchParams): RequestQuery {
   const value = (name: keyof RequestQuery) => params.get(name)?.trim() || undefined;
   return {
     user_id: value("user_id"),
+    bot_id: value("bot_id"),
     channel: value("channel"),
     status: value("status"),
     media_type: value("media_type"),
@@ -183,6 +189,12 @@ export function RequestsListPage() {
   // 缓存频道配置只用于缓存补写入口的可用性判断；查询失败不阻塞列表。
   const settings = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
   const dumpChannelReady = (settings.data?.dump_channel_id ?? 0) !== 0;
+  // 机器人池列表：机器人筛选下拉选项；查询失败不阻塞列表。
+  const bots = useQuery({ queryKey: ["bots"], queryFn: fetchBots });
+  const botOptions = (bots.data?.bots ?? []).map((bot) => ({
+    value: String(bot.bot_id),
+    label: botLabel(bot.bot_id, bot.username),
+  }));
 
   // 补存目的地弹层（单条/批量共用）：目标 ID 集合 + 当前选中的目的地。
   const [archiveTarget, setArchiveTarget] = useState<number[] | null>(null);
@@ -440,6 +452,11 @@ export function RequestsListPage() {
         <Tag color={DELIVERY_MODE_TAG_COLORS[mode]}>{labelOf(DELIVERY_MODE_LABELS, mode)}</Tag>
       ),
     },
+    {
+      title: "机器人",
+      key: "bot",
+      render: (_, row) => <Text>{botLabel(row.bot_id, row.bot_username)}</Text>,
+    },
     { title: "请求时间", dataIndex: "requested_at", key: "requested_at", render: fmtTime },
     { title: "耗时", dataIndex: "duration_ms", key: "duration", render: fmtDuration },
     {
@@ -547,6 +564,16 @@ export function RequestsListPage() {
         >
           <Form.Item name="user_id">
             <Input placeholder="用户 ID" allowClear className="field-width-120" />
+          </Form.Item>
+          <Form.Item name="bot_id">
+            <Select
+              placeholder="机器人"
+              allowClear
+              className="field-width-140"
+              virtual={false}
+              loading={bots.isPending}
+              options={[{ value: "", label: "全部" }, ...botOptions]}
+            />
           </Form.Item>
           <Form.Item name="channel">
             <Input placeholder="频道" allowClear className="field-width-140" />

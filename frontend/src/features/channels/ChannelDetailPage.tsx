@@ -10,8 +10,8 @@ import dayjs, { type Dayjs } from "dayjs";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { fetchChannelDetail, type DistRow, type TrendPoint } from "../../api/admin";
-import { distKeyText, fmtRate, fmtTime } from "../../shared/format";
+import { fetchChannelDetail, type ChannelBotRow, type DistRow, type TrendPoint } from "../../api/admin";
+import { botLabel, distKeyText, fmtRate, fmtTime } from "../../shared/format";
 import { DetailGate, PageCard, SectionCard } from "../shared/PageStates";
 
 const { Text } = Typography;
@@ -26,6 +26,22 @@ const trendColumns: ColumnsType<TrendPoint> = [
 const distColumns: ColumnsType<DistRow> = [
   { title: "类型 / 错误码", dataIndex: "key", key: "key", render: distKeyText },
   { title: "数量", dataIndex: "count", key: "count", align: "right" },
+];
+
+const botDistColumns: ColumnsType<ChannelBotRow> = [
+  { title: "机器人", dataIndex: "bot_id", key: "bot", render: (_, row) => botLabel(row.bot_id, row.bot_username) },
+  { title: "请求量", dataIndex: "total", key: "total", align: "right" },
+  { title: "成功", dataIndex: "succeeded", key: "succeeded", align: "right" },
+  { title: "失败", dataIndex: "failed", key: "failed", align: "right" },
+  {
+    title: "成功率",
+    key: "rate",
+    align: "right",
+    render: (_, row) => {
+      const done = row.succeeded + row.failed;
+      return fmtRate(done > 0 ? row.succeeded / done : 0, done);
+    },
+  },
 ];
 
 interface RangeFormValues {
@@ -150,6 +166,17 @@ export function ChannelDetailPage() {
                     size="small"
                     columns={distColumns}
                     dataSource={detail.error_dist}
+                    pagination={false}
+                  />
+                </SectionCard>
+              )}
+              {detail.bot_dist?.length > 0 && (
+                <SectionCard title="按机器人分布" data-testid="channel-bot-dist">
+                  <Table<ChannelBotRow>
+                    rowKey="bot_id"
+                    size="small"
+                    columns={botDistColumns}
+                    dataSource={detail.bot_dist}
                     pagination={false}
                   />
                 </SectionCard>

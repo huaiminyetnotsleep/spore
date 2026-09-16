@@ -107,7 +107,7 @@ func (s *Server) handleRequestsCSV(w http.ResponseWriter, r *http.Request, sess 
 	loc := s.tz(ctx)
 	cw := newCSVResponse(w, "requests.csv", truncated, []string{
 		"ID", "用户ID", "频道标识", "消息ID", "来源", "状态", "尝试次数", "错误码",
-		"媒体类型", "源媒体DC", "投递方式", "文件大小(字节)", "文件名", "请求时间", "完成时间", "耗时(毫秒)", "message_url", "媒体内容类型",
+		"媒体类型", "源媒体DC", "投递方式", "机器人", "文件大小(字节)", "文件名", "请求时间", "完成时间", "耗时(毫秒)", "message_url", "媒体内容类型",
 	})
 	written := 0
 	offset := 0
@@ -138,6 +138,7 @@ func (s *Server) handleRequestsCSV(w http.ResponseWriter, r *http.Request, sess 
 				rq.MediaType,
 				sourceMediaDCText(rq.SourceMediaDCIDs),
 				deliveryModeText(rq.DeliveryMode),
+				botDisplay(rq.BotID, rq.BotUsername),
 				strconv.FormatInt(rq.FileSize, 10),
 				rq.FileName,
 				fmtTime(rq.RequestedAt, loc),
@@ -158,6 +159,18 @@ func (s *Server) handleRequestsCSV(w http.ResponseWriter, r *http.Request, sess 
 	}
 	s.audit(ctx, "export.requests", "requests", map[string]any{
 		"rows": written, "truncated": truncated})
+}
+
+// botDisplay 渲染受理 bot：@username 优先，空用户名回退数字 ID；
+// 0（存量行/非 Bot 通道）留空。
+func botDisplay(botID int64, username string) string {
+	if botID == 0 {
+		return ""
+	}
+	if username != "" {
+		return "@" + username
+	}
+	return strconv.FormatInt(botID, 10)
 }
 
 // sourceKindText 把来源类型转为中文。

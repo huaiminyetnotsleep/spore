@@ -14,6 +14,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
+	"github.com/huaiminyetnotsleep/spore/internal/botlist"
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
@@ -49,6 +50,19 @@ type BotMTProtoStatus interface {
 	Status() mtproto.BotStatusSnapshot
 }
 
+// BotMTProtoEntry 是多机器人池中单个 bot 的大文件直传会话状态（脱敏快照）。
+type BotMTProtoEntry struct {
+	BotID    int64
+	Username string
+	Snapshot mtproto.BotStatusSnapshot
+}
+
+// BotMTProtoStatuses 提供池内全部 bot 的大文件直传会话状态（装配顺序，
+// 主 bot 在前）；缺失时 MTProto 状态端点不下发 bots 数组。
+type BotMTProtoStatuses interface {
+	BotMTProtoEntries() []BotMTProtoEntry
+}
+
 // BotIdentity 是总览页展示的 Bot API 机器人身份（脱敏，不含 token）。
 type BotIdentity struct {
 	ID       int64  `json:"id"`
@@ -56,10 +70,19 @@ type BotIdentity struct {
 	Username string `json:"username"` // 不含 @；无公开用户名时为空串
 }
 
-// BotIdentityProvider 提供当前接入的 Bot API 机器人身份；ok=false 表示
-// Bot 尚未就绪或身份查询失败（总览页显示"未接入"）。
+// BotIdentityEntry 是多机器人池中单个 bot 的展示条目（装配顺序，主 bot 在前）。
+type BotIdentityEntry struct {
+	BotIdentity
+	Primary bool `json:"primary"` // 是否主 bot（env 首项）
+	Online  bool `json:"online"`  // Bot API 长轮询是否在线
+}
+
+// BotIdentityProvider 提供当前接入的 Bot API 机器人身份：BotIdentity 返回
+// 主 bot（ok=false 表示池为空，总览页显示"未接入"）；BotIdentities 返回
+// 池内全部成员快照。
 type BotIdentityProvider interface {
 	BotIdentity() (BotIdentity, bool)
+	BotIdentities() []BotIdentityEntry
 }
 
 // UserProfileLookup 是 Web 手动刷新用户资料的最小生命周期感知接口。
@@ -103,20 +126,26 @@ type ChannelJoinManager interface {
 
 // Options 聚合管理端服务依赖。
 type Options struct {
-	Store       *store.Store // 必填：业务数据库（settings/web_sessions/audit_log）
-	Cfg         config.Config
-	Log         *slog.Logger
-	Now         func() time.Time    // 可注入时钟（测试用）；缺省 time.Now
-	OAuth       OAuthEndpoints      // 可选：整体覆盖 GitHub OAuth 端点（测试注入假服务）
-	Client      *http.Client        // 可选：OAuth 出站 HTTP 客户端；缺省带超时的独立客户端
-	Access      *access.Service     // 可选：访问控制服务（管理页面的操作入口）；缺失时相关路由报不可用
-	Queue       QueueStats          // 可选：内存队列指标（总览页）；缺失时不展示
-	MTProto     MTProtoRelogin      // 可选：MTProto 登录会话（状态/扫码/重连）；缺失时显示未接入
-	BotMTProto  BotMTProtoStatus    // 可选：Bot MTProto 会话状态（状态/DC）；缺失时显示未接入
-	BotIdentity BotIdentityProvider // 可选：接入的 Bot API 机器人身份（总览页）；缺失或未就绪时显示未接入
-	Profile     UserProfileLookup   // 可选：Telegram 用户资料刷新上下文
-	RestartFunc func() error        // 可选：受控优雅重启；生产实现只发送 SIGTERM
-	Hub         *notify.Hub         // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
+	Store      *store.Store // 必填：业务数据库（settings/web_sessions/audit_log）
+	Cfg        config.Config
+	Log        *slog.Logger
+	Now        func() time.Time // 可注入时钟（测试用）；缺省 time.Now
+	OAuth      OAuthEndpoints   // 可选：整体覆盖 GitHub OAuth 端点（测试注入假服务）
+	Client     *http.Client     // 可选：OAuth 出站 HTTP 客户端；缺省带超时的独立客户端
+	Access     *access.Service  // 可选：访问控制服务（管理页面的操作入口）；缺失时相关路由报不可用
+	Queue      QueueStats       // 可选：内存队列指标（总览页）；缺失时不展示
+	MTProto    MTProtoRelogin   // 可选：MTProto 登录会话（状态/扫码/重连）；缺失时显示未接入
+	BotMTProto BotMTProtoStatus // 可选：Bot MTProto 会话状态（状态/DC）；缺失时显示未接入
+	// BotMTProtoList 提供池内逐 bot 的会话状态（多机器人池）；缺失时
+	// MTProto 状态端点不下发 bots 数组。
+	BotMTProtoList BotMTProtoStatuses
+	BotIdentity    BotIdentityProvider // 可选：接入的 Bot API 机器人身份（总览页）；缺失或未就绪时显示未接入
+	// BotList 是机器人池的 token 列表管理器（bots.json 增删）；缺失时
+	// 机器人管理页返回受控不可用。token 只进不出：任何响应不含 token。
+	BotList     *botlist.Manager
+	Profile     UserProfileLookup // 可选：Telegram 用户资料刷新上下文
+	RestartFunc func() error      // 可选：受控优雅重启；生产实现只发送 SIGTERM
+	Hub         *notify.Hub       // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
 	// Progress 是处理中请求的实时传输进度注册表，与 worker 共享同一实例
 	// （internal/progress）；nil 时请求记录不携带进度字段。
 	Progress *progress.Registry
@@ -162,7 +191,9 @@ type Server struct {
 	queue            QueueStats
 	mtp              MTProtoRelogin
 	botMTP           BotMTProtoStatus
+	botMTPs          BotMTProtoStatuses
 	botIdentity      BotIdentityProvider
+	botList          *botlist.Manager
 	profile          UserProfileLookup
 	restartFunc      func() error
 	restartMu        sync.Mutex
@@ -229,7 +260,9 @@ func New(opt Options) (*Server, error) {
 		queue:        opt.Queue,
 		mtp:          opt.MTProto,
 		botMTP:       opt.BotMTProto,
+		botMTPs:      opt.BotMTProtoList,
 		botIdentity:  opt.BotIdentity,
+		botList:      opt.BotList,
 		profile:      opt.Profile,
 		restartFunc:  opt.RestartFunc,
 		nonceFunc:    randomToken,

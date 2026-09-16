@@ -117,7 +117,7 @@ func TestEnabledRequiresChannel(t *testing.T) {
 	if nilSvc.Enabled() {
 		t.Fatal("nil 服务不应 Enabled")
 	}
-	s := New(&fakeSender{}, openStore(t), func() int64 { return 0 }, testLog())
+	s := New(&fakeSender{}, nil, openStore(t), func() int64 { return 0 }, testLog())
 	if s.Enabled() {
 		t.Fatal("channelID=0 不应 Enabled")
 	}
@@ -129,11 +129,11 @@ func TestEnabledRequiresChannel(t *testing.T) {
 func TestWriteCleanSingleMedia(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "正文")}
-	s.WriteClean(ctx, 111, "example", 7, items, []int{55}, "https://t.me/example/7")
+	s.WriteClean(ctx, 0, 111, "example", 7, items, []int{55}, "https://t.me/example/7")
 
 	if len(fs.singleCopies) != 1 {
 		t.Fatalf("单媒体应走 CopyMessage，得到 %+v", fs.singleCopies)
@@ -157,9 +157,9 @@ func TestWriteCleanSingleMedia(t *testing.T) {
 func TestWriteCleanSingleText(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 
-	s.WriteClean(context.Background(), 111, "example", 7,
+	s.WriteClean(context.Background(), 0, 111, "example", 7,
 		[]message.Item{{ID: 7, Text: "纯文本"}}, []int{66}, "https://t.me/example/7")
 
 	if len(fs.sent) != 1 || len(fs.singleCopies) != 0 {
@@ -173,11 +173,11 @@ func TestWriteCleanSingleText(t *testing.T) {
 func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "图一"), mediaItem(8, "图二"), {ID: 9, Text: "附言"}}
-	s.WriteClean(ctx, 111, "example", 7, items, []int{55, 56, 57}, "https://t.me/example/7")
+	s.WriteClean(ctx, 0, 111, "example", 7, items, []int{55, 56, 57}, "https://t.me/example/7")
 
 	if len(fs.copyMsgs) != 1 || fs.copyMsgs[0] != [2]int64{111, -1001234567890} {
 		t.Fatalf("多条应整批 CopyMessages: %+v", fs.copyMsgs)
@@ -202,18 +202,18 @@ func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 func TestWriteCleanFailureNoEntry(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{failCopies: true}
-	s := New(fs, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 	ctx := context.Background()
 
-	s.WriteClean(ctx, 111, "example", 7,
+	s.WriteClean(ctx, 0, 111, "example", 7,
 		[]message.Item{mediaItem(7, "x")}, []int{55}, "https://t.me/example/7")
 	if _, err := st.LatestDumpEntry(ctx, "example", 7); err == nil {
 		t.Fatal("复制失败不应落条目")
 	}
 
 	// 条目数与已发送数不一致同样跳过
-	s2 := New(&fakeSender{}, st, func() int64 { return -1001234567890 }, testLog())
-	s2.WriteClean(ctx, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, []int{55}, "")
+	s2 := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s2.WriteClean(ctx, 0, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, []int{55}, "")
 	if _, err := st.LatestDumpEntry(ctx, "example", 8); err == nil {
 		t.Fatal("数量不一致不应落条目")
 	}
@@ -222,7 +222,7 @@ func TestWriteCleanFailureNoEntry(t *testing.T) {
 func TestCopyOut(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701, 702}}); err != nil {
 		t.Fatalf("落条目失败: %v", err)
@@ -231,7 +231,7 @@ func TestCopyOut(t *testing.T) {
 	if !ok || len(e.DumpIDs) != 2 {
 		t.Fatalf("应命中条目: %+v ok=%v", e, ok)
 	}
-	ids, err := s.CopyOut(context.Background(), 222, e.DumpIDs)
+	ids, err := s.CopyOut(context.Background(), 0, 222, e.DumpIDs)
 	if err != nil || len(ids) != 2 {
 		t.Fatalf("复制应成功: %v %v", ids, err)
 	}
@@ -270,7 +270,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("无条目可补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("无条目应放行补写")
 		}
@@ -279,7 +279,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制成功判定有效并清理试探副本", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); !live {
 			t.Fatal("试探复制成功应判定有效")
@@ -292,7 +292,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制失败判定失效放行补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{failCopies: true}
-		s := New(snd, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("试探复制失败（消息已删）应放行补写")

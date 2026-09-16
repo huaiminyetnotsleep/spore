@@ -12,6 +12,10 @@ import (
 // ErrAlbumNotSupported 表示整组发送不可行（混入不支持类型或超限图片），调用方应降级逐条发。
 var ErrAlbumNotSupported = errors.New("album contains unsupported media type")
 
+// ErrPoolUnavailable 表示多机器人池当前没有任何可用通道（全部 bot 未就绪），
+// 调用方按"Bot 未就绪"既有语义处理（事件补发/通知失败不留痕）。
+var ErrPoolUnavailable = errors.New("bot pool unavailable")
+
 // Config 是 Sender 实现的运行参数。
 type Config struct {
 	// PhotoLimit 图片经 sendPhoto 发送的大小上限（官方服务器 10MB；

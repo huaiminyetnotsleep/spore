@@ -10,11 +10,14 @@ import (
 // ---- 申请审批 ----
 
 // apiApplicationRow 是待审批申请行 DTO（与 SSR 申请列表字段一致）。
+// SourceBot 是申请来源 bot（首次 /start 的受理 bot）；0 = 存量行。
 type apiApplicationRow struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	AppliedAt   int64  `json:"applied_at"` // Unix 毫秒（users.created_at）
+	ID                int64  `json:"id"`
+	Username          string `json:"username"`
+	DisplayName       string `json:"display_name"`
+	AppliedAt         int64  `json:"applied_at"` // Unix 毫秒（users.created_at）
+	SourceBotID       int64  `json:"source_bot_id"`
+	SourceBotUsername string `json:"source_bot_username,omitempty"`
 }
 
 // handleAPIApplicationsList 返回待审批申请（pending 用户，按 ID 升序）。
@@ -34,6 +37,7 @@ func (s *Server) handleAPIApplicationsList(w http.ResponseWriter, r *http.Reques
 		}
 		items = append(items, apiApplicationRow{
 			ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, AppliedAt: u.CreatedAt,
+			SourceBotID: u.SourceBotID, SourceBotUsername: u.SourceBotUsername,
 		})
 	}
 	// 与 SSR 相同的稳定顺序：按申请先后（ID 升序）

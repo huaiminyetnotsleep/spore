@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tgbot "github.com/go-telegram/bot"
@@ -101,12 +102,57 @@ type StatusFunc func(context.Context) (RuntimeStatus, error)
 // Status implements StatusProvider.
 func (f StatusFunc) Status(ctx context.Context) (RuntimeStatus, error) { return f(ctx) }
 
+// BotInfo 是单个 bot 的脱敏身份（getMe 回填）。
+type BotInfo struct {
+	ID       int64
+	Username string
+}
+
+// BotRef 持有当前 bot 实例的身份引用：botapi.New 时以 token 前缀占位，
+// 装配层 getMe 成功后回填（先于长轮询启动，handler 读取时恒有值）。
+// 多机器人池下每个 Bot 实例持独立 BotRef，handler 据此归属请求与用户来源。
+type BotRef struct {
+	v atomic.Pointer[BotInfo]
+}
+
+// NewBotRef 以初始身份创建引用（token 数字前缀即 bot id，getMe 前已知）。
+func NewBotRef(id int64, username string) *BotRef {
+	r := &BotRef{}
+	r.v.Store(&BotInfo{ID: id, Username: username})
+	return r
+}
+
+// Set 回填身份（getMe 结果）。
+func (r *BotRef) Set(id int64, username string) {
+	r.v.Store(&BotInfo{ID: id, Username: username})
+}
+
+// Get 读取身份快照；nil 接收者安全（返回零值，兼容未注入的测试构造）。
+func (r *BotRef) Get() BotInfo {
+	if r == nil {
+		return BotInfo{}
+	}
+	info := r.v.Load()
+	if info == nil {
+		return BotInfo{}
+	}
+	return *info
+}
+
 // Options 聚合 Bot 所需依赖。
 type Options struct {
 	Cfg    config.Config
 	Log    *slog.Logger
 	Queue  *queue.Queue // 必填：链接提取任务队列
 	Access Access       // 必填：访问控制服务（白名单与额度由数据库接管）
+	// Token 是本实例的 bot token（多机器人池）；空串回落 Cfg.BotToken
+	//（单 bot 部署兼容）。
+	Token string
+	// Bot 是本实例的身份引用（handler 据此归属请求/用户来源）；可空。
+	Bot *BotRef
+	// NoteActive 可选：记录用户最近活跃的 bot（多机器人通知路由依据）；
+	// 每条私聊消息调用一次。
+	NoteActive func(userID, botID int64)
 	// Channels 提供频道绑定指令能力（binding.Service）；nil 时相关指令回复不可用。
 	Channels Channels
 	// ChannelJoin 提供频道加入指令能力（joinmgr.Service）；nil 时 /join 回复不可用。
@@ -160,7 +206,11 @@ func New(opt Options) (*tgbot.Bot, error) {
 	if opt.Cfg.BotAPIURL != "" {
 		opts = append(opts, tgbot.WithServerURL(opt.Cfg.BotAPIURL))
 	}
-	b, err := tgbot.New(opt.Cfg.BotToken, opts...)
+	token := opt.Token
+	if token == "" {
+		token = opt.Cfg.BotToken // 单 bot 部署兼容：未显式传 token 时沿用 cfg
+	}
+	b, err := tgbot.New(token, opts...)
 	if err != nil {
 		return nil, err
 	}

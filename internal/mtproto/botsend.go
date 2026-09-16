@@ -266,7 +266,7 @@ func mediaReference(mm tg.MessageMediaClass) (tg.InputMediaClass, error) {
 // uploadThumb 上传文档缩略图（worker 解析好的 JPEG 字节，≤200KB 级）。
 // 尽力而为：失败只记日志并降级为无缩略图——缩略图是外观增强，不值得让
 // 可能已完成大半的大文件上传前功尽弃；仅 ctx 已取消时向外传播错误
-//（主文件上传必然同样失败，早失败省去无谓等待）。
+// （主文件上传必然同样失败，早失败省去无谓等待）。
 func (c *BotClient) uploadThumb(ctx context.Context, up *uploader.Uploader, m message.Media) (tg.InputFileClass, error) {
 	if len(m.ThumbJPEG) == 0 {
 		return nil, nil

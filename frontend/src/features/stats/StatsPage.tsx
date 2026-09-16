@@ -6,12 +6,12 @@
  * overview 接口，不受筛选影响）。数据经 GET /api/v1/stats 获取，缺省近 7 天。
  */
 import { useQuery } from "@tanstack/react-query";
-import { DatePicker, Segmented, Space, Spin, Typography } from "antd";
+import { DatePicker, Segmented, Select, Space, Spin, Typography } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { lazy, Suspense, useState } from "react";
 
-import { fetchStats, type RangeParams } from "../../api/admin";
-import { fmtRate } from "../../shared/format";
+import { fetchBots, fetchStats, type RangeParams } from "../../api/admin";
+import { botLabel, fmtRate } from "../../shared/format";
 import { LoadError, SectionCard } from "../shared/PageStates";
 import { MetricGrid } from "../shared/MetricGrid";
 import { SnapshotSection } from "./SnapshotSection";
@@ -57,10 +57,17 @@ export function StatsPage() {
   const [preset, setPreset] = useState<PresetKey | "custom">(DEFAULT_PRESET);
   // RangePicker 受控显示值：快捷范围同步回显；全量时清空并禁用。
   const [pickerValue, setPickerValue] = useState<PickerRange>(null);
+  // 机器人筛选（多机器人池）：切换即生效；查询失败不阻塞页面。
+  const [botID, setBotID] = useState<string | undefined>(undefined);
+  const bots = useQuery({ queryKey: ["bots"], queryFn: fetchBots });
+  const botOptions = (bots.data?.bots ?? []).map((bot) => ({
+    value: String(bot.bot_id),
+    label: botLabel(bot.bot_id, bot.username),
+  }));
 
   const { data, isPending, isError, refetch } = useQuery({
-    queryKey: ["stats", range],
-    queryFn: () => fetchStats(range),
+    queryKey: ["stats", range, botID],
+    queryFn: () => fetchStats({ ...range, bot_id: botID }),
   });
 
   if (isPending) {
@@ -129,6 +136,16 @@ export function StatsPage() {
             maxDate={dayjs()}
             allowClear
             disabled={isAll}
+          />
+          <Select
+            placeholder="机器人"
+            allowClear
+            className="field-width-140"
+            virtual={false}
+            loading={bots.isPending}
+            value={botID}
+            onChange={(value) => setBotID(value || undefined)}
+            options={[{ value: "", label: "全部" }, ...botOptions]}
           />
         </Space>
       </SectionCard>

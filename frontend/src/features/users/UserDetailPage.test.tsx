@@ -43,6 +43,8 @@ function detail(overrides: Partial<UserDetail>): UserDetail {
     status: "enabled",
     is_owner: false,
     note: "",
+    source_bot_id: 0,
+    source_bot_username: "",
     created_at: 1756598400000,
     first_used_at: 1756598400000,
     last_used_at: 1756598400000,

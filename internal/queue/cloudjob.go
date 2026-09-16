@@ -437,7 +437,7 @@ func sendCloudConfirm(ctx context.Context, d Deps, j Job, paths []string, skippe
 		b.WriteString("\n网盘官网：")
 		b.WriteString(html.EscapeString(site))
 	}
-	if _, err := d.Sender.SendMessage(ctx, j.ChatID, b.String()); err != nil {
+	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, b.String()); err != nil {
 		d.Log.Warn("云盘确认文本发送失败", "job_id", j.ID, "error", err.Error())
 	}
 }

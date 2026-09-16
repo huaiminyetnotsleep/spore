@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../../api/client";
 import {
+  fetchBots,
   fetchCloudDrive,
   fetchRequests,
   fetchSettings,
@@ -38,6 +39,7 @@ vi.mock("../../api/admin", async () => {
     fetchRequests: vi.fn(),
     fetchCloudDrive: vi.fn(),
     fetchSettings: vi.fn(),
+    fetchBots: vi.fn(),
   };
 });
 
@@ -58,6 +60,7 @@ vi.mock("../../api/mutations", async () => {
 
 const fetchRequestsMock = vi.mocked(fetchRequests);
 const fetchCloudDriveMock = vi.mocked(fetchCloudDrive);
+const fetchBotsMock = vi.mocked(fetchBots);
 const fetchSettingsMock = vi.mocked(fetchSettings);
 const deleteRequestMock = vi.mocked(deleteRequest);
 const cancelRequestMock = vi.mocked(cancelRequest);
@@ -108,6 +111,8 @@ function requestRow(overrides: Partial<RequestRow>): RequestRow {
     status: "succeeded",
     attempt: 1,
     error_code: "",
+    bot_id: 0,
+    bot_username: "",
     media_type: "photo",
     media_types: ["photo"],
     source_media_dc_ids: [],
@@ -139,6 +144,7 @@ describe("请求记录列表页", () => {
     fetchRequestsMock.mockReset();
     fetchCloudDriveMock.mockReset().mockResolvedValue(cloudDriveView({ enabled: false }));
     fetchSettingsMock.mockReset().mockResolvedValue(settingsView());
+    fetchBotsMock.mockReset().mockResolvedValue({ bots: [], max_bots: 20, need_apply: false });
     deleteRequestMock.mockReset();
     cancelRequestMock.mockReset();
     cancelRequestsMock.mockReset();
@@ -394,8 +400,8 @@ describe("请求记录列表页", () => {
 
     renderPage();
     await screen.findByText("example");
-    // 筛选表单的三个 Select：状态 / 媒体类型 / 投递方式（DOM 顺序）
-    const deliverySelect = screen.getAllByRole("combobox")[2]
+    // 筛选表单的四个 Select：机器人 / 状态 / 媒体类型 / 投递方式（DOM 顺序）
+    const deliverySelect = screen.getAllByRole("combobox")[3]
       .closest(".ant-select")
       ?.querySelector(".ant-select-selector");
     expect(deliverySelect).not.toBeNull();

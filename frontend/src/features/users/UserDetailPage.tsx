@@ -25,6 +25,7 @@ import {
 import {
   USER_STATUS_LABELS,
   USER_STATUS_TAG_COLORS,
+  botLabel,
   fmtTime,
   labelOf,
 } from "../../shared/format";
@@ -191,6 +192,10 @@ export function UserDetailPage() {
                   {detail.last_denied_at
                     ? `${fmtTime(detail.last_denied_at)} ${detail.last_denied_text}`
                     : "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="来源机器人">
+                  {botLabel(detail.source_bot_id, detail.source_bot_username)}
+                  <Text type="secondary">（首次 /start 的受理机器人）</Text>
                 </Descriptions.Item>
                 <Descriptions.Item label="累计请求数">
                   {detail.total_requests}{" "}

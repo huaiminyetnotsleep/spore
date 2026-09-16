@@ -8,6 +8,8 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
@@ -30,15 +32,27 @@ type apiTrendPoint struct {
 	Failed    int    `json:"failed"`
 }
 
-// apiChannelDetail 是频道详情 DTO：头部统计（全时段）+ 时间范围内的趋势与分布。
+// apiChannelBotRow 是频道详情内按受理 bot 的分布条目（多机器人池）。
+// BotID=0（存量行）照常返回，前端显示"未知"。
+type apiChannelBotRow struct {
+	BotID       int64  `json:"bot_id"`
+	BotUsername string `json:"bot_username,omitempty"`
+	Total       int    `json:"total"`
+	Succeeded   int    `json:"succeeded"`
+	Failed      int    `json:"failed"`
+}
+
+// apiChannelDetail 是频道详情 DTO：头部统计（全时段）+ 时间范围内的趋势、
+// 分布与按 bot 分布。
 type apiChannelDetail struct {
-	Key       string          `json:"key"`
-	Stats     apiChannelRow   `json:"stats"`
-	Trend     []apiTrendPoint `json:"trend"`
-	MediaDist []apiDistRow    `json:"media_dist"`
-	ErrorDist []apiDistRow    `json:"error_dist"`
-	SinceDay  string          `json:"since_day"`
-	UntilDay  string          `json:"until_day"`
+	Key       string             `json:"key"`
+	Stats     apiChannelRow      `json:"stats"`
+	Trend     []apiTrendPoint    `json:"trend"`
+	MediaDist []apiDistRow       `json:"media_dist"`
+	ErrorDist []apiDistRow       `json:"error_dist"`
+	BotDist   []apiChannelBotRow `json:"bot_dist"`
+	SinceDay  string             `json:"since_day"`
+	UntilDay  string             `json:"until_day"`
 }
 
 // handleAPIChannelsList 返回频道排行分页数据；总数经 CountChannelStats DAO。
@@ -56,6 +70,15 @@ func (s *Server) handleAPIChannelsList(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	rangeFilter := store.StatsFilter{Since: tr.Since, Until: tr.Until}
+	// bot_id 筛选（多机器人池）：限定只统计该受理 bot 的请求
+	if raw := strings.TrimSpace(r.URL.Query().Get("bot_id")); raw != "" {
+		botID, perr := strconv.ParseInt(raw, 10, 64)
+		if perr != nil || botID <= 0 {
+			s.apiBadRequest(w, r, op, "机器人 ID 必须为正整数")
+			return
+		}
+		rangeFilter.BotID = botID
+	}
 	total, err := s.st.CountChannelStats(ctx, rangeFilter)
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
@@ -112,6 +135,7 @@ func (s *Server) handleAPIChannelDetail(w http.ResponseWriter, r *http.Request, 
 		Trend:     []apiTrendPoint{},
 		MediaDist: []apiDistRow{},
 		ErrorDist: []apiDistRow{},
+		BotDist:   []apiChannelBotRow{},
 	}
 	rangeFilter := store.StatsFilter{ChannelKey: key, Since: tr.Since, Until: tr.Until}
 	// 趋势按运营时区当前偏移对齐当地日（沿用 SSR 时代频道详情页的口径）
@@ -135,6 +159,17 @@ func (s *Server) handleAPIChannelDetail(w http.ResponseWriter, r *http.Request, 
 	} else {
 		for _, d := range ed {
 			view.ErrorDist = append(view.ErrorDist, apiDistRow{Key: d.Key, Count: d.Count})
+		}
+	}
+	// 按受理 bot 分布（多机器人池；尽力而为，失败不缺整页）
+	if bd, err := s.st.ListChannelBotStats(ctx, rangeFilter); err != nil {
+		s.log.Warn("聚合频道机器人分布失败", "op", op, "error", err.Error())
+	} else {
+		for _, b := range bd {
+			view.BotDist = append(view.BotDist, apiChannelBotRow{
+				BotID: b.BotID, BotUsername: b.BotUsername,
+				Total: b.Total, Succeeded: b.Succeeded, Failed: b.Failed,
+			})
 		}
 	}
 	writeAPISingle(w, view)

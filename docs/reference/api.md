@@ -162,7 +162,8 @@
 | `workers` | int | 媒体处理 worker 数 |
 | `health` | object | 服务健康快照，见下 |
 | `queue` | object \| 缺省 | 内存队列指标 `{len, cap}`；队列未注入时省略 |
-| `bot` | object \| 缺省 | 接入的 Bot API 机器人身份 `{id, name, username}`（getMe 快照；`name` 为 first_name，`username` 不含 `@`）；Bot 未就绪或身份查询未成功时整体省略，前端显示"未接入" |
+| `bot` | object \| 缺省 | 接入的 Bot API 机器人身份（主 bot）：`{id, name, username}`（getMe 快照；`name` 为 first_name，`username` 不含 `@`）；Bot 未就绪或身份查询未成功时整体省略，前端显示"未接入" |
+| `bots` | array \| 缺省 | 多机器人池全部成员 `{id, name, username, primary, online}`（装配顺序，主 bot 在前；`primary` 是否主 bot，`online` 长轮询是否在线）；空池或旧后端省略 |
 | `requests` | object | 请求行状态计数 `{queued_rows, processing_rows}`（全时段当前值） |
 | `users` | object | 用户状态计数 `{total, enabled, pending, disabled, archived}` |
 | `join` | object | 频道加入全时段快照，见下 |
@@ -226,7 +227,7 @@
 
 ### GET /api/v1/stats
 
-业务统计页数据（认证）。查询参数：`since`/`until`（`YYYY-MM-DD`，可选；缺省运营时区近 7 天含当天）；`all=1`（可选；全量统计，忽略 `since`/`until`，`since_day`/`until_day` 回显空串）。
+业务统计页数据（认证）。查询参数：`since`/`until`（`YYYY-MM-DD`，可选；缺省运营时区近 7 天含当天）；`all=1`（可选；全量统计，忽略 `since`/`until`，`since_day`/`until_day` 回显空串）；`bot_id`（可选；多机器人池限定受理 bot，正整数）。
 
 响应 `apiStatsView`：
 
@@ -249,6 +250,7 @@
 | `error_dist` | array | 错误原因排行 `{key, count, ratio}`；Top 5 之外合并为 `key: "__other__"` |
 | `dc_dist` | array | 源媒体所在 Telegram DC 分布 `{key, count}`；`key` 为 DC ID 十进制串，空串 = 未记录；跨多个 DC 的请求在每个 DC 各计一次 |
 | `dc_trend` | array | 按日源媒体 DC 分布 `{day, dist: [{key, count}]}`；范围内空日期补齐（`dist` 为空数组）；全量模式只含有数据日期 |
+| `bot_dist` | array | 按受理 bot 的分布 `{bot_id, bot_username, total, succeeded, failed, last_requested_at}`（多机器人池；不受 `bot_id` 筛选影响，展示全量分布；`bot_id=0` 为存量行/非 Bot 通道创建，前端显示"未知"） |
 
 错误：`400`（日期格式、since 晚于 until）、`500/503`（存储类，经统一映射）；分布类聚合失败时留空并记 Warn（尽力而为）。
 
@@ -398,6 +400,7 @@
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `user_id` | int64 | 正整数 |
+| `bot_id` | int64 | 正整数；多机器人池限定受理 bot（缺省 = 全部） |
 | `status` | string | `queued \| processing \| succeeded \| failed \| cancelled` |
 | `channel` | string | 频道标识 |
 | `media_type` | string | 媒体类型；多成员 Telegram 相册统一为 `album` |
@@ -424,6 +427,8 @@
 | `media_types` | string[] | 请求包含的去重媒体类型；相册用于区分 `photo`、`video` 或二者组合，caption 不参与；旧记录为空数组 |
 | `source_media_dc_ids` | int[] | 源媒体所在 Telegram DC ID 去重列表；文本、旧记录或未知时为空数组；不表示消息或用户地理位置 |
 | `delivery_mode` | string | `upload \| mixed \| text \| cloud \| reuse`（`mixed` 为历史遗留值；`reference`（源引用直发）已移除，仅历史记录可能保留；`cloud` 为云盘下载：`/download` 指令或管理端补存创建；`reuse` 为缓存频道干净副本复用命中） |
+| `bot_id` | int64 | 受理 bot 的 Telegram 账号 ID（多机器人池归属）；`0` = 存量行/非 Bot 通道创建，前端显示"—" |
+| `bot_username` | string \| 缺省 | 受理时的 bot 用户名快照（不含 `@`）；空串省略 |
 | `requested_at` | int64 | 请求时间 |
 | `duration_ms` | int64 | 总耗时 |
 
@@ -1216,13 +1221,54 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 | `updated_at` | int64 | 状态更新时间 |
 | `qr_available` | bool | 是否有待扫描的登录二维码 |
 | `last_error` | string | 最近错误；无则省略 |
-| `bot_state` | string | Bot MTProto 会话状态：`ready \| offline`；未接入时省略 |
-| `bot_dc_id` | int | Bot 当前主会话 DC ID；未知或离线时省略 |
-| `bot_updated_at` | int64 | Bot 会话状态更新时间；未接入时省略 |
+| `bot_state` | string | Bot MTProto 会话状态（主 bot）：`ready \| offline`；未接入时省略 |
+| `bot_dc_id` | int | 主 bot 当前主会话 DC ID；未知或离线时省略 |
+| `bot_updated_at` | int64 | 主 bot 会话状态更新时间；未接入时省略 |
+| `bots` | array \| 缺省 | 多机器人池逐 bot 的直传会话状态 `{bot_id, username, state, dc_id, updated_at}`（装配顺序，主 bot 在前）；单 bot 部署省略 |
 
 ### POST /api/v1/mtproto/relogin
 
 触发重连（认证 + CSRF），无请求体。仅离线状态接受。响应 `{"ok":true,"message":"已触发重连，请等待新的扫码二维码。"}`。错误：`409 CONFLICT`（当前不是离线状态）、`503 TELEGRAM_UNAVAILABLE`（未接入）。
+
+---
+
+## 12a. 机器人管理（多机器人池）
+
+机器人池的列表与增删（认证；增删另需 CSRF）。列表合并环境变量来源（只读）与 `data/bots.json` 文件来源（可增删），并合并运行时身份（getMe 快照、长轮询在线状态、MTProto 直传会话）。修改后**重启进程生效**。数据范围红线：token 只进不出——任何响应、日志与审计不回显 token。
+
+### GET /api/v1/bots
+
+响应 `botsView`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `bots` | array | 条目列表（env 在前、装配顺序；主 bot 在首），见下 |
+| `max_bots` | int | 机器人数量上限（20） |
+| `need_apply` | bool | 是否存在等待重启生效的条目 |
+
+`bots` 行：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `bot_id` | int64 | Telegram bot 账号 ID（token 数字前缀）；未接入时仍可推导 |
+| `username` / `name` | string | getMe 身份（未接入时省略） |
+| `primary` | bool | 是否主 bot（env 首项） |
+| `online` | bool | Bot API 长轮询是否在线 |
+| `mtproto_state` | string \| 缺省 | 该 bot 的 MTProto 直传会话状态；未接入时省略 |
+| `source` | string | `env`（环境变量，只读）\| `file`（管理端可增删） |
+| `restart_pending` | bool | 已配置但当前进程未接入（等待重启） |
+
+错误：`503`（未接入机器人列表管理器）。
+
+### POST /api/v1/bots/add
+
+新增文件来源 bot（认证 + CSRF）。请求体：`{"token": "<Bot API token>"}`（服务端校验格式、去重、上限 20，写入 `data/bots.json` 后原子落盘，0600）。响应 `{"ok":true, "bots":[...], "need_apply":true, "restart_hint":"…重启后生效…"}`。
+
+错误：`400`（token 格式非法、重复、数量达上限）；`503`（未接入管理器）。审计：`bots.add`（target `bot:<id>`，不含 token）。
+
+### POST /api/v1/bots/{id}/delete
+
+移除文件来源 bot（认证 + CSRF），无请求体；`{id}` 为 bot 数字 ID。响应同 add。错误：`400`（条目不存在或为 env 来源——env 来源请在部署环境修改后重启）；`503`（未接入管理器）。审计：`bots.remove`。
 
 ---
 

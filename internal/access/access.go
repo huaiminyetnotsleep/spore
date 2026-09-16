@@ -123,6 +123,10 @@ type Submission struct {
 	// 完全一致，通过后 requests 行落 cloud 占位与目的地名称，任务带同名
 	// CloudDest 走网盘上传路径。空值 = 现有 TG 投递（零值兼容）。
 	CloudDest string
+	// BotID/BotUsername 是受理 bot 的身份（多机器人池归属）；0 = 存量调用方
+	//（Web 补存等内部通道），落库为 0、worker 回退主 bot 处理。
+	BotID       int64
+	BotUsername string
 }
 
 // Decision 是提交裁定：Allowed 表示已建任务并入队；
@@ -247,6 +251,8 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 			MessageID:   in.Ref.MessageID,
 			RequestedAt: now.UnixMilli(),
 			QueuedAt:    now.UnixMilli(),
+			BotID:       in.BotID,
+			BotUsername: in.BotUsername,
 		}
 		if in.CloudDest != "" {
 			reqIn.DeliveryMode = store.DeliveryModeCloud
@@ -273,6 +279,7 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 	// 落库后入队失败按"处理失败"收尾（额度不返还），用户侧收到队列满提示
 	job := queue.NewJob(in.UserID, in.ChatID, in.Ref, in.StatusMsgID, d.RequestID)
 	job.CloudDest = in.CloudDest
+	job.BotID = in.BotID
 	if err := s.queue.Enqueue(job); err != nil {
 		s.log.Warn("事务提交后入队失败（队列已满）", "user_id", in.UserID, "request_id", d.RequestID)
 		finish := store.RequestResult{
@@ -481,6 +488,10 @@ type StartInput struct {
 	UserID      int64
 	Username    string // Telegram @username，可空
 	DisplayName string // 显示名，可空
+	// BotID/BotUsername 是受理 bot（首次 /start 的来源 bot，落 users 来源列）；
+	// 0 = Web 管理端等非 Bot 通道。
+	BotID       int64
+	BotUsername string
 }
 
 // StartOutcome 是 /start 的处理结果。
@@ -503,6 +514,10 @@ func (s *Service) HandleStart(ctx context.Context, in StartInput) (StartOutcome,
 			Username:    in.Username,
 			DisplayName: in.DisplayName,
 			CreatedAt:   s.now().UnixMilli(), // 与服务时钟一致，避免注入时钟下时间倒挂
+
+			// 来源 bot（首次 /start 的受理 bot；多机器人池归属展示用）
+			SourceBotID:       in.BotID,
+			SourceBotUsername: in.BotUsername,
 		}); err != nil {
 			return 0, err
 		}

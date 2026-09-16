@@ -76,9 +76,12 @@ type apiOverviewView struct {
 	Workers   int               `json:"workers"`
 	Health    apiOverviewHealth `json:"health"`
 	Queue     *apiQueueView     `json:"queue,omitempty"`
-	// Bot 是接入的 Bot API 机器人身份（getMe 快照）；Bot 未就绪或身份
-	// 查询未成功时整体省略，前端显示"未接入"。
+	// Bot 是接入的 Bot API 机器人身份（getMe 快照，主 bot）；Bot 未就绪或
+	// 身份查询未成功时整体省略，前端显示"未接入"。
+	// Bots 是多机器人池全部成员（装配顺序，主 bot 在前）；单 bot 部署长度
+	// 为 1。空池（尚无 bot 接入）时省略。
 	Bot      *BotIdentity        `json:"bot,omitempty"`
+	Bots     []BotIdentityEntry  `json:"bots,omitempty"`
 	Requests apiOverviewRequests `json:"requests"`
 	Users    apiUserTallyView    `json:"users"`
 	Join     apiJoinTallyView    `json:"join"`
@@ -139,6 +142,9 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 	if s.botIdentity != nil {
 		if ident, ok := s.botIdentity.BotIdentity(); ok {
 			view.Bot = &ident
+		}
+		if bots := s.botIdentity.BotIdentities(); len(bots) > 0 {
+			view.Bots = bots
 		}
 	}
 

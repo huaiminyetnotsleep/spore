@@ -60,7 +60,10 @@ func TestRequestsCSV(t *testing.T) {
 	if rows[0][10] != "投递方式" || rows[1][10] != "上传" {
 		t.Fatalf("投递方式列不符：%v", rows)
 	}
-	if rows[1][8] != "album" || rows[1][12] != "cat.jpg" || rows[0][17] != "媒体内容类型" || rows[1][17] != "photo+video" {
+	if rows[0][11] != "机器人" || rows[1][11] != "" {
+		t.Fatalf("机器人列不符：%v", rows)
+	}
+	if rows[1][8] != "album" || rows[1][13] != "cat.jpg" || rows[0][18] != "媒体内容类型" || rows[1][18] != "photo+video" {
 		t.Fatalf("媒体元数据不符：%v", rows[1])
 	}
 	if !e.containsAction("export.requests") {

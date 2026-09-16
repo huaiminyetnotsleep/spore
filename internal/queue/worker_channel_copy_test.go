@@ -19,7 +19,7 @@ type fakeCopier struct {
 	msgLists [][]int
 }
 
-func (f *fakeCopier) CopyToChannels(_ context.Context, userID, userChatID int64, msgIDs []int) {
+func (f *fakeCopier) CopyToChannels(_ context.Context, botID, userID, userChatID int64, msgIDs []int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userIDs = append(f.userIDs, userID)

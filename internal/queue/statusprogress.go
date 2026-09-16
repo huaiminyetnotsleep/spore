@@ -74,7 +74,7 @@ func startProgressEditorWithInterval(ctx context.Context, d Deps, j Job, interva
 			if html == last {
 				continue // 内容不变：跳过编辑，省一次 Bot API 调用
 			}
-			if err := d.Sender.EditMessageText(ctx, j.ChatID, j.StatusMsgID, html); err != nil {
+			if err := d.senderFor(j).EditMessageText(ctx, j.ChatID, j.StatusMsgID, html); err != nil {
 				d.Log.Debug("占位消息进度编辑失败，熔断本任务后续编辑",
 					"job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 				last = "\x00" // 熔断标记：占位可能已被删除或持续限流

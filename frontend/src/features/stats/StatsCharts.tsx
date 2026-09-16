@@ -12,13 +12,14 @@ import { useNavigate, type NavigateFunction } from "react-router-dom";
 import type {
   DCTrendPoint,
   DistRow,
+  StatsBot,
   StatsChannel,
   StatsError,
   StatsRequests,
   StatsTrendPoint,
   StatsUser,
 } from "../../api/admin";
-import { distKeyText, fmtTime } from "../../shared/format";
+import { botLabel, distKeyText, fmtTime } from "../../shared/format";
 import { ChartPanel } from "../shared/ChartPanel";
 import { RankBarChart, type RankBarDatum } from "../shared/RankBarChart";
 import { SectionCard } from "../shared/PageStates";
@@ -466,6 +467,44 @@ function DCDistributionChart({ rows, total }: { rows: DistRow[]; total: number }
   );
 }
 
+function BotDistributionChart({ rows, total }: { rows: StatsBot[]; total: number }) {
+  const data: RankBarDatum[] = rows.map((row) => ({
+    key: String(row.bot_id),
+    label: botLabel(row.bot_id, row.bot_username),
+    count: row.total,
+    succeeded: row.succeeded,
+    failed: row.failed,
+    ratio: total > 0 ? row.total / total : 0,
+    last_requested_at: row.last_requested_at,
+  }));
+  return (
+    <ChartPanel
+      title="机器人分布"
+      description="按受理机器人统计请求数占比（多机器人池）；bot_id 为 0 的切片是存量记录/非 Bot 通道创建；点击切片查看该机器人的请求记录。"
+      empty={data.length === 0}
+      emptyMessage="当前范围内没有机器人分布数据。"
+    >
+      <RankBarChart
+        data={data}
+        color="#13c2c2"
+        xAxisTitle="机器人"
+        yAxisTitle="请求数"
+        tooltip={{
+          title: { field: "label" },
+          items: [
+            { channel: "y", name: "请求总数" },
+            { field: "succeeded", name: "成功数" },
+            { field: "failed", name: "失败数" },
+            { field: "ratio", name: "占范围请求比例", valueFormatter: (value: number) => `${(value * 100).toFixed(1)}%` },
+            { field: "last_requested_at", name: "最近请求", valueFormatter: (value: number) => fmtTime(value) },
+          ],
+        }}
+        navigateTo={(datum) => `/requests?bot_id=${encodeURIComponent(datum.key)}`}
+      />
+    </ChartPanel>
+  );
+}
+
 export function StatsCharts({ requests }: { requests: StatsRequests }) {
   const navigate = useNavigate();
   return (
@@ -487,6 +526,7 @@ export function StatsCharts({ requests }: { requests: StatsRequests }) {
           <MediaDistributionChart rows={requests.media_dist} total={requests.total} navigate={navigate} />
           <ErrorDistributionChart rows={requests.error_dist} navigate={navigate} />
           <DCDistributionChart rows={requests.dc_dist} total={requests.total} />
+          <BotDistributionChart rows={requests.bot_dist} total={requests.total} />
         </div>
       </SectionCard>
     </Space>

@@ -9,6 +9,8 @@ package web
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/huaiminyetnotsleep/spore/internal/store"
@@ -60,6 +62,17 @@ type apiDCTrendPoint struct {
 	Dist []apiDistRow `json:"dist"`
 }
 
+// apiStatsBot 是按受理 bot 的统计条目（多机器人池）；BotID=0 为存量行/
+// 非 Bot 通道创建，前端显示"未知"。
+type apiStatsBot struct {
+	BotID           int64  `json:"bot_id"`
+	BotUsername     string `json:"bot_username,omitempty"`
+	Total           int    `json:"total"`
+	Succeeded       int    `json:"succeeded"`
+	Failed          int    `json:"failed"`
+	LastRequestedAt int64  `json:"last_requested_at"`
+}
+
 // apiStatsRequests 是时间范围内的请求指标与图表数据。
 type apiStatsRequests struct {
 	Total       int     `json:"total"`
@@ -77,6 +90,7 @@ type apiStatsRequests struct {
 	ErrorDist   []apiStatsError   `json:"error_dist"`
 	DCDist      []apiDistRow      `json:"dc_dist"`
 	DCTrend     []apiDCTrendPoint `json:"dc_trend"`
+	BotDist     []apiStatsBot     `json:"bot_dist"`
 }
 
 // apiStatsView 是 GET /api/v1/stats 的只读 DTO。
@@ -105,6 +119,16 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 		tr = fillDefaultStatsRange(tr, now, loc)
 	} // all=1：全量统计，零值 timeRange 不带任何时间界，回显空串。
 
+	// bot_id 筛选（多机器人池）：限定只统计该受理 bot 的请求
+	var botID int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("bot_id")); raw != "" {
+		var perr error
+		if botID, perr = strconv.ParseInt(raw, 10, 64); perr != nil || botID <= 0 {
+			s.apiBadRequest(w, r, op, "机器人 ID 必须为正整数")
+			return
+		}
+	}
+
 	view := apiStatsView{
 		SinceDay: tr.SinceDay,
 		UntilDay: tr.UntilDay,
@@ -116,7 +140,12 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 			ErrorDist:   []apiStatsError{},
 			DCDist:      []apiDistRow{},
 			DCTrend:     []apiDCTrendPoint{},
+			BotDist:     []apiStatsBot{},
 		},
+	}
+	// ranged 构造同范围筛选（bot 筛选跟随；排行/分布类再带各自 Limit）
+	ranged := func(limit int) store.StatsFilter {
+		return store.StatsFilter{Since: tr.Since, Until: tr.Until, BotID: botID, Limit: limit}
 	}
 
 	// 用户表（Top 10 用户排行的展示信息关联；≤100 行，内存关联）
@@ -127,7 +156,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 	}
 
 	// 范围指标与分布（stats DAO；不触发任何频道访问）
-	filter := store.StatsFilter{Since: tr.Since, Until: tr.Until}
+	filter := ranged(0)
 	totals, err := s.st.RequestTotals(ctx, filter)
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
@@ -146,7 +175,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 	} else {
 		s.log.Warn("聚合统计请求趋势失败", "op", op, "error", err.Error())
 	}
-	if chs, err := s.st.ListChannelStats(ctx, store.StatsFilter{Since: tr.Since, Until: tr.Until, Limit: 5}); err == nil {
+	if chs, err := s.st.ListChannelStats(ctx, ranged(5)); err == nil {
 		for _, c := range chs {
 			view.Requests.TopChannels = append(view.Requests.TopChannels, apiStatsChannel{
 				Key: c.ChannelKey, Total: c.Total, Succeeded: c.Succeeded, Failed: c.Failed,
@@ -160,7 +189,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 	for _, u := range users {
 		userByID[u.ID] = u
 	}
-	if stats, err := s.st.ListUserRequestStats(ctx, store.StatsFilter{Since: tr.Since, Until: tr.Until, Limit: 10}); err == nil {
+	if stats, err := s.st.ListUserRequestStats(ctx, ranged(10)); err == nil {
 		for _, stat := range stats {
 			u := userByID[stat.UserID]
 			view.Requests.TopUsers = append(view.Requests.TopUsers, apiStatsUser{
@@ -172,7 +201,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 	} else {
 		s.log.Warn("聚合主要用户失败", "op", op, "error", err.Error())
 	}
-	if md, err := s.st.ListMediaTypeDist(ctx, store.StatsFilter{Since: tr.Since, Until: tr.Until, Limit: 5}); err == nil {
+	if md, err := s.st.ListMediaTypeDist(ctx, ranged(5)); err == nil {
 		for _, d := range md {
 			view.Requests.MediaDist = append(view.Requests.MediaDist, apiDistRow{Key: d.Key, Count: d.Count})
 		}
@@ -195,6 +224,19 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 		view.Requests.DCTrend = completeDCTrend(dt, tr, loc)
 	} else {
 		s.log.Warn("聚合源媒体 DC 日分布失败", "op", op, "error", err.Error())
+	}
+	// 按受理 bot 分布（多机器人池）：不受 bot 筛选影响，展示全量分布；
+	// 尽力而为，失败留空不缺整页。
+	if bs, err := s.st.ListBotStats(ctx, store.StatsFilter{Since: tr.Since, Until: tr.Until}); err == nil {
+		for _, b := range bs {
+			view.Requests.BotDist = append(view.Requests.BotDist, apiStatsBot{
+				BotID: b.BotID, BotUsername: b.BotUsername,
+				Total: b.Total, Succeeded: b.Succeeded, Failed: b.Failed,
+				LastRequestedAt: b.LastRequested,
+			})
+		}
+	} else {
+		s.log.Warn("聚合机器人分布失败", "op", op, "error", err.Error())
 	}
 
 	w.Header().Set("Cache-Control", "no-store")

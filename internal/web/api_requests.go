@@ -28,24 +28,27 @@ type apiRequestProgress struct {
 // 让 SPA 列表与 SSR/CSV 同源展示完整原始消息链接；只在受保护页面
 // 响应体中出现，不进入任何日志字段。
 type apiRequestRow struct {
-	ID               int64               `json:"id"`
-	UserID           int64               `json:"user_id"`
-	Username         string              `json:"username"`
-	DisplayName      string              `json:"display_name"`
-	SourceKind       string              `json:"source_kind"` // public | private
-	ChannelKey       string              `json:"channel_key"`
-	MessageID        int                 `json:"message_id"`
-	MessageURL       string              `json:"message_url"`
-	Status           string              `json:"status"`
-	Attempt          int                 `json:"attempt"`
-	ErrorCode        string              `json:"error_code"`
-	MediaType        string              `json:"media_type"` // 空串 = 未记录（失败于消息转换前）
-	MediaTypes       []string            `json:"media_types"`
-	SourceMediaDCIDs []int               `json:"source_media_dc_ids"`
-	DeliveryMode     string              `json:"delivery_mode"`
-	RequestedAt      int64               `json:"requested_at"`
-	DurationMs       int64               `json:"duration_ms"`
-	Progress         *apiRequestProgress `json:"progress,omitempty"`
+	ID               int64    `json:"id"`
+	UserID           int64    `json:"user_id"`
+	Username         string   `json:"username"`
+	DisplayName      string   `json:"display_name"`
+	SourceKind       string   `json:"source_kind"` // public | private
+	ChannelKey       string   `json:"channel_key"`
+	MessageID        int      `json:"message_id"`
+	MessageURL       string   `json:"message_url"`
+	Status           string   `json:"status"`
+	Attempt          int      `json:"attempt"`
+	ErrorCode        string   `json:"error_code"`
+	MediaType        string   `json:"media_type"` // 空串 = 未记录（失败于消息转换前）
+	MediaTypes       []string `json:"media_types"`
+	SourceMediaDCIDs []int    `json:"source_media_dc_ids"`
+	DeliveryMode     string   `json:"delivery_mode"`
+	// 受理 bot（多机器人池归属）；0 = 存量行/非 Bot 通道创建，前端显示"—"
+	BotID       int64               `json:"bot_id"`
+	BotUsername string              `json:"bot_username,omitempty"`
+	RequestedAt int64               `json:"requested_at"`
+	DurationMs  int64               `json:"duration_ms"`
+	Progress    *apiRequestProgress `json:"progress,omitempty"`
 }
 
 // apiCloudUploadRow 是请求详情的云盘上传记录行 DTO（字段与 store.CloudUpload
@@ -196,7 +199,8 @@ func requestRowDTO(rq store.Request) apiRequestRow {
 		MediaTypes:       mediaTypes,
 		SourceMediaDCIDs: dcIDs,
 		DeliveryMode:     rq.DeliveryMode,
-		RequestedAt:      rq.RequestedAt, DurationMs: rq.DurationMs,
+		BotID:            rq.BotID, BotUsername: rq.BotUsername,
+		RequestedAt: rq.RequestedAt, DurationMs: rq.DurationMs,
 	}
 }
 

@@ -132,6 +132,7 @@ const requests: StatsRequests = {
     { key: "2", count: 5 },
     { key: "", count: 1 },
   ],
+  bot_dist: [],
   dc_trend: [
     {
       day: "2026-09-01",
@@ -196,7 +197,8 @@ describe("业务统计图表", () => {
         { day: "2026-09-02", total: 0, succeeded: 0, failed: 0, error_rate: null },
         { day: "2026-09-03", total: 5, succeeded: 4, failed: 1, error_rate: 1 / 5 },
       ],
-      dc_trend: [
+      bot_dist: [],
+  dc_trend: [
         { day: "2026-09-01", dist: [{ key: "2", count: 3 }] },
         { day: "2026-09-02", dist: [] },
       ],
@@ -281,6 +283,7 @@ describe("业务统计图表", () => {
             error_dist: [],
             dc_dist: [],
             dc_trend: [],
+            bot_dist: [],
           }}
         />
       </MemoryRouter>,

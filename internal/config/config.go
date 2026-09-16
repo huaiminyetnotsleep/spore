@@ -61,6 +61,10 @@ const (
 	MinTempDirMaxSize   = int64(1) << 20  // 1MB，临时目录上限最小
 	MaxTempDirMaxSize   = int64(1) << 40  // 1TB，临时目录上限最大
 
+	// MaxBots 是多机器人池的 token 数量上限：防止误配置出超大 bot 列表，
+	// 放大长轮询与 MTProto 会话的常驻连接开销。
+	MaxBots = 20
+
 	// 事件与通知默认值。
 	defaultNotifyCooldownMin      = 30  // 同一事件两次通知的最小间隔（分钟）
 	defaultEventBotFailThreshold  = 3   // Bot API 连续发送失败告警阈值
@@ -81,7 +85,8 @@ const (
 // Config 保存全部运行时配置。
 type Config struct {
 	BotToken           string
-	BotAPIURL          string // 自定义 Bot API 服务器（本地模式）；空 = 官方服务器
+	BotTokens          []string // 全部 bot token（BOT_TOKEN 首项 + BOT_TOKENS 追加，去重）；多机器人池装配遍历该列表，BotToken 恒等于首项
+	BotAPIURL          string   // 自定义 Bot API 服务器（本地模式）；空 = 官方服务器
 	TGAPIID            int
 	TGAPIHash          string
 	TGPhone            string             // 仅 phone 模式必填；auto 下作为回退凭据
@@ -141,12 +146,14 @@ func Load(getenv func(string) string) (Config, error) {
 		cfg.FFmpegPath = defaultFFmpegPath
 	}
 
-	if cfg.BotToken == "" {
-		return cfg, fmt.Errorf("缺少环境变量：BOT_TOKEN")
+	// 多机器人池：BOT_TOKEN 为主 bot（首项），BOT_TOKENS 以逗号分隔追加其余
+	// bot；两者至少配置其一。逐项校验格式并按原文去重，数量上限 MaxBots。
+	tokens, terr := parseBotTokens(cfg.BotToken, getenv("BOT_TOKENS"))
+	if terr != nil {
+		return cfg, terr
 	}
-	if !botTokenPattern.MatchString(cfg.BotToken) {
-		return cfg, fmt.Errorf("BOT_TOKEN 格式无效")
-	}
+	cfg.BotTokens = tokens
+	cfg.BotToken = tokens[0]
 
 	apiID, err := positiveInt(getenv("TG_API_ID"), "TG_API_ID")
 	if err != nil {
@@ -507,6 +514,54 @@ func ValidateMediaLimits(maxFileSize, streamLimit, tempDirMaxSize int64) error {
 		return fmt.Errorf("临时目录最大大小不能小于文件大小上限")
 	}
 	return nil
+}
+
+// IsValidBotToken 报告 token 是否符合 Bot API token 格式（供 botlist 与
+// Web 管理端校验复用，语义与 env 加载一致）。
+func IsValidBotToken(token string) bool {
+	return botTokenPattern.MatchString(token)
+}
+
+// parseBotTokens 合并主 token 与 BOT_TOKENS 追加项：逐项校验格式、按原文
+// 去重（重复项静默忽略，env 手误重复不视为配置错误），总数上限 MaxBots。
+// 主 token 为空时以 BOT_TOKENS 首项充当主 bot。
+func parseBotTokens(primary, extraRaw string) ([]string, error) {
+	tokens := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	appendToken := func(tok, name string) error {
+		if !botTokenPattern.MatchString(tok) {
+			return fmt.Errorf("%s 格式无效", name)
+		}
+		if _, dup := seen[tok]; dup {
+			return nil
+		}
+		seen[tok] = struct{}{}
+		tokens = append(tokens, tok)
+		return nil
+	}
+	if primary != "" {
+		if err := appendToken(primary, "BOT_TOKEN"); err != nil {
+			return nil, err
+		}
+	}
+	if extra := strings.TrimSpace(extraRaw); extra != "" {
+		for _, item := range strings.Split(extra, ",") {
+			tok := strings.TrimSpace(item)
+			if tok == "" {
+				continue
+			}
+			if err := appendToken(tok, "BOT_TOKENS"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("缺少环境变量：BOT_TOKEN（或 BOT_TOKENS）")
+	}
+	if len(tokens) > MaxBots {
+		return nil, fmt.Errorf("机器人数量超过上限 %d（当前 %d 个）", MaxBots, len(tokens))
+	}
+	return tokens, nil
 }
 
 func parseAllowedUserIDs(raw string) (map[int64]struct{}, error) {

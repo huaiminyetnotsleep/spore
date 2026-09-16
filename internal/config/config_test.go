@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -392,6 +394,80 @@ func TestLoadNotifyRejectsBadValues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(baseEnv(tc.overrides)); err == nil {
 				t.Fatalf("期望报错，实际成功")
+			}
+		})
+	}
+}
+
+// ---- 多机器人池：BOT_TOKENS 解析（BOT_TOKEN 主 bot + BOT_TOKENS 追加）----
+
+func validToken(id int64) string {
+	return fmt.Sprintf("%d:ABCDEFGHIJKLMNOPqrstuv", id)
+}
+
+func TestLoadBotTokensSingle(t *testing.T) {
+	cfg, err := Load(baseEnv(nil))
+	if err != nil {
+		t.Fatalf("期望成功，得到错误：%v", err)
+	}
+	if len(cfg.BotTokens) != 1 || cfg.BotTokens[0] != cfg.BotToken {
+		t.Errorf("单 bot 部署 BotTokens 应为 [BotToken]，得到 %v", cfg.BotTokens)
+	}
+}
+
+func TestLoadBotTokensMerge(t *testing.T) {
+	cfg, err := Load(baseEnv(map[string]string{
+		"BOT_TOKENS": strings.Join([]string{
+			validToken(1234567890), // 与 BOT_TOKEN 重复：静默去重
+			validToken(2222),
+			validToken(3333),
+		}, ","),
+	}))
+	if err != nil {
+		t.Fatalf("期望成功，得到错误：%v", err)
+	}
+	if len(cfg.BotTokens) != 3 {
+		t.Fatalf("合并去重后应有 3 个 token，得到 %d：%v", len(cfg.BotTokens), cfg.BotTokens)
+	}
+	if cfg.BotTokens[0] != cfg.BotToken {
+		t.Errorf("主 bot 恒为首项：首项 %q 与 BotToken %q 不符", cfg.BotTokens[0], cfg.BotToken)
+	}
+}
+
+func TestLoadBotTokensWithoutBotToken(t *testing.T) {
+	cfg, err := Load(baseEnv(map[string]string{
+		"BOT_TOKEN":  "",
+		"BOT_TOKENS": validToken(1111) + "," + validToken(2222),
+	}))
+	if err != nil {
+		t.Fatalf("仅 BOT_TOKENS 应可用，得到错误：%v", err)
+	}
+	if len(cfg.BotTokens) != 2 || cfg.BotToken != cfg.BotTokens[0] {
+		t.Errorf("BotTokens=%v BotToken=%q 不符", cfg.BotTokens, cfg.BotToken)
+	}
+}
+
+func TestLoadBotTokensValidation(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{"两者皆空", map[string]string{"BOT_TOKEN": "", "BOT_TOKENS": ""}},
+		{"追加项格式非法", map[string]string{"BOT_TOKENS": "not-a-token"}},
+		{"超过上限", map[string]string{
+			"BOT_TOKENS": func() string {
+				parts := make([]string, 0, MaxBots+1)
+				for i := 0; i <= MaxBots; i++ {
+					parts = append(parts, validToken(int64(1000+i)))
+				}
+				return strings.Join(parts, ",")
+			}(),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Load(baseEnv(tc.overrides)); err == nil {
+				t.Fatalf("期望配置错误，得到成功")
 			}
 		})
 	}

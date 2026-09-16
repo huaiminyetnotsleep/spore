@@ -48,6 +48,8 @@ function detail(overrides: Partial<RequestDetail> = {}): RequestDetail {
     media_type: "album",
     media_types: ["photo", "video"],
     source_media_dc_ids: [2, 4],
+    bot_id: 0,
+    bot_username: "",
     delivery_mode: "upload",
     file_name: "photo.jpg",
     file_size: 600,

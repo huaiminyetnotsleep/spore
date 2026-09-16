@@ -27,6 +27,10 @@ type Job struct {
 	// 直接向缓存频道发送干净副本并落 dump_entries，全程不向用户发送任何
 	// 消息。false = 现有路径（零值兼容）。
 	DumpOnly bool
+	// BotID 是受理 bot（多机器人池归属）：worker 据此解析发送通道（状态
+	// 提示编辑、媒体投递、频道副本都发给受理 bot 对应的私聊）。0 = 存量
+	// 任务/Web 补存，回退主 bot。
+	BotID int64
 }
 
 // shutdownWindow 是进程退出后收尾动作（用户通知、状态删除、终态落库）

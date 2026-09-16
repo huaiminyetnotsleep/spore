@@ -48,6 +48,8 @@ function userRow(overrides: Partial<UserRow>): UserRow {
     is_owner: false,
     note: "",
     last_used_at: 1756598400000,
+    source_bot_id: 0,
+    source_bot_username: "",
     total_requests: 12,
     has_total_requests: true,
     cloud_download: 0,

@@ -29,8 +29,12 @@ import (
 
 // Service 是缓存频道读写通道；channelID 闭包实时读取当前配置（Web 端
 // settings 优先，环境变量兜底，main 注入），返回 0 表示未配置（功能关闭）。
+// 多机器人池：已投递消息的坐标是受理 bot 私有的（用户私聊内消息 ID 按 bot
+// 隔离），写干净副本与复用投递都必须由受理 bot 执行——sndFor 按任务 bot
+// 解析通道，nil 或未命中回退 snd（主 bot，兼容单 bot 部署与 Web 触发路径）。
 type Service struct {
 	snd       delivery.Sender
+	sndFor    func(botID int64) delivery.Sender
 	st        *store.Store
 	channelID func() int64
 	log       *slog.Logger
@@ -39,8 +43,20 @@ type Service struct {
 }
 
 // New 创建缓存频道服务；channelID 闭包返回 0 时 Enabled() 恒为 false。
-func New(snd delivery.Sender, st *store.Store, channelID func() int64, log *slog.Logger) *Service {
-	return &Service{snd: snd, st: st, channelID: channelID, log: log}
+// sndFor 可空（单 bot 部署）。
+func New(snd delivery.Sender, sndFor func(botID int64) delivery.Sender, st *store.Store,
+	channelID func() int64, log *slog.Logger) *Service {
+	return &Service{snd: snd, sndFor: sndFor, st: st, channelID: channelID, log: log}
+}
+
+// senderFor 解析任务应使用的发送通道：受理 bot 优先，未命中回退 snd。
+func (s *Service) senderFor(botID int64) delivery.Sender {
+	if s.sndFor != nil {
+		if snd := s.sndFor(botID); snd != nil {
+			return snd
+		}
+	}
+	return s.snd
 }
 
 // Enabled 报告缓存频道是否已配置（配置读取失败按未配置处理）。
@@ -126,19 +142,22 @@ func (s *Service) EntryLive(ctx context.Context, channelKey string, messageID in
 	return true
 }
 
-// CopyOut 把缓存频道副本整条复制到目标聊天，返回按序新消息 ID。
-func (s *Service) CopyOut(ctx context.Context, chatID int64, dumpIDs []int) ([]int, error) {
-	return s.snd.CopyMessages(ctx, s.channelID(), chatID, dumpIDs)
+// CopyOut 把缓存频道副本整条复制到目标聊天，返回按序新消息 ID。botID 为
+// 任务的受理 bot：复制落到用户私聊即以该 bot 身份投递。
+func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, dumpIDs []int) ([]int, error) {
+	return s.senderFor(botID).CopyMessages(ctx, s.channelID(), chatID, dumpIDs)
 }
 
 // WriteClean 在任务成功投递后写干净副本并落 dump_entries（尽力而为）。
-// items 与 sentIDs 按序对应（worker 发送顺序）；复用命中（Reused）的任务
-// 不再重写（条目即复制来源）。sourceURL 为原消息链接（首条织入）。
-func (s *Service) WriteClean(ctx context.Context, chatID int64, channelKey string, messageID int,
+// botID 为任务的受理 bot：已发送消息坐标是该 bot 私有的，必须由同一 bot
+// 复制。items 与 sentIDs 按序对应（worker 发送顺序）；复用命中（Reused）
+// 的任务不再重写（条目即复制来源）。sourceURL 为原消息链接（首条织入）。
+func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKey string, messageID int,
 	items []message.Item, sentIDs []int, sourceURL string) {
 	if !s.Enabled() {
 		return
 	}
+	snd := s.senderFor(botID)
 	if len(items) == 0 || len(items) != len(sentIDs) {
 		s.log.Debug("缓存频道副本跳过：条目与已发送消息数不一致",
 			"channel_key", channelKey, "message_id", messageID,
@@ -150,14 +169,14 @@ func (s *Service) WriteClean(ctx context.Context, chatID int64, channelKey strin
 
 	var dumpIDs []int
 	if len(sentIDs) == 1 {
-		id, err := s.writeSingle(ctx, channel, chatID, items[0], sentIDs[0], sourceURL)
+		id, err := s.writeSingle(ctx, snd, channel, chatID, items[0], sentIDs[0], sourceURL)
 		if err != nil {
 			s.failHint(ctx, err)
 			return
 		}
 		dumpIDs = []int{id}
 	} else {
-		ids, err := s.snd.CopyMessages(ctx, chatID, channel, sentIDs)
+		ids, err := snd.CopyMessages(ctx, chatID, channel, sentIDs)
 		if err != nil {
 			s.failHint(ctx, err)
 			return
@@ -166,9 +185,9 @@ func (s *Service) WriteClean(ctx context.Context, chatID int64, channelKey strin
 		for i, it := range items {
 			var err error
 			if it.Media != nil {
-				err = s.snd.EditMessageCaption(ctx, channel, ids[i], CleanCaption(it, i == 0, sourceURL, nil))
+				err = snd.EditMessageCaption(ctx, channel, ids[i], CleanCaption(it, i == 0, sourceURL, nil))
 			} else {
-				err = s.snd.EditMessageText(ctx, channel, ids[i], it.RenderHTMLWithSource(sourceURL, nil))
+				err = snd.EditMessageText(ctx, channel, ids[i], it.RenderHTMLWithSource(sourceURL, nil))
 			}
 			if err != nil {
 				s.failHint(ctx, err)
@@ -189,12 +208,12 @@ func (s *Service) WriteClean(ctx context.Context, chatID int64, channelKey strin
 
 // writeSingle 写单条副本：媒体走 copyMessage 带 caption 覆盖（一步到位），
 // 文本直接干净渲染发送。
-func (s *Service) writeSingle(ctx context.Context, channel, fromChatID int64, it message.Item,
-	sentID int, sourceURL string) (int, error) {
+func (s *Service) writeSingle(ctx context.Context, snd delivery.Sender, channel, fromChatID int64,
+	it message.Item, sentID int, sourceURL string) (int, error) {
 	if it.Media == nil {
-		return s.snd.SendMessage(ctx, channel, it.RenderHTMLWithSource(sourceURL, nil))
+		return snd.SendMessage(ctx, channel, it.RenderHTMLWithSource(sourceURL, nil))
 	}
-	return s.snd.CopyMessage(ctx, fromChatID, channel, sentID, CleanCaption(it, true, sourceURL, nil))
+	return snd.CopyMessage(ctx, fromChatID, channel, sentID, CleanCaption(it, true, sourceURL, nil))
 }
 
 // CleanCaption 构造干净 caption：引用正文 +（首条）原消息链接，不织频道

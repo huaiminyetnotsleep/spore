@@ -4,15 +4,15 @@
  * 不触发任何频道访问。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, DatePicker, Form, Space, Table, Typography } from "antd";
+import { Button, DatePicker, Form, Select, Space, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { buildExportURL, fetchChannels, type ChannelRow } from "../../api/admin";
+import { buildExportURL, fetchBots, fetchChannels, type ChannelRow } from "../../api/admin";
 import { deleteChannelRequests } from "../../api/mutations";
-import { fmtRate, fmtTime } from "../../shared/format";
+import { botLabel, fmtRate, fmtTime } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { applyListFilters } from "../shared/listFilters";
 import { LoadError, PageCard } from "../shared/PageStates";
@@ -22,11 +22,13 @@ const { Text } = Typography;
 interface ChannelFormValues {
   since?: Dayjs | null;
   until?: Dayjs | null;
+  bot_id?: string;
 }
 
 interface ChannelQuery {
   since?: string;
   until?: string;
+  bot_id?: string;
 }
 
 export function ChannelsListPage() {
@@ -35,6 +37,13 @@ export function ChannelsListPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const confirm = useConfirmAction();
+
+  // 机器人池列表：机器人筛选下拉选项；查询失败不阻塞列表。
+  const bots = useQuery({ queryKey: ["bots"], queryFn: fetchBots });
+  const botOptions = (bots.data?.bots ?? []).map((bot) => ({
+    value: String(bot.bot_id),
+    label: botLabel(bot.bot_id, bot.username),
+  }));
 
   // 频道是请求记录的纯聚合：删除即清空该频道全部记录行，用户累计与
   // 总览统计随之变化，相关 query 一并失效
@@ -106,6 +115,7 @@ export function ChannelsListPage() {
               {
                 since: values.since ? values.since.format("YYYY-MM-DD") : undefined,
                 until: values.until ? values.until.format("YYYY-MM-DD") : undefined,
+                bot_id: values.bot_id?.trim() || undefined,
               },
               filters,
               page,
@@ -120,6 +130,16 @@ export function ChannelsListPage() {
           </Form.Item>
           <Form.Item name="until">
             <DatePicker placeholder="结束日期" maxDate={dayjs()} />
+          </Form.Item>
+          <Form.Item name="bot_id">
+            <Select
+              placeholder="机器人"
+              allowClear
+              className="field-width-140"
+              virtual={false}
+              loading={bots.isPending}
+              options={[{ value: "", label: "全部" }, ...botOptions]}
+            />
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit">

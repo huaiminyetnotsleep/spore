@@ -62,6 +62,8 @@ type Request struct {
 	SourceMediaDCIDs []int  // 源媒体所在 DC 去重数组；空表示未知/不适用
 	ParentRequestID  int64  // 补存行指向的原请求 ID；0（NULL）表示普通请求
 	CloudDestination string // 云盘请求的目的地名称；重试/补存重新入队时据此恢复 Job.CloudDest
+	BotID            int64  // 受理 bot 的 Telegram 账号 ID（getMe）；0 = 存量行/非 Bot 通道创建
+	BotUsername      string // 受理时的 bot 用户名快照（展示自持，bot 移出池后历史行仍可读）
 	// 复用坐标（v12，遗留）：用户聊天 copyMessages 复用时代的列，自转存
 	// 频道方案起停止写入；保留读取兼容已部署库的历史行。复用现走
 	// dump_entries（缓存频道干净副本坐标）。
@@ -97,6 +99,7 @@ type RequestResult struct {
 // RequestFilter 是请求列表的筛选条件，零值字段不参与过滤。
 type RequestFilter struct {
 	UserID       int64
+	BotID        int64 // 受理 bot；0 = 不限（含存量行）
 	Status       string
 	ChannelKey   string
 	MediaType    string
@@ -114,6 +117,7 @@ const selectRequest = `SELECT id, user_id, COALESCE(source_kind, ''), channel_ke
 	status, attempt, COALESCE(error_code, ''), COALESCE(media_type, ''), media_types_json,
 		COALESCE(file_size, 0), COALESCE(file_name, ''), delivery_mode, source_media_dc_ids_json,
 		COALESCE(parent_request_id, 0), cloud_destination,
+		bot_id, bot_username,
 		sent_chat_id, sent_message_ids_json,
 		requested_at, COALESCE(queued_at, 0), COALESCE(started_at, 0),
 		COALESCE(finished_at, 0), COALESCE(duration_ms, 0)
@@ -125,6 +129,7 @@ func scanRequest(row scanner) (Request, error) {
 	err := row.Scan(&r.ID, &r.UserID, &r.SourceKind, &r.ChannelKey, &r.MessageID,
 		&r.Status, &r.Attempt, &r.ErrorCode, &r.MediaType, &mediaTypesJSON, &r.FileSize, &r.FileName,
 		&r.DeliveryMode, &dcJSON, &r.ParentRequestID, &r.CloudDestination,
+		&r.BotID, &r.BotUsername,
 		&r.SentChatID, &sentIDsJSON,
 		&r.RequestedAt, &r.QueuedAt, &r.StartedAt, &r.FinishedAt, &r.DurationMs)
 	if err != nil {
@@ -150,6 +155,7 @@ const selectRequestWithUser = `SELECT r.id, r.user_id, COALESCE(r.source_kind, '
 		r.status, r.attempt, COALESCE(r.error_code, ''), COALESCE(r.media_type, ''), r.media_types_json,
 		COALESCE(r.file_size, 0), COALESCE(r.file_name, ''), r.delivery_mode, r.source_media_dc_ids_json,
 		COALESCE(r.parent_request_id, 0), r.cloud_destination,
+		r.bot_id, r.bot_username,
 		r.sent_chat_id, r.sent_message_ids_json,
 		r.requested_at, COALESCE(r.queued_at, 0), COALESCE(r.started_at, 0),
 		COALESCE(r.finished_at, 0), COALESCE(r.duration_ms, 0),
@@ -163,6 +169,7 @@ func scanRequestWithUser(row scanner) (RequestWithUser, error) {
 	err := row.Scan(&out.ID, &out.UserID, &out.SourceKind, &out.ChannelKey, &out.MessageID,
 		&out.Status, &out.Attempt, &out.ErrorCode, &out.MediaType, &mediaTypesJSON, &out.FileSize, &out.FileName,
 		&out.DeliveryMode, &dcJSON, &out.ParentRequestID, &out.CloudDestination,
+		&out.BotID, &out.BotUsername,
 		&out.SentChatID, &sentIDsJSON, &out.RequestedAt, &out.QueuedAt, &out.StartedAt,
 		&out.FinishedAt, &out.DurationMs, &out.UserUsername, &out.UserDisplayName)
 	if err != nil {
@@ -290,11 +297,11 @@ func (s *Store) CreateRequest(ctx context.Context, in Request) (Request, error) 
 	}
 	res, err := s.ex.ExecContext(ctx, `INSERT INTO requests
 		(user_id, source_kind, channel_key, message_id, status, attempt, delivery_mode,
-		 parent_request_id, cloud_destination, requested_at, queued_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		 parent_request_id, cloud_destination, bot_id, bot_username, requested_at, queued_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.UserID, nullStr(in.SourceKind), in.ChannelKey, in.MessageID,
 		in.Status, in.Attempt, in.DeliveryMode, nullInt64(in.ParentRequestID),
-		in.CloudDestination, in.RequestedAt, in.QueuedAt)
+		in.CloudDestination, in.BotID, in.BotUsername, in.RequestedAt, in.QueuedAt)
 	if err != nil {
 		if isConstraintErr(err) {
 			return Request{}, apperr.Wrap(apperr.CodeStoreConstraint,
@@ -534,6 +541,10 @@ func (f RequestFilter) whereWithPrefix(prefix string) (string, []any) {
 	if f.UserID > 0 {
 		conds = append(conds, col("user_id")+" = ?")
 		args = append(args, f.UserID)
+	}
+	if f.BotID > 0 {
+		conds = append(conds, col("bot_id")+" = ?")
+		args = append(args, f.BotID)
 	}
 	if f.Status != "" {
 		conds = append(conds, col("status")+" = ?")

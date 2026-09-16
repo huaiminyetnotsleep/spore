@@ -21,6 +21,7 @@ import (
 // SPA API 与 CSV 只使用筛选条件，回显字段保留以维持单一组装入口）。
 type requestFilterForm struct {
 	UserID       string
+	BotID        string
 	Status       string
 	Channel      string
 	MediaType    string
@@ -34,6 +35,7 @@ type requestFilterForm struct {
 func buildRequestFilter(r *http.Request, loc *time.Location) (store.RequestFilter, requestFilterForm, timeRange, error) {
 	form := requestFilterForm{
 		UserID:       strings.TrimSpace(r.URL.Query().Get("user_id")),
+		BotID:        strings.TrimSpace(r.URL.Query().Get("bot_id")),
 		Status:       r.URL.Query().Get("status"),
 		Channel:      strings.TrimSpace(r.URL.Query().Get("channel")),
 		MediaType:    r.URL.Query().Get("media_type"),
@@ -55,6 +57,13 @@ func buildRequestFilter(r *http.Request, loc *time.Location) (store.RequestFilte
 			return store.RequestFilter{}, form, tr, errors.New("用户 ID 必须为正整数")
 		}
 		f.UserID = id
+	}
+	if form.BotID != "" {
+		id, err := strconv.ParseInt(form.BotID, 10, 64)
+		if err != nil || id <= 0 {
+			return store.RequestFilter{}, form, tr, errors.New("机器人 ID 必须为正整数")
+		}
+		f.BotID = id
 	}
 	return f, form, tr, nil
 }

@@ -139,6 +139,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/restart", s.handleAPIRestart)
 	mux.Handle("GET /api/v1/mtproto/status", s.apiAuth(s.handleAPIMTProtoStatus))
 	s.mountAPIWrite(mux, "/api/v1/mtproto/relogin", s.handleAPIMTProtoRelogin)
+	// 机器人管理（多机器人池）：列表合并 env ∪ bots.json；增删走文件配置
+	//（重启生效），token 只进不出。
+	mux.Handle("GET /api/v1/bots", s.apiAuth(s.handleAPIBotsGet))
+	s.mountAPIWrite(mux, "/api/v1/bots/add", s.handleAPIBotsAdd)
+	s.mountAPIWrite(mux, "/api/v1/bots/{id}/delete", s.handleAPIBotsDelete)
 	// 云盘下载：配置视图/保存/连通性测试
 	// 与请求补存（单条/批量）。保存是 PUT（全量替换语义，无 POST 变体），不能
 	// 经 mountAPIWrite 挂载，直接组合认证 + CSRF 中间件（与 channel-bindings

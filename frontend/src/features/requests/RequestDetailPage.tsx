@@ -21,6 +21,7 @@ import {
   DELIVERY_MODE_TAG_COLORS,
   REQUEST_STATUS_LABELS,
   REQUEST_STATUS_TAG_COLORS,
+  botLabel,
   distKeyText,
   fmtBytes,
   fmtDuration,
@@ -225,6 +226,9 @@ export function RequestDetailPage() {
                 <Tag color={DELIVERY_MODE_TAG_COLORS[detail.delivery_mode]}>
                   {labelOf(DELIVERY_MODE_LABELS, detail.delivery_mode)}
                 </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="受理机器人">
+                {botLabel(detail.bot_id, detail.bot_username)}
               </Descriptions.Item>
               {detail.parent_request_id ? (
                 <Descriptions.Item label="补存来源">

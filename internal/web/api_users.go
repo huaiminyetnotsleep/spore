@@ -24,6 +24,9 @@ type apiUserRow struct {
 	// 累计请求数（不限时间范围）；stats 聚合无该用户行时 HasTotalRequests=false
 	TotalRequests    int  `json:"total_requests"`
 	HasTotalRequests bool `json:"has_total_requests"`
+	// 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加，前端显示"—"
+	SourceBotID       int64  `json:"source_bot_id"`
+	SourceBotUsername string `json:"source_bot_username,omitempty"`
 	// CloudDownload 是用户级云盘下载权限 raw 三态（0=跟随角色默认 1=允许
 	// 2=拒绝）；EffectiveCloudDownload 是生效 bool（raw 0 时按角色回退
 	// owner true / 普通用户 false），供前端直接回显。
@@ -64,6 +67,9 @@ type apiUserDetail struct {
 	CloudDownload          int  `json:"cloud_download"`
 	EffectiveCloudDownload bool `json:"effective_cloud_download"`
 	TotalRequests          int  `json:"total_requests"`
+	// 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。
+	SourceBotID       int64  `json:"source_bot_id"`
+	SourceBotUsername string `json:"source_bot_username,omitempty"`
 }
 
 // handleAPIUsersList 渲染用户列表数据：搜索（ID/用户名/显示名/备注）、状态
@@ -120,6 +126,7 @@ func (s *Server) handleAPIUsersList(w http.ResponseWriter, r *http.Request, _ se
 			Status: u.Status, IsOwner: u.IsOwner, Note: u.Note,
 			LastUsedAt: u.LastUsedAt, TotalRequests: total, HasTotalRequests: ok,
 			CloudDownload: u.CloudDownload, EffectiveCloudDownload: u.EffectiveCloudDownload(),
+			SourceBotID: u.SourceBotID, SourceBotUsername: u.SourceBotUsername,
 		})
 	}
 	writeAPIList(w, newAPIListEnvelope(items, page, len(matched)))
@@ -166,5 +173,7 @@ func (s *Server) handleAPIUserDetail(w http.ResponseWriter, r *http.Request, _ s
 		CloudDownload:          u.CloudDownload,
 		EffectiveCloudDownload: u.EffectiveCloudDownload(),
 		TotalRequests:          totals.Total,
+		SourceBotID:            u.SourceBotID,
+		SourceBotUsername:      u.SourceBotUsername,
 	})
 }

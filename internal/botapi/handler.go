@@ -78,6 +78,11 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 		if from == nil {
 			return
 		}
+		// 多机器人池：记录用户最近活跃的 bot（主动通知路由依据）；
+		// bot 身份在 getMe 回填后才读得到（长轮询启动晚于回填，恒有值）。
+		if opt.NoteActive != nil {
+			opt.NoteActive(from.ID, opt.Bot.Get().ID)
+		}
 		if opt.ProfileObserver != nil {
 			opt.ProfileObserver(*from)
 		}
@@ -159,10 +164,13 @@ func commandOf(text string) string {
 // handleStart 处理 /start：未授权用户生成待审批申请，待审批用户幂等刷新，
 // 已启用用户保持欢迎文案；禁用/归档提示账号已停用。
 func handleStart(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64) {
+	botInfo := opt.Bot.Get()
 	outcome, err := opt.Access.HandleStart(ctx, access.StartInput{
 		UserID:      from.ID,
 		Username:    from.Username,
 		DisplayName: displayNameOf(from),
+		BotID:       botInfo.ID,
+		BotUsername: botInfo.Username,
 	})
 	if err != nil {
 		ae := apperr.From(err)
@@ -346,6 +354,7 @@ func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from mode
 			statusMsgID = sent
 		}
 
+		botInfo := opt.Bot.Get()
 		dec, err := opt.Access.Submit(ctx, access.Submission{
 			UserID:            from.ID,
 			ChatID:            chatID,
@@ -356,6 +365,8 @@ func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from mode
 			ProfileProvided:   true,
 			BatchContinuation: i > 0,
 			CloudDest:         cloudDest,
+			BotID:             botInfo.ID,
+			BotUsername:       botInfo.Username,
 		})
 		if err != nil {
 			ae := apperr.From(err)

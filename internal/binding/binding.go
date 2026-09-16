@@ -39,14 +39,17 @@ type Options struct {
 	Log   *slog.Logger
 }
 
-// Service 是频道绑定应用服务。Bot 客户端在装配层 Bot 就绪后经 SetBot 注入
+// Service 是频道绑定应用服务。Bot 客户端在装配层 Bot 就绪后经 SetBots 注入
 // （Bot 构造依赖长轮询链路，无法在 New 时给出），重复注入无害（重连重装配）。
+// 多机器人池：校验类操作（绑定/频道校验）对池内全部 bot 执行——任一 bot
+// 无法在频道发帖都会让副本投递残缺；副本投递按受理 bot 执行（消息坐标是
+// bot 私有的，跨 bot 不可复制）。
 type Service struct {
 	store *store.Store
 	log   *slog.Logger
 
 	botMu sync.RWMutex
-	bot   *tgbot.Bot
+	bots  []*tgbot.Bot // 装配顺序，主 bot（首项）承担元数据刷新等单通道操作
 
 	// refreshAt 记录各频道上次信息刷新时间（channelRefreshTTL 节流）。
 	refreshMu sync.Mutex
@@ -64,17 +67,58 @@ func New(opt Options) (*Service, error) {
 	return &Service{store: opt.Store, log: opt.Log, refreshAt: map[int64]time.Time{}}, nil
 }
 
-// SetBot 注入 Bot 客户端（绑定校验与频道副本投递用）。
-func (s *Service) SetBot(b *tgbot.Bot) {
+// SetBots 注入 Bot 客户端列表（多机器人池；主 bot 在前，单 bot 部署长度为 1）。
+func (s *Service) SetBots(bots []*tgbot.Bot) {
 	s.botMu.Lock()
 	defer s.botMu.Unlock()
-	s.bot = b
+	s.bots = bots
 }
 
+// currentBots 返回当前 bot 客户端列表快照（可能为空：Bot 尚未就绪）。
+func (s *Service) currentBots() []*tgbot.Bot {
+	s.botMu.RLock()
+	defer s.botMu.RUnlock()
+	return s.bots
+}
+
+// currentBot 返回主 bot（首项）；池为空返回 nil。
 func (s *Service) currentBot() *tgbot.Bot {
 	s.botMu.RLock()
 	defer s.botMu.RUnlock()
-	return s.bot
+	if len(s.bots) == 0 {
+		return nil
+	}
+	return s.bots[0]
+}
+
+// botFor 返回受理 bot 对应的客户端；未命中（已下线/存量任务）回退主 bot。
+func (s *Service) botFor(botID int64) *tgbot.Bot {
+	s.botMu.RLock()
+	defer s.botMu.RUnlock()
+	if len(s.bots) == 0 {
+		return nil
+	}
+	if botID != 0 {
+		for _, b := range s.bots {
+			if b.ID() == botID {
+				return b
+			}
+		}
+	}
+	return s.bots[0]
+}
+
+// verifyAllBotsCanPost 对池内全部 bot 逐一校验频道发帖权限；任一 bot 失败
+// 即整体失败（错误带 bot id，定位需要在哪个频道补设管理员）。
+func verifyAllBotsCanPost(ctx context.Context, bots []*tgbot.Bot, chatID int64) error {
+	for _, b := range bots {
+		if err := verifyBotCanPost(ctx, b, b.ID(), chatID); err != nil {
+			return apperr.Wrap(apperr.CodeChannelNotPostable,
+				fmt.Errorf("机器人 %d 无法在频道 %d 发帖（需全部机器人设为频道管理员）: %w",
+					b.ID(), chatID, err))
+		}
+	}
+	return nil
 }
 
 // BindInput 描述一次绑定请求。
@@ -94,14 +138,14 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 	if err != nil {
 		return store.ChannelBinding{}, err
 	}
-	b := s.currentBot()
-	if b == nil {
+	bots := s.currentBots()
+	if len(bots) == 0 {
 		return store.ChannelBinding{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
 	}
 
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := b.GetChat(vctx, tgt.chatParams())
+	chat, err := bots[0].GetChat(vctx, tgt.chatParams())
 	if err != nil {
 		// Bot 看不见目标聊天基本等于"不在该频道/无权限"，统一归类为
 		// CHANNEL_NOT_POSTABLE，提示用户先把机器人拉进频道设为管理员
@@ -111,7 +155,8 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 		return store.ChannelBinding{}, apperr.New(apperr.CodeChannelTargetInvalid,
 			fmt.Sprintf("目标不是频道（type=%s）", chat.Type))
 	}
-	if err := verifyBotCanPost(vctx, b, b.ID(), chat.ID); err != nil {
+	// 多机器人池：任一 bot 无法发帖都会让频道副本残缺，全部通过才可绑定
+	if err := verifyAllBotsCanPost(vctx, bots, chat.ID); err != nil {
 		return store.ChannelBinding{}, err
 	}
 
@@ -357,10 +402,12 @@ func (s *Service) bindLimitReached(ctx context.Context, userID int64) bool {
 }
 
 // CopyToChannels 把已发送给用户的消息复制到该用户绑定的频道（频道副本）。
+// botID 是任务的受理 bot：已发送消息坐标是该 bot 私有的（用户私聊内消息
+// ID 按 bot 隔离），必须由同一 bot 执行复制；未命中回退主 bot。
 // 实现 queue.ChannelCopier；尽力而为：单频道失败只记日志，不中断其余频道，
 // 更不向调用方传播错误（worker 以此保证副本不影响任务结果）。
-func (s *Service) CopyToChannels(ctx context.Context, userID, userChatID int64, msgIDs []int) {
-	b := s.currentBot()
+func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int) {
+	b := s.botFor(botID)
 	if b == nil || userID <= 0 || userChatID == 0 || len(msgIDs) == 0 {
 		return
 	}
@@ -393,13 +440,13 @@ func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, stri
 	if err != nil {
 		return 0, "", err
 	}
-	b := s.currentBot()
-	if b == nil {
+	bots := s.currentBots()
+	if len(bots) == 0 {
 		return 0, "", apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
 	}
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := b.GetChat(vctx, tgt.chatParams())
+	chat, err := bots[0].GetChat(vctx, tgt.chatParams())
 	if err != nil {
 		return 0, "", apperr.Wrap(apperr.CodeChannelNotPostable, err)
 	}
@@ -407,7 +454,8 @@ func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, stri
 		return 0, "", apperr.New(apperr.CodeChannelTargetInvalid,
 			fmt.Sprintf("目标不是频道（type=%s）", chat.Type))
 	}
-	if err := verifyBotCanPost(vctx, b, b.ID(), chat.ID); err != nil {
+	// 复用副本可能由任一受理 bot 执行复制，全部 bot 都要可发帖
+	if err := verifyAllBotsCanPost(vctx, bots, chat.ID); err != nil {
 		return 0, "", err
 	}
 	return chat.ID, chat.Title, nil

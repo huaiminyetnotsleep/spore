@@ -99,6 +99,7 @@ function statsResponse(overrides: Partial<StatsResponse> = {}): StatsResponse {
       error_dist: [{ key: "MEDIA_DOWNLOAD_FAILED", count: 2, ratio: 1 }],
       dc_dist: [{ key: "2", count: 12 }],
       dc_trend: [{ day: "2026-08-27", dist: [{ key: "2", count: 12 }] }],
+      bot_dist: [],
     },
     ...overrides,
   };

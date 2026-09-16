@@ -62,13 +62,18 @@ type User struct {
 	BindLimit int
 	// CloudDownload 是用户级云盘下载权限三态；0 表示跟随角色默认
 	//（见 EffectiveCloudDownload），与全局开关是 AND 关系。
-	CloudDownload    int
-	CreatedAt        int64
-	FirstUsedAt      int64
-	LastUsedAt       int64
-	ArchivedAt       int64
-	LastDeniedAt     int64
-	LastDeniedReason string
+	CloudDownload int
+	// SourceBotID/SourceBotUsername 是来源 bot（首次 /start 的受理 bot）：
+	// ID 为 Telegram bot 账号数字 ID，用户名为受理时快照。0/空 = 存量行或
+	// Web 管理端手动添加（非 Bot 通道）。
+	SourceBotID       int64
+	SourceBotUsername string
+	CreatedAt         int64
+	FirstUsedAt       int64
+	LastUsedAt        int64
+	ArchivedAt        int64
+	LastDeniedAt      int64
+	LastDeniedReason  string
 }
 
 // selectUser 是 users 查询的统一前缀，可空列已 COALESCE 归一为零值。
@@ -76,6 +81,7 @@ const selectUser = `SELECT id, status, is_owner,
 	COALESCE(username, ''), COALESCE(display_name, ''), COALESCE(note, ''),
 	submit_interval_sec, daily_limit, concurrent_limit, bind_limit,
 	cloud_download,
+	source_bot_id, source_bot_username,
 	created_at, COALESCE(first_used_at, 0), COALESCE(last_used_at, 0),
 	COALESCE(archived_at, 0), COALESCE(last_denied_at, 0), COALESCE(last_denied_reason, '')
 FROM users`
@@ -92,6 +98,7 @@ func scanUser(row scanner) (User, error) {
 	)
 	err := row.Scan(&u.ID, &u.Status, &owner, &u.Username, &u.DisplayName, &u.Note,
 		&u.SubmitIntervalSec, &u.DailyLimit, &u.ConcurrentLimit, &u.BindLimit, &u.CloudDownload,
+		&u.SourceBotID, &u.SourceBotUsername,
 		&u.CreatedAt, &u.FirstUsedAt, &u.LastUsedAt, &u.ArchivedAt,
 		&u.LastDeniedAt, &u.LastDeniedReason)
 	u.IsOwner = owner == 1
@@ -123,12 +130,14 @@ func (s *Store) CreateUser(ctx context.Context, in User) (User, error) {
 	res, err := s.ex.ExecContext(ctx, `INSERT INTO users
 		(id, status, is_owner, username, display_name, note,
 		 submit_interval_sec, daily_limit, concurrent_limit, created_at,
-		 first_used_at, last_used_at, archived_at, last_denied_at, last_denied_reason)
-		VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 first_used_at, last_used_at, archived_at, last_denied_at, last_denied_reason,
+		 source_bot_id, source_bot_username)
+		VALUES (?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		nullInt64(in.ID), in.Status, nullStr(in.Username), nullStr(in.DisplayName), nullStr(in.Note),
 		in.SubmitIntervalSec, in.DailyLimit, in.ConcurrentLimit, in.CreatedAt,
 		nullInt64(in.FirstUsedAt), nullInt64(in.LastUsedAt), nullInt64(in.ArchivedAt),
-		nullInt64(in.LastDeniedAt), nullStr(in.LastDeniedReason))
+		nullInt64(in.LastDeniedAt), nullStr(in.LastDeniedReason),
+		in.SourceBotID, in.SourceBotUsername)
 	if err != nil {
 		if isConstraintErr(err) {
 			return User{}, apperr.Wrap(apperr.CodeStoreConstraint, fmt.Errorf("创建用户 %d: %w", in.ID, err))

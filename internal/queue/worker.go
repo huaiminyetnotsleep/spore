@@ -69,7 +69,7 @@ type EventSink interface {
 // worker 跳过全部副本投递。实现必须尽力而为：内部失败只记日志，
 // 不向调用方传播错误，更不得影响任务结果。
 type ChannelCopier interface {
-	CopyToChannels(ctx context.Context, userID, userChatID int64, msgIDs []int)
+	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int)
 }
 
 // ChannelLinksProvider 提供该用户绑定频道的脚注跳转链接（消息末尾的
@@ -102,12 +102,16 @@ type CloudCfg interface {
 
 // Deps 聚合 worker 处理任务所需的依赖。
 type Deps struct {
-	Fetcher  Fetcher
-	Sender   delivery.Sender
-	Media    media.Options
-	Transfer *transfercfg.Runtime // 任务开始时读取一次，线程数保持任务内一致
-	Store    *store.Store         // 业务数据库：requests 行阶段埋点；nil 或 Job.RequestID==0 时跳过
-	Events   EventSink            // 事件中心回调；nil 时跳过全部事件上报
+	Fetcher Fetcher
+	Sender  delivery.Sender
+	// SenderFor 按任务的受理 bot 解析发送通道（多机器人池）：状态提示编辑、
+	// 媒体投递、频道副本都走受理 bot 对应的私聊。nil 或解析为 nil（bot 已
+	// 下线/存量任务 BotID=0）时回退 Sender。
+	SenderFor func(j Job) delivery.Sender
+	Media     media.Options
+	Transfer  *transfercfg.Runtime // 任务开始时读取一次，线程数保持任务内一致
+	Store     *store.Store         // 业务数据库：requests 行阶段埋点；nil 或 Job.RequestID==0 时跳过
+	Events    EventSink            // 事件中心回调；nil 时跳过全部事件上报
 	// Progress 是处理中请求的实时传输进度注册表（internal/progress），
 	// 与 Web 管理端共享同一实例；nil 时跳过全部进度上报。
 	Progress *progress.Registry
@@ -135,6 +139,16 @@ type Deps struct {
 // copyWindow 是任务成功后频道副本投递的独立时间窗：使用剥离取消信号的
 // ctx，任务收尾（含进程退出）时副本投递不因 ctx 已死而失效。
 const copyWindow = 2 * time.Minute
+
+// senderFor 解析任务应使用的发送通道：受理 bot 优先，未命中回退 Sender。
+func (d Deps) senderFor(j Job) delivery.Sender {
+	if d.SenderFor != nil {
+		if snd := d.SenderFor(j); snd != nil {
+			return snd
+		}
+	}
+	return d.Sender
+}
 
 // Process 组装 worker 的任务处理逻辑：取源消息 → 标准化 → 重发。
 // 文本直接发送；媒体统一"下载 → 上传"（路由层按大小选择 Bot API 或
@@ -233,12 +247,12 @@ func Process(d Deps) Processor {
 				if j.DumpOnly {
 					// 仅缓存补写任务不打扰用户：失败只落库（Web 列表可见
 					// 原因与错误码），不发错误提示
-					delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 				} else {
-					if _, sendErr := d.Sender.SendMessage(ctx, j.ChatID, apperr.UserText(ae.Code)); sendErr != nil {
+					if _, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, apperr.UserText(ae.Code)); sendErr != nil {
 						d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
 					}
-					delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 				}
 			}
 		} else {
@@ -254,7 +268,7 @@ func Process(d Deps) Processor {
 				deleteStatusBestEffort(d, ctx, j)
 				return
 			}
-			delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+			delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 			switch {
 			case j.DumpOnly:
 				// 副本已由任务直接发送进缓存频道（发送即写入）：无用户消息
@@ -298,7 +312,7 @@ func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int) {
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
 	defer cancel()
-	d.Copier.CopyToChannels(cctx, j.UserID, j.ChatID, msgIDs)
+	d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs)
 }
 
 // writeCleanDump 在任务成功后向缓存频道写无脚注干净副本（dumpcache）。
@@ -315,7 +329,7 @@ func (d Deps) writeCleanDump(ctx context.Context, j Job, meta mediaMeta) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
 	defer cancel()
 	sourceURL, _ := j.Ref.URL()
-	d.Dump.WriteClean(cctx, j.ChatID, refChannelKey(j.Ref), j.Ref.MessageID,
+	d.Dump.WriteClean(cctx, j.BotID, j.ChatID, refChannelKey(j.Ref), j.Ref.MessageID,
 		meta.Items, meta.SentIDs, sourceURL)
 }
 
@@ -404,7 +418,7 @@ func sendConverted(ctx context.Context, d Deps, j Job, target int64, msgs []*tg.
 		switch {
 		case it.Media == nil:
 			// 文本消息（网页预览视为纯文本）
-			id, serr := d.Sender.SendMessage(sendCtx, target, it.RenderHTMLWithSource(sourceURL, links))
+			id, serr := d.senderFor(j).SendMessage(sendCtx, target, it.RenderHTMLWithSource(sourceURL, links))
 			if serr != nil {
 				return meta, serr
 			}
@@ -562,7 +576,7 @@ func isExpectedStateRace(err error) bool {
 func deleteStatusBestEffort(d Deps, ctx context.Context, j Job) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownWindow)
 	defer cancel()
-	delivery.TryDeleteStatus(wctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+	delivery.TryDeleteStatus(wctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 }
 
 // CancelledStatusHTML 渲染取消终态的占位消息：取消文案 + 来源消息链接，
@@ -586,7 +600,7 @@ func markStatusCancelled(d Deps, ctx context.Context, j Job) {
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownWindow)
 	defer cancel()
-	if err := d.Sender.EditMessageText(wctx, j.ChatID, j.StatusMsgID, CancelledStatusHTML(j.Ref)); err != nil {
+	if err := d.senderFor(j).EditMessageText(wctx, j.ChatID, j.StatusMsgID, CancelledStatusHTML(j.Ref)); err != nil {
 		d.Log.Debug("占位消息取消文案编辑失败", "job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 	}
 }
@@ -610,11 +624,11 @@ func Discard(d Deps) Processor {
 		}
 		d.Log.Warn("进程退出，丢弃排队任务", "job_id", j.ID, "user_id", j.UserID)
 		if !j.DumpOnly { // 仅缓存补写任务全程不打扰用户（含退出丢弃）
-			if _, err := d.Sender.SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
+			if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
 				d.Log.Warn("丢弃通知发送失败", "job_id", j.ID, "error", err.Error())
 			}
 		}
-		delivery.TryDeleteStatus(ctx, d.Sender, d.Log, j.ChatID, j.StatusMsgID)
+		delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 		discard := store.RequestResult{
 			Status:    store.RequestFailed,
 			ErrorCode: string(apperr.CodeInterrupted),
@@ -658,7 +672,7 @@ const albumOpenConcurrency = 2
 // 显式取消以停止其余在途下载（含分钟级 ToPath），函数返回时兜底取消。
 func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	for _, it := range items {
-		if !d.Sender.AlbumGroupable(*it.Media) {
+		if !d.senderFor(j).AlbumGroupable(*it.Media) {
 			d.Log.Info("相册含不可整组项，直接逐条发送", "job_id", j.ID, "items", len(items))
 			return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
 		}
@@ -714,7 +728,7 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 		return err
 	}
 	// 全员打开成功：openCtx 仍存活，SendAlbum 消费期间后台下载持续推进
-	ids, err := d.Sender.SendAlbum(ctx, target, entries)
+	ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)
 	if err != nil {
 		return err
 	}
@@ -783,7 +797,7 @@ func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.It
 		// 脚注与原消息链接同位：只出现在组首/带来源的条目上
 		caption = caption.WithChannels(links)
 	}
-	id, err := d.Sender.SendMedia(ctx, target, m, caption, uploadReader(d, j, src))
+	id, err := d.senderFor(j).SendMedia(ctx, target, m, caption, uploadReader(d, j, src))
 	if err != nil {
 		return err
 	}

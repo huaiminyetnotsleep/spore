@@ -45,7 +45,33 @@ func (s *Server) handleAPIMTProtoStatus(w http.ResponseWriter, r *http.Request, 
 			resp["bot_dc_id"] = bot.DCID
 		}
 	}
+	// 多机器人池：逐 bot 的大文件直传会话状态（装配顺序，主 bot 在前）；
+	// 顶层 bot_* 字段保留为主 bot 状态（前端兼容）。
+	if s.botMTPs != nil {
+		if entries := s.botMTPs.BotMTProtoEntries(); len(entries) > 0 {
+			rows := make([]apiBotMTProtoRow, 0, len(entries))
+			for _, e := range entries {
+				rows = append(rows, apiBotMTProtoRow{
+					BotID:     e.BotID,
+					Username:  e.Username,
+					State:     e.Snapshot.State,
+					DCID:      e.Snapshot.DCID,
+					UpdatedAt: e.Snapshot.UpdatedAt,
+				})
+			}
+			resp["bots"] = rows
+		}
+	}
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+// apiBotMTProtoRow 是 MTProto 状态响应 bots 数组的单 bot 条目。
+type apiBotMTProtoRow struct {
+	BotID     int64  `json:"bot_id"`
+	Username  string `json:"username,omitempty"`
+	State     string `json:"state"`
+	DCID      int    `json:"dc_id,omitempty"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // handleAPIMTProtoRelogin 触发重连（仅离线状态接受，

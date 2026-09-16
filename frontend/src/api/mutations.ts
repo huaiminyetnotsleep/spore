@@ -71,6 +71,25 @@ export const approveApplication = (id: number): Promise<ApplicationReviewResult>
 export const rejectApplication = (id: number): Promise<ApplicationReviewResult> =>
   postJSON<ApplicationReviewResult>(`/api/v1/applications/${id}/reject`);
 
+// ---- 机器人管理（多机器人池） ----
+
+export interface BotMutationResult extends WriteOK {
+  /** 变更后的列表快照（合并运行时身份）。 */
+  bots: import("./admin").BotRow[];
+  max_bots: number;
+  need_apply: boolean;
+  /** 受控提示：变更已保存，重启进程后生效。 */
+  restart_hint: string;
+}
+
+/** 新增文件来源 bot（token 写入 bots.json，0600；重启生效）。 */
+export const addBot = (token: string): Promise<BotMutationResult> =>
+  postJSON<BotMutationResult>("/api/v1/bots/add", { token });
+
+/** 移除文件来源 bot（env 来源由服务端拒绝，需改环境变量）。 */
+export const deleteBot = (botId: number): Promise<BotMutationResult> =>
+  postJSON<BotMutationResult>(`/api/v1/bots/${botId}/delete`);
+
 // ---- 用户管理 ----
 
 export interface AddUserInput {

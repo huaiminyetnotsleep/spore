@@ -22,6 +22,8 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
+	"github.com/huaiminyetnotsleep/spore/internal/botlist"
+	"github.com/huaiminyetnotsleep/spore/internal/botpool"
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
@@ -243,10 +245,36 @@ func main() {
 	m := mtproto.New(cfg, logger)
 	m.SetTransferRuntime(transferRuntime)
 	profileLookup := mtproto.NewProfileLookup()
-	// Bot 身份 MTProto 会话（大文件直传通道）独立于用户号会话，
-	// 同时把脱敏状态注入 Web 管理端展示。
-	botClient := mtproto.NewBotClient(cfg, logger)
-	botClient.SetTransferRuntime(transferRuntime)
+	// 多机器人池：env（BOT_TOKEN 主 bot + BOT_TOKENS 追加）提供基础列表，
+	// Web 管理端可向 data/bots.json（0600，凭据不入库）增删，合并去重后
+	// 生效（重启应用）。文件加载失败不阻断启动：回退 env 列表，事件中心
+	// 就绪后上报（管理员可在管理端修复）。大文件直传会话按 bot 隔离，
+	// 主 bot 沿用历史 bot-session.json 免重登。
+	botMgr := botlist.NewManager(cfg.DataDir, logger)
+	bots := botlist.Resolve(cfg.BotTokens, botMgr, logger)
+	if len(bots) > 1 {
+		logger.Info("多机器人池已启用", "bots", len(bots), "primary_source", string(bots[0].Source))
+	}
+	if err := botMgr.LoadError(); err != nil {
+		// hub 尚未构建（云盘同款时序差异）：延迟到 hub 就绪后上报
+		defer func() {
+			hub.Raise(context.Background(), notify.KeyBotListInvalid, notify.SeverityWarn,
+				"机器人列表文件损坏，文件条目已忽略（仅 env 来源生效），可在管理端修复后重启。")
+		}()
+	}
+	primaryClient := mtproto.NewBotClientFor(cfg, logger, bots[0].Token,
+		botlist.SessionPath(cfg.DataDir, bots[0].Token, true))
+	primaryClient.SetTransferRuntime(transferRuntime)
+	// 每 bot 独立的大文件直传会话（botID 即 token 数字前缀）：跨 MTProto
+	// 重连复用，长轮询重建不影响会话。
+	pool := botpool.New()
+	botClients := make(map[int64]*mtproto.BotClient, len(bots))
+	for i, bt := range bots {
+		client := mtproto.NewBotClientFor(cfg, logger, bt.Token,
+			botlist.SessionPath(cfg.DataDir, bt.Token, i == 0))
+		client.SetTransferRuntime(transferRuntime)
+		botClients[botlist.BotID(bt.Token)] = client
+	}
 	// 频道成员管理桥接器（/join、Web 已加入频道页共用）：ready 生命周期内
 	// 绑定 API 与 Fetcher，离线时相关操作返回受控不可用。
 	membership := mtproto.NewMembershipBridge()
@@ -274,28 +302,29 @@ func main() {
 		logger.Error("初始化频道加入服务失败", "error", err.Error())
 		os.Exit(1)
 	}
-	// 接入机器人身份（总览页展示）：Bot 客户端在 MTProto 就绪后才创建
-	// （重连会重建），晚于 Web 管理端启动，故先建持有器注入，稍后经
-	// getMe 回填；未就绪时总览页显示"未接入"。
-	botIdentity := &botIdentityStore{}
+	// 接入机器人身份（总览页展示）：直接读多机器人池成员快照，Bot 客户端
+	// 在 MTProto 就绪后才入池（重连会重建），未就绪时总览页显示"未接入"。
+	botIdentity := newBotIdentityStore(pool)
 	// 检查更新（总览页服务版本旁刷新按钮）：查询上游 GitHub 最新 Release，
 	// 结果缓存 1 小时；查询失败时端点受控降级，不影响其他功能。
 	releaseCheck := web.NewGitHubReleaseChecker()
 	webSrv, err := web.New(web.Options{
-		Store:       st,
-		Cfg:         cfg,
-		Log:         logger,
-		Access:      accessSvc,     // 管理操作入口（审批/重试/限额/设置）
-		Queue:       q,             // 总览页队列指标
-		MTProto:     m.Session(),   // 扫码登录状态与重连接口（§6.4）
-		BotMTProto:  botClient,     // Bot 会话状态与当前 DC
-		BotIdentity: botIdentity,   // 总览页展示接入机器人身份（Bot 就绪后经 getMe 回填）
-		Profile:     profileLookup, // 已就绪且有上下文时刷新用户资料
-		RestartFunc: func() error { return syscall.Kill(os.Getpid(), syscall.SIGTERM) },
-		Hub:         hub,              // 事件中心（resolve 统一经它执行并留审计）
-		Progress:    progressRegistry, // 请求记录页实时进度（与 worker 共享）
-		Monitor:     metrics,          // 系统资源与传输监控
-		Bindings:    bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）
+		Store:          st,
+		Cfg:            cfg,
+		Log:            logger,
+		Access:         accessSvc,                                        // 管理操作入口（审批/重试/限额/设置）
+		Queue:          q,                                                // 总览页队列指标
+		MTProto:        m.Session(),                                      // 扫码登录状态与重连接口（§6.4）
+		BotMTProto:     primaryClient,                                    // Bot 会话状态与当前 DC（主 bot；多 bot 见 robots 管理页）
+		BotIdentity:    botIdentity,                                      // 总览页展示机器人池身份（Bot 就绪后经 getMe 回填）
+		BotList:        botMgr,                                           // 机器人管理页（env ∪ bots.json 列表/增删）
+		BotMTProtoList: botMTProtoStore{pool: pool, clients: botClients}, // 逐 bot 直传会话状态
+		Profile:        profileLookup,                                    // 已就绪且有上下文时刷新用户资料
+		RestartFunc:    func() error { return syscall.Kill(os.Getpid(), syscall.SIGTERM) },
+		Hub:            hub,              // 事件中心（resolve 统一经它执行并留审计）
+		Progress:       progressRegistry, // 请求记录页实时进度（与 worker 共享）
+		Monitor:        metrics,          // 系统资源与传输监控
+		Bindings:       bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）
 
 		ChannelJoin:    joinSvc,                // 频道加入管理页（审批/已加入/退出）
 		Transfer:       transferRuntime,        // 四项传输并发的原子运行时配置
@@ -315,17 +344,19 @@ func main() {
 		}()
 	}
 
-	// Bot 身份 MTProto 会话（大文件直传通道）：与用户号会话、Bot API
+	// 每个机器人的 MTProto 大文件直传会话：与用户号会话、各 bot 的 Bot API
 	// 长轮询并存；异常退出自动退避重启，未就绪时超过 Bot API 上限的媒体
 	// 以确定性错误结束（小文件不受影响）。
-	go func() {
-		if err := botClient.Run(ctx); err != nil {
-			logger.Error("Bot MTProto 会话循环退出", "error", err.Error())
-		}
-	}()
+	for id, client := range botClients {
+		go func(id int64, client *mtproto.BotClient) {
+			if err := client.Run(ctx); err != nil {
+				logger.Error("Bot MTProto 会话循环退出", "bot_id", id, "error", err.Error())
+			}
+		}(id, client)
+	}
 
 	// 核心链路装配依赖集中到 app：MTProto 每次就绪（含重连）回调
-	// onMTProtoReady 重建 Bot 客户端与队列消费，其余服务跨生命周期复用。
+	// onMTProtoReady 重建机器人池与队列消费，其余服务跨生命周期复用。
 	a := &app{
 		cfg:         cfg,
 		log:         logger,
@@ -336,7 +367,9 @@ func main() {
 		join:        joinSvc,
 		hub:         hub,
 		userClient:  m,
-		botClient:   botClient,
+		pool:        pool,
+		botClients:  botClients,
+		bots:        bots,
 		profile:     profileLookup,
 		membership:  membership,
 		memoryGate:  memoryGate,

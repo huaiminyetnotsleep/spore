@@ -156,6 +156,15 @@ export function distKeyText(key: string): string {
   return key === "" ? "（未记录）" : key;
 }
 
+/** 受理/来源 bot 展示：@username 优先，空用户名回退 bot id；0（存量行/
+ * 非 Bot 通道）显示"—"。多机器人池的行级归属展示共用本单一来源。 */
+export function botLabel(botID: number | null | undefined, username?: string): string {
+  if (!botID) {
+    return "—";
+  }
+  return username ? `@${username}` : `bot ${botID}`;
+}
+
 /** 请求媒体类型展示；相册附带去重后的成员类型。 */
 export function requestMediaTypeText(mediaType: string, mediaTypes?: string[]): string {
   const primary = distKeyText(mediaType);

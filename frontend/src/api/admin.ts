@@ -67,6 +67,14 @@ export interface OverviewBot {
   username: string;
 }
 
+/** 多机器人池中单个 bot 的展示条目（装配顺序，主 bot 在前）。 */
+export interface OverviewBotEntry extends OverviewBot {
+  /** 是否主 bot（env 首项）。 */
+  primary: boolean;
+  /** Bot API 长轮询是否在线。 */
+  online: boolean;
+}
+
 export interface DistRow {
   /** 空串表示"未记录"（展示文案由 shared/format 统一）。 */
   key: string;
@@ -111,8 +119,10 @@ export interface OverviewResponse {
   workers: number;
   health: OverviewHealth;
   queue?: OverviewQueue;
-  /** 接入机器人身份；旧后端或未就绪时缺省（展示"未接入"）。 */
+  /** 接入机器人身份（主 bot）；旧后端或未就绪时缺省（展示"未接入"）。 */
   bot?: OverviewBot;
+  /** 机器人池全部成员；旧后端或空池时缺省。 */
+  bots?: OverviewBotEntry[];
   requests: OverviewRequests;
   users: OverviewUsers;
   join: OverviewJoin;
@@ -189,8 +199,20 @@ export function fetchSystemMetrics(range: SystemMetricsRange): Promise<SystemMet
 export interface RangeParams {
   since?: string;
   until?: string;
+  /** 限定受理 bot（多机器人池）；缺省 = 全部。 */
+  bot_id?: string;
   /** 全量统计（忽略时间范围）；后端约定值 "1"。 */
   all?: string;
+}
+
+/** 按受理 bot 的统计条目；bot_id 为 0 表示存量行/非 Bot 通道创建（展示"未知"）。 */
+export interface StatsBot {
+  bot_id: number;
+  bot_username?: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  last_requested_at: number;
 }
 
 export interface StatsChannel {
@@ -254,6 +276,8 @@ export interface StatsRequests {
   dc_dist: DistRow[];
   /** 按日源媒体 DC 分布（堆叠柱状图）。 */
   dc_trend: DCTrendPoint[];
+  /** 按受理 bot 分布（不受 bot 筛选影响，展示全量分布）。 */
+  bot_dist: StatsBot[];
 }
 
 export interface StatsResponse {
@@ -283,6 +307,9 @@ export interface UserRow {
   cloud_download: number;
   /** 生效值（raw 0 时后端按角色解析：owner true / 普通用户 false）。 */
   effective_cloud_download: boolean;
+  /** 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。 */
+  source_bot_id: number;
+  source_bot_username?: string;
 }
 
 export interface UserListParams {
@@ -321,6 +348,9 @@ export interface UserDetail {
   /** 生效值（raw 0 时后端按角色解析：owner true / 普通用户 false）。 */
   effective_cloud_download: boolean;
   total_requests: number;
+  /** 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。 */
+  source_bot_id: number;
+  source_bot_username?: string;
 }
 
 export function fetchUsers(params: UserListParams = {}): Promise<ListEnvelope<UserRow>> {
@@ -362,6 +392,10 @@ export interface RequestRow {
   source_media_dc_ids?: number[];
 	/** 投递方式：reference（引用）| upload（上传）| mixed（混合）| text（文本）。 */
   delivery_mode: string;
+  /** 受理 bot 的 Telegram 账号 ID；0 = 存量行/非 Bot 通道创建（展示"—"）。 */
+  bot_id: number;
+  /** 受理时的 bot 用户名快照（不含 @）。 */
+  bot_username?: string;
   requested_at: number;
   duration_ms: number;
   /**
@@ -373,6 +407,8 @@ export interface RequestRow {
 
 export interface RequestListParams {
   user_id?: string;
+  /** 限定受理 bot；缺省 = 全部。 */
+  bot_id?: string;
   status?: string;
   channel?: string;
   media_type?: string;
@@ -442,6 +478,8 @@ export interface ChannelRow {
 export interface ChannelListParams {
   since?: string;
   until?: string;
+  /** 限定受理 bot（多机器人池）；缺省 = 全部。 */
+  bot_id?: string;
   page?: number;
   page_size?: number;
 }
@@ -453,12 +491,23 @@ export interface TrendPoint {
   failed: number;
 }
 
+/** 频道内按受理 bot 的分布条目；bot_id 为 0 表示存量行（展示"未知"）。 */
+export interface ChannelBotRow {
+  bot_id: number;
+  bot_username?: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+}
+
 export interface ChannelDetail {
   key: string;
   stats: ChannelRow;
   trend: TrendPoint[];
   media_dist: DistRow[];
   error_dist: DistRow[];
+  /** 按受理 bot 分布（多机器人池）。 */
+  bot_dist: ChannelBotRow[];
   since_day: string;
   until_day: string;
 }
@@ -538,6 +587,9 @@ export interface ApplicationRow {
   display_name: string;
   /** Unix 毫秒（users.created_at）。 */
   applied_at: number;
+  /** 来源 bot（首次 /start 的受理 bot）；0 = 存量行。 */
+  source_bot_id: number;
+  source_bot_username?: string;
 }
 
 export function fetchApplications(): Promise<{ items: ApplicationRow[] }> {
@@ -695,6 +747,17 @@ export interface MTProtoStatus {
 	bot_dc_id?: number;
 	bot_updated_at?: number;
 	last_error?: string;
+	/** 多机器人池：逐 bot 的直传会话状态（装配顺序，主 bot 在前）。 */
+	bots?: MTProtoBotRow[];
+}
+
+/** MTProto 状态响应 bots 数组的单 bot 条目。 */
+export interface MTProtoBotRow {
+  bot_id: number;
+  username?: string;
+  state: string;
+  dc_id?: number;
+  updated_at: number;
 }
 
 export function fetchMTProtoStatus(): Promise<MTProtoStatus> {
@@ -795,6 +858,40 @@ export interface JoinedChannelRow {
 
 export function fetchJoinedChannels(): Promise<{ items: JoinedChannelRow[] }> {
   return apiRequest<{ items: JoinedChannelRow[] }>("/api/v1/channel-join/channels");
+}
+
+// ---- 机器人管理（多机器人池） ----
+
+/**
+ * 机器人列表条目（GET /api/v1/bots）。合并 env（只读）与 bots.json（可增删）
+ * 来源，并合并运行时身份；token 只进不出，任何字段不回显 token。
+ */
+export interface BotRow {
+  /** Telegram bot 账号 ID（token 数字前缀）；0 = 尚未接入。 */
+  bot_id: number;
+  username?: string;
+  name?: string;
+  /** 是否主 bot（env 首项）。 */
+  primary: boolean;
+  /** Bot API 长轮询在线。 */
+  online: boolean;
+  /** Bot MTProto 直传会话 raw 状态；空串 = 未接入。 */
+  mtproto_state?: string;
+  /** env（环境变量，只读）| file（bots.json，可增删）。 */
+  source: string;
+  /** 已配置但当前进程未接入（等待重启生效）。 */
+  restart_pending: boolean;
+}
+
+export interface BotsView {
+  bots: BotRow[];
+  max_bots: number;
+  /** 有条目等待重启生效。 */
+  need_apply: boolean;
+}
+
+export function fetchBots(): Promise<BotsView> {
+  return apiRequest<BotsView>("/api/v1/bots");
 }
 
 // ---- 云盘下载（配置查询；写操作在 api/mutations.ts） ----

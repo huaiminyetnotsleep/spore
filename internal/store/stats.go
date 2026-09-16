@@ -21,6 +21,7 @@ const defaultStatsLimit = 20
 type StatsFilter struct {
 	ChannelKey string // 限定单频道；空 = 全部
 	UserID     int64  // 限定单用户；0 = 全部
+	BotID      int64  // 限定受理 bot；0 = 全部（含存量行 bot_id=0）
 	Since      int64  // requested_at >= Since（Unix 毫秒）
 	Until      int64  // requested_at < Until（Unix 毫秒）
 	Limit      int    // <=0 时取 defaultStatsLimit
@@ -38,6 +39,10 @@ func (f StatsFilter) where() (string, []any) {
 	if f.UserID > 0 {
 		conds = append(conds, "user_id = ?")
 		args = append(args, f.UserID)
+	}
+	if f.BotID > 0 {
+		conds = append(conds, "bot_id = ?")
+		args = append(args, f.BotID)
 	}
 	if f.Since > 0 {
 		conds = append(conds, "requested_at >= ?")
@@ -366,6 +371,79 @@ func (s *Store) ListUserRequestStats(ctx context.Context, f StatsFilter) ([]User
 		out = append(out, u)
 	}
 	return out, wrapDB("遍历用户用量行", rows.Err())
+}
+
+// ---- 机器人聚合----
+
+// BotStats 是按受理 bot 聚合的请求统计。BotID=0（存量行/非 Bot 通道创建）
+// 照常返回一行，由调用方展示为"未知"，保证总量对得上。
+type BotStats struct {
+	BotID         int64
+	BotUsername   string // 受理时快照的代表值（同一 bot 用户名变更时取字典序最大，仅展示用）
+	Total         int
+	Succeeded     int
+	Failed        int
+	LastRequested int64
+}
+
+// ListBotStats 按受理 bot 聚合请求统计，按请求量倒序（bot 排行）。
+// 受 StatsFilter 其余条件（时间/频道/用户）筛选。
+func (s *Store) ListBotStats(ctx context.Context, f StatsFilter) ([]BotStats, error) {
+	where, args := f.where()
+	rows, err := s.ex.QueryContext(ctx, `SELECT bot_id, COALESCE(MAX(bot_username), ''), COUNT(*),
+			COALESCE(SUM(status = ?), 0), COALESCE(SUM(status = ?), 0), MAX(requested_at)
+		FROM requests`+where+`
+		GROUP BY bot_id
+		ORDER BY COUNT(*) DESC, bot_id
+		LIMIT ? OFFSET ?`,
+		append(append([]any{RequestSucceeded, RequestFailed}, args...), f.limit(), f.Offset)...)
+	if err != nil {
+		return nil, wrapDB("聚合机器人统计", err)
+	}
+	defer rows.Close()
+	var out []BotStats
+	for rows.Next() {
+		var b BotStats
+		if err := rows.Scan(&b.BotID, &b.BotUsername, &b.Total, &b.Succeeded, &b.Failed, &b.LastRequested); err != nil {
+			return nil, wrapDB("扫描机器人统计行", err)
+		}
+		out = append(out, b)
+	}
+	return out, wrapDB("遍历机器人统计行", rows.Err())
+}
+
+// ChannelBotStats 是频道内按受理 bot 的请求分布条目。
+type ChannelBotStats struct {
+	BotID       int64
+	BotUsername string
+	Total       int
+	Succeeded   int
+	Failed      int
+}
+
+// ListChannelBotStats 聚合指定频道内各 bot 的请求分布，按请求量倒序；
+// 频道的其他统计维度（时间筛选）由 f 携带，ChannelKey 必须非空。
+func (s *Store) ListChannelBotStats(ctx context.Context, f StatsFilter) ([]ChannelBotStats, error) {
+	where, args := f.where()
+	rows, err := s.ex.QueryContext(ctx, `SELECT bot_id, COALESCE(MAX(bot_username), ''), COUNT(*),
+			COALESCE(SUM(status = ?), 0), COALESCE(SUM(status = ?), 0)
+		FROM requests`+where+`
+		GROUP BY bot_id
+		ORDER BY COUNT(*) DESC, bot_id`,
+		append([]any{RequestSucceeded, RequestFailed}, args...)...)
+	if err != nil {
+		return nil, wrapDB("聚合频道机器人分布", err)
+	}
+	defer rows.Close()
+	var out []ChannelBotStats
+	for rows.Next() {
+		var b ChannelBotStats
+		if err := rows.Scan(&b.BotID, &b.BotUsername, &b.Total, &b.Succeeded, &b.Failed); err != nil {
+			return nil, wrapDB("扫描频道机器人分布行", err)
+		}
+		out = append(out, b)
+	}
+	return out, wrapDB("遍历频道机器人分布行", rows.Err())
 }
 
 // ---- 管理概览总量----

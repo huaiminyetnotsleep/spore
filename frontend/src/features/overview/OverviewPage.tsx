@@ -244,7 +244,21 @@ export function OverviewPage() {
           <Descriptions.Item label="启动时间">{fmtTime(data.started_at)}</Descriptions.Item>
           <Descriptions.Item label="监听地址">{data.addr}</Descriptions.Item>
           <Descriptions.Item label="Worker 数">{data.workers}</Descriptions.Item>
-          <Descriptions.Item label="机器人">{botIdentityText(data.bot)}</Descriptions.Item>
+          <Descriptions.Item label="机器人">
+            {data.bots && data.bots.length > 0 ? (
+              <Space direction="vertical" size={2} data-testid="bot-pool-list">
+                {data.bots.map((b) => (
+                  <Space key={b.id} size={6} wrap>
+                    {b.primary ? <Tag color="blue">主</Tag> : null}
+                    <Tag color={b.online ? "green" : "default"}>{b.online ? "在线" : "离线"}</Tag>
+                    <span>{botIdentityText(b)}</span>
+                  </Space>
+                ))}
+              </Space>
+            ) : (
+              botIdentityText(data.bot)
+            )}
+          </Descriptions.Item>
           <Descriptions.Item label="Bot API 长轮询">
             {botAPIStateText(health.mtproto_state)}
             <Text type="secondary">（随 MTProto 会话启停）</Text>

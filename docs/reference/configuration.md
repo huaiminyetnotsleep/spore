@@ -30,7 +30,8 @@ Spore 的配置有三个来源：
 
 | 变量 | 默认值与校验 | 生效方式 | 说明与边界 |
 | --- | --- | --- | --- |
-| `BOT_TOKEN` | 必填；格式为 `数字:至少20位字母/数字/_/-`（Telegram Bot Token） | 启动 | 同时供 Bot API 与 Bot 身份 MTProto 登录；不得写入日志；Bot 会话另存 `data/bot-session.json` |
+| `BOT_TOKEN` | 与 `BOT_TOKENS` 至少配置其一；格式为 `数字:至少20位字母/数字/_/-`（Telegram Bot Token） | 启动 | 主 bot（首项），同时供 Bot API 与 Bot 身份 MTProto 登录；不得写入日志；Bot 会话另存 `data/bot-session.json` |
+| `BOT_TOKENS` | 可选；逗号分隔多个 token，逐项校验并去重，总数上限 20 | 启动 | 多机器人池：追加其余 bot（`BOT_TOKEN` 为主 bot），每个 bot 独立长轮询与大文件直传会话（`data/bot-session-<botID>.json`）；也可在管理端「机器人管理」页增删（`data/bots.json`，0600，token 不入库），修改后重启生效。绑定频道与缓存频道要求**所有** bot 均为频道管理员 |
 | `TG_API_ID` | 必填；正整数 | 启动 | 两个 MTProto 客户端共用；申请方式见 [Telegram API 凭据](../guide/telegram-api-credentials.md) |
 | `TG_API_HASH` | 必填；非空 | 启动 | 不进日志、不写入业务数据 |
 

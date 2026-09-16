@@ -15,6 +15,7 @@ import {
   DatabaseOutlined,
   ExceptionOutlined,
   GithubOutlined,
+  RobotOutlined,
   LineChartOutlined,
   LinkOutlined,
   SettingOutlined,
@@ -29,6 +30,7 @@ import { matchPath, Route, Routes } from "react-router-dom";
 
 import { AuditPage } from "../features/audit/AuditPage";
 import { BackupPage } from "../features/backup/BackupPage";
+import { BotsPage } from "../features/bots/BotsPage";
 import { BindingsPage } from "../features/bindings/BindingsPage";
 import { CloudDrivePage } from "../features/cloud-drive/CloudDrivePage";
 import { ChannelSettingsPage } from "../features/channel-settings/ChannelSettingsPage";
@@ -267,6 +269,15 @@ export const routeMeta = [
     icon: <DatabaseOutlined />,
     menuVisible: true,
   },
+  {
+    key: "bots",
+    path: "/bots",
+    label: "机器人管理",
+    title: "机器人管理",
+    groupKey: "system-operations",
+    icon: <RobotOutlined />,
+    menuVisible: true,
+  },
 ] as const satisfies readonly NavigationRoute[];
 
 export type RouteKey = (typeof routeMeta)[number]["key"];
@@ -304,7 +315,7 @@ export const navigationGroups = [
   {
     key: "system-operations",
     label: "系统运维",
-    routeKeys: ["settings", "system-config", "mtproto", "oauth", "backup"],
+    routeKeys: ["settings", "system-config", "mtproto", "oauth", "backup", "bots"],
   },
 ] as const satisfies readonly NavigationGroup[];
 
@@ -386,6 +397,7 @@ export function AppRoutes() {
         <Route path="/settings/system" element={<SystemConfigPage />} />
         <Route path="/settings/oauth" element={<OAuthSettingsPage />} />
         <Route path="/backup" element={<BackupPage />} />
+        <Route path="/bots" element={<BotsPage />} />
         <Route path="/mtproto" element={<MTProtoPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="*" element={<NotFoundPage />} />

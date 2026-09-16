@@ -37,9 +37,11 @@ type BotStatusSnapshot struct {
 }
 
 type BotClient struct {
-	cfg      config.Config
-	log      *slog.Logger
-	transfer *transfercfg.Runtime
+	cfg         config.Config
+	log         *slog.Logger
+	transfer    *transfercfg.Runtime
+	token       string // 本会话登录的 bot token；绝不入日志
+	sessionPath string // 会话文件路径：主 bot 沿用历史文件，其余按 bot id 隔离
 
 	mu        sync.Mutex
 	api       *tg.Client // 就绪后非 nil；掉线清空（peers 缓存保留）
@@ -49,9 +51,19 @@ type BotClient struct {
 	peers     map[int64]int64 // userID → accessHash，bot 特权解析所得，跨重连稳定
 }
 
-// NewBotClient 创建 Bot 会话客户端；Run 启动后经 Available/Send* 使用。
+// NewBotClient 创建 Bot 会话客户端（单 bot 部署：token 与会话路径取自 cfg）；
+// Run 启动后经 Available/Send* 使用。
 func NewBotClient(cfg config.Config, log *slog.Logger) *BotClient {
-	return &BotClient{cfg: cfg, log: log, state: BotStateOffline, updatedAt: time.Now().UnixMilli(), peers: map[int64]int64{}}
+	return NewBotClientFor(cfg, log, cfg.BotToken, filepath.Join(cfg.DataDir, "bot-session.json"))
+}
+
+// NewBotClientFor 创建指定 bot 的会话客户端（多机器人池）：token 显式传入，
+// 会话文件路径由调用方按 bot 隔离（见 botlist.SessionPath），互不覆盖。
+func NewBotClientFor(cfg config.Config, log *slog.Logger, token, sessionPath string) *BotClient {
+	return &BotClient{
+		cfg: cfg, log: log, token: token, sessionPath: sessionPath,
+		state: BotStateOffline, updatedAt: time.Now().UnixMilli(), peers: map[int64]int64{},
+	}
 }
 
 // SetTransferRuntime 注入进程级传输并发快照；nil 时回退启动配置。
@@ -89,7 +101,7 @@ func (c *BotClient) Run(ctx context.Context) error {
 
 // runOnce 运行一个完整生命周期：必要时 Bot 登录，就绪后保持连接直至 ctx 结束。
 func (c *BotClient) runOnce(ctx context.Context) error {
-	sessionPath := filepath.Join(c.cfg.DataDir, "bot-session.json")
+	sessionPath := c.sessionPath
 
 	// 与用户会话同款 FLOOD_WAIT 处理（client.go §runOnce 的选型说明）。
 	waiter := floodwait.NewSimpleWaiter().WithMaxRetries(5)
@@ -112,7 +124,7 @@ func (c *BotClient) runOnce(ctx context.Context) error {
 			return fmt.Errorf("查询 Bot 登录状态失败: %w", err)
 		}
 		if !status.Authorized {
-			if _, err := client.Auth().Bot(ctx, c.cfg.BotToken); err != nil {
+			if _, err := client.Auth().Bot(ctx, c.token); err != nil {
 				return fmt.Errorf("Bot 登录失败: %w", err)
 			}
 			c.log.Info("Bot MTProto 会话登录成功", "path", sessionPath)

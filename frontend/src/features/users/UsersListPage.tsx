@@ -12,7 +12,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { fetchUsers, type UserRow } from "../../api/admin";
 import { addUser, resetUserQuota, setUserStatus, type UserStatusAction } from "../../api/mutations";
-import { USER_STATUS_LABELS, USER_STATUS_TAG_COLORS, fmtTime, labelOf } from "../../shared/format";
+import { USER_STATUS_LABELS, USER_STATUS_TAG_COLORS, botLabel, fmtTime, labelOf } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { applyListFilters } from "../shared/listFilters";
 import { LoadError, PageCard } from "../shared/PageStates";
@@ -105,6 +105,11 @@ export function UsersListPage() {
       ),
     },
     { title: "备注", dataIndex: "note", key: "note", ellipsis: true },
+    {
+      title: "来源机器人",
+      key: "source_bot",
+      render: (_, row) => <Text>{botLabel(row.source_bot_id, row.source_bot_username)}</Text>,
+    },
     { title: "最近使用", dataIndex: "last_used_at", key: "last_used", render: fmtTime },
     {
       title: "累计请求",

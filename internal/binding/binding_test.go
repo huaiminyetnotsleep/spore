@@ -129,7 +129,7 @@ func TestBindSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建服务失败: %v", err)
 	}
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 
 	bound, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot})
 	if err != nil {
@@ -159,7 +159,7 @@ func TestBindOwnershipConflict(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("首次绑定失败: %v", err)
@@ -180,7 +180,7 @@ func TestBindVerificationFailures(t *testing.T) {
 		b, _ := newTestBot(t, channelChatJSON,
 			`{"status":"member","user":{"id":12345,"is_bot":true}}`, http.StatusOK)
 		svc, _ := New(Options{Store: s, Log: testLog()})
-		svc.SetBot(b)
+		svc.SetBots([]*tgbot.Bot{b})
 		_, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot})
 		var ae *apperr.AppError
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelNotPostable {
@@ -192,7 +192,7 @@ func TestBindVerificationFailures(t *testing.T) {
 		b, _ := newTestBot(t, channelChatJSON,
 			`{"status":"administrator","user":{"id":12345,"is_bot":true},"can_post_messages":false}`, http.StatusOK)
 		svc, _ := New(Options{Store: s, Log: testLog()})
-		svc.SetBot(b)
+		svc.SetBots([]*tgbot.Bot{b})
 		_, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot})
 		var ae *apperr.AppError
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelNotPostable {
@@ -203,7 +203,7 @@ func TestBindVerificationFailures(t *testing.T) {
 	t.Run("目标不是频道", func(t *testing.T) {
 		b, _ := newTestBot(t, `{"id":-1001,"type":"supergroup","title":"群"}`, adminMemberJSON, http.StatusOK)
 		svc, _ := New(Options{Store: s, Log: testLog()})
-		svc.SetBot(b)
+		svc.SetBots([]*tgbot.Bot{b})
 		_, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1001", Via: store.BoundViaBot})
 		var ae *apperr.AppError
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelTargetInvalid {
@@ -229,7 +229,7 @@ func TestUnbindScope(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
@@ -260,7 +260,7 @@ func TestListAllWithUser(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaWeb}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestCopyToChannelsNoBotIsNoop(t *testing.T) {
 	s := openStore(t)
 	svc, _ := New(Options{Store: s, Log: testLog()})
 	// bot 未注入 & 无绑定：不得 panic
-	svc.CopyToChannels(context.Background(), 1, 1, []int{1, 2})
+	svc.CopyToChannels(context.Background(), 0, 1, 1, []int{1, 2})
 }
 
 const privateChatJSON = `{"id":-1009876543210,"type":"channel","title":"私有频道"}`
@@ -304,13 +304,13 @@ func TestRefreshChannelBecomesPrivate(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
 	}
 
 	// 频道转为私有：getChat 返回同 ID 但无 username
-	svc.SetBot(mustBot(t, chatJSONWith(testChannelD, "", "我的频道")))
+	svc.SetBots([]*tgbot.Bot{mustBot(t, chatJSONWith(testChannelD, "", "我的频道"))})
 	rows, err := svc.ListByUser(ctx, 100)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("列表失败: %v %v", rows, err)
@@ -337,13 +337,13 @@ func TestRefreshChannelBecomesPublic(t *testing.T) {
 
 	b, _ := newTestBot(t, privateChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1009876543210", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
 	}
 
 	// 频道转为公开：getChat 返回同 ID 但带新 username
-	svc.SetBot(mustBot(t, chatJSONWith(-1009876543210, "nowpublic", "私有频道")))
+	svc.SetBots([]*tgbot.Bot{mustBot(t, chatJSONWith(-1009876543210, "nowpublic", "私有频道"))})
 	rows, err := svc.ListByUser(ctx, 100)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("列表失败: %v %v", rows, err)
@@ -367,13 +367,13 @@ func TestRefreshChannelGoneKeepsSnapshot(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
 	}
 
 	// GetChat 失败（Bot 被移出频道等）：沿用旧快照，不报错
-	svc.SetBot(mustBotWithStatus(t, chatJSONWith(testChannelD, "", ""), http.StatusBadRequest))
+	svc.SetBots([]*tgbot.Bot{mustBotWithStatus(t, chatJSONWith(testChannelD, "", ""), http.StatusBadRequest)})
 	rows, err := svc.ListByUser(ctx, 100)
 	if err != nil || len(rows) != 1 || rows[0].Username != "mychan" {
 		t.Fatalf("GetChat 失败应沿用快照: %v %v", rows, err)
@@ -387,7 +387,7 @@ func TestRefreshTTLThrottle(t *testing.T) {
 
 	b, methods := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定失败: %v", err)
 	}
@@ -446,14 +446,14 @@ func TestPublicChannelLinks(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 	// 公开频道绑定
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "@mychan", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定公开频道失败: %v", err)
 	}
 	// 私有频道绑定（无 username，有 title）：换对应频道的测试 bot
 	privBot, _ := newTestBot(t, privateChatJSON, adminMemberJSON, http.StatusOK)
-	svc.SetBot(privBot)
+	svc.SetBots([]*tgbot.Bot{privBot})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1009876543210", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("绑定私有频道失败: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestBindLimit(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1001234567890", Via: store.BoundViaBot}); err != nil {
 		t.Fatalf("首次绑定失败: %v", err)
@@ -498,7 +498,7 @@ func TestBindLimit(t *testing.T) {
 
 	// 换一个频道（把测试机器人的 getChat 换成另一个 ID）
 	b2, _ := newTestBot(t, `{"id":-1009999999999,"type":"channel","title":"另一个"}`, adminMemberJSON, http.StatusOK)
-	svc.SetBot(b2)
+	svc.SetBots([]*tgbot.Bot{b2})
 	_, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1009999999999", Via: store.BoundViaBot})
 	var ae *apperr.AppError
 	if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelBindLimit {
@@ -518,20 +518,20 @@ func TestBindLimitOwnerAndCustom(t *testing.T) {
 
 	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
 	svc, _ := New(Options{Store: s, Log: testLog()})
-	svc.SetBot(b)
+	svc.SetBots([]*tgbot.Bot{b})
 
 	// owner 默认上限 3
 	ids := []string{"-1001234567890", "-1009999999999", "-1008888888888"}
 	for _, id := range ids {
 		b2, _ := newTestBot(t,
 			`{"id":`+id+`,"type":"channel","title":"t`+id+`"}`, adminMemberJSON, http.StatusOK)
-		svc.SetBot(b2)
+		svc.SetBots([]*tgbot.Bot{b2})
 		if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: id, Via: store.BoundViaBot}); err != nil {
 			t.Fatalf("owner 绑定 %s 应成功: %v", id, err)
 		}
 	}
 	b3, _ := newTestBot(t, `{"id":-1007777777777,"type":"channel","title":"第四个"}`, adminMemberJSON, http.StatusOK)
-	svc.SetBot(b3)
+	svc.SetBots([]*tgbot.Bot{b3})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1007777777777", Via: store.BoundViaBot}); err == nil {
 		t.Fatal("owner 第 4 个绑定应被拒绝")
 	}
@@ -543,7 +543,7 @@ func TestBindLimitOwnerAndCustom(t *testing.T) {
 	}
 	rebind, _ := newTestBot(t,
 		`{"id":-1001234567890,"type":"channel","title":"t-1001234567890"}`, adminMemberJSON, http.StatusOK)
-	svc.SetBot(rebind)
+	svc.SetBots([]*tgbot.Bot{rebind})
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1001234567890", Via: store.BoundViaWeb}); err != nil {
 		t.Fatalf("幂等重绑不受新上限影响: %v", err)
 	}

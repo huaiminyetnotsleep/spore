@@ -788,7 +788,7 @@ func TestUploadThumbDegrade(t *testing.T) {
 // ---- 频道目标（缓存频道直传）与副本存在性校验 ----
 
 // channelInvoker 按请求类型分发预设响应：channels.getChannels 返回目标频道
-//（bot 特权反查 access_hash），channels.getMessages 返回预设消息集，
+// （bot 特权反查 access_hash），channels.getMessages 返回预设消息集，
 // messages.sendMedia 记录请求并返回空 Updates。
 type channelInvoker struct {
 	mu           sync.Mutex
@@ -840,9 +840,9 @@ func TestNativeChannelID(t *testing.T) {
 	}{
 		{-1004443957166, 4443957166, true},
 		{-100123, 123, true},
-		{-12345, 0, false},  // 普通群组 - 前缀，不支持
-		{7, 0, false},       // 用户私聊不走此路径
-		{-100, 0, false},    // 空 ID
+		{-12345, 0, false}, // 普通群组 - 前缀，不支持
+		{7, 0, false},      // 用户私聊不走此路径
+		{-100, 0, false},   // 空 ID
 	} {
 		got, ok := nativeChannelID(tc.chatID)
 		if got != tc.want || ok != tc.ok {
@@ -881,4 +881,3 @@ func TestBotClientSendLargeMediaToChannel(t *testing.T) {
 		t.Fatalf("缓存命中不应再反查: %d", inv.resolveCalls)
 	}
 }
-

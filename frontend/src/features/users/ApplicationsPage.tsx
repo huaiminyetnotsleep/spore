@@ -12,7 +12,7 @@ import { Link } from "react-router-dom";
 
 import { fetchApplications, type ApplicationRow } from "../../api/admin";
 import { approveApplication, rejectApplication } from "../../api/mutations";
-import { fmtTime } from "../../shared/format";
+import { botLabel, fmtTime } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { LoadError, PageCard } from "../shared/PageStates";
 
@@ -67,6 +67,11 @@ export function ApplicationsPage() {
       render: (name: string) => name || "—",
     },
     { title: "申请时间", dataIndex: "applied_at", key: "applied_at", render: fmtTime },
+    {
+      title: "来源机器人",
+      key: "source_bot",
+      render: (_, row) => <Text>{botLabel(row.source_bot_id, row.source_bot_username)}</Text>,
+    },
     {
       title: "操作",
       key: "actions",

@@ -244,6 +244,20 @@ CREATE INDEX idx_dump_entries_link ON dump_entries(channel_key, message_id, id);
 	// v14：系统指标增加进程 CPU 占用率采样（REAL NULL，0–100 占全部核心）；
 	// 探针不可用时为 NULL，旧采样行不回填。
 	`ALTER TABLE system_metric_samples ADD COLUMN cpu_percent REAL NULL;`,
+
+	// v15：多机器人池——requests 记录受理 bot（哪个 bot 收到链接并投递），
+	// users 记录来源 bot（首次 /start 经哪个 bot 提交申请）。bot_id 为
+	// Telegram bot 账号的数字 ID（getMe），bot_username 为受理时的用户名
+	// 快照（展示自持，bot 移出池后历史记录仍可读）。0/空 = 存量行或非
+	// Bot 通道创建（Web 手动添加用户），展示为"—"。不存 token（数据范围
+	// 红线：凭据只在 env 与 bots.json）。
+	`ALTER TABLE requests ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE requests ADD COLUMN bot_username TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE users ADD COLUMN source_bot_id INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE users ADD COLUMN source_bot_username TEXT NOT NULL DEFAULT '';`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

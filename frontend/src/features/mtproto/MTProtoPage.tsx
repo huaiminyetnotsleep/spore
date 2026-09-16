@@ -93,6 +93,22 @@ export function MTProtoPage() {
           {data?.bot_dc_id ? <Tag color="blue">DC {data.bot_dc_id}</Tag> : null}
         </Space>
 
+        {data?.bots && data.bots.length > 1 ? (
+          <Space size="small" wrap data-testid="mtproto-bot-list">
+            <Text>各机器人直传会话：</Text>
+            {data.bots.map((bot) => (
+              <Space key={bot.bot_id} size={4}>
+                <Text type="secondary">{bot.username ? `@${bot.username}` : `bot ${bot.bot_id}`}</Text>
+                {bot.state === "ready" ? (
+                  <Tag color="green">已连接{bot.dc_id ? ` · DC ${bot.dc_id}` : ""}</Tag>
+                ) : (
+                  <Tag color="red">未连接</Tag>
+                )}
+              </Space>
+            ))}
+          </Space>
+        ) : null}
+
         {data?.last_error ? <Alert type="error" showIcon message={data.last_error} /> : null}
 
         {data?.qr_available ? (
