@@ -16,29 +16,38 @@
 | ② `spore` 命令（日常推荐） | `spore`（打开菜单）或 `spore status` 等子命令 | 首次安装/升级完成后，脚本自动把自身注册为系统命令（软链 `/usr/local/bin/spore`），此后服务器任意目录可用 |
 | ③ 本地运行脚本 | `bash ~/spore/install-spore.sh [子命令]` | 与 ② 完全等价；软链被误删或不想用 `spore` 名字时使用 |
 
-菜单共 13 项（安装、升级、升级后验证、状态、日志、查看访问密钥、重设密钥、清理临时文件、
-磁盘与数据检查、重启、停止、卸载、退出）；子命令与菜单项一一对应，见下方速查表。
+菜单共 13 项，按三组展示（部署管理：安装、升级、卸载；服务控制：重启、完整重启、停止、
+状态、日志；密钥与维护：查看访问密钥、重设密钥、清理临时文件、磁盘与数据检查；另有退出）。
+升级完成后会自动执行升级验证（原「升级验证」菜单项已并入「升级服务」）；「完整重启」
+用于重建容器以加载最新 `.env` 环境变量。子命令见下方速查表。
 
 安装（或升级）完成时，脚本会把自身注册为系统的 **`spore` 命令**（软链
 `/usr/local/bin/spore`）。之后在服务器任意目录：
 
-- 输入 `spore` —— 打开交互菜单（菜单项均为四字短语，与子命令一一对应）：
+- 输入 `spore` —— 打开交互菜单（菜单项均为四字短语，带图标分组展示）：
 
 ```text
 请选择操作：
-   1) 安装服务
-   2) 升级服务
-   3) 升级验证
-   4) 查看状态
-   5) 查看日志
-   6) 查看密钥
-   7) 重设密钥
-   8) 清理临时
-   9) 磁盘检查
-  10) 重启服务
-  11) 停止服务
-  12) 卸载服务
-  13) 退出脚本
+
+── 🚀 部署管理 ────────────────────────
+   1) 📦 安装服务
+   2) ⬆️ 升级服务（完成后自动验证）
+   3) 🗑 卸载服务
+
+── ⚙️ 服务控制 ────────────────────────
+   4) 🔁 重启服务
+   5) ♻️ 完整重启（重建容器，加载环境变量）
+   6) 🛑 停止服务
+   7) 📊 查看状态
+   8) 📜 查看日志
+
+── 🧰 密钥与维护 ──────────────────────
+   9) 🔑 查看密钥
+  10) 🗝 重设密钥
+  11) 🧹 清理临时
+  12) 💾 磁盘检查
+
+  13) 🚪 退出脚本
 ```
 
 - 或使用子命令直接调用（便于放进 cron 或工单流程；`uninstall` 仍会交互确认，
@@ -47,15 +56,16 @@
 | 子命令 | 作用 | 等价的原始操作 |
 | --- | --- | --- |
 | `spore install` | 安装服务：交互填写凭据、选择端口、授权数据目录 | [deployment.md §4.2](../guide/deployment.md) |
-| `spore upgrade` | 升级服务：拉取新镜像并滚动更新（不改配置） | `docker compose pull && docker compose up -d` |
-| `spore verify` | 升级验证：探针、容器健康、MTProto 通道 | §2.4 |
+| `spore upgrade` | 升级服务：拉取新镜像并滚动更新（不改配置），完成后自动执行升级验证 | `docker compose pull && docker compose up -d` |
+| `spore verify` | 升级验证：探针、容器健康、MTProto 通道（已并入 upgrade 自动执行，也可单独调用） | §2.4 |
 | `spore status` | 查看状态：容器列表与 `/healthz` 探活 | `docker compose ps` |
 | `spore logs` | 查看日志：跟踪 bot 输出（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
 | `spore show-key` | 查看密钥：从日志检索首启密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
 | `spore reset-key` | 重设密钥：生成新密钥（仅打印一次，旧的立即失效） | `docker compose exec bot spore admin reset-key` |
 | `spore clean-tmp` | 清理临时：停机清空 `data/tmp` | §6.5 |
 | `spore diskcheck` | 磁盘检查：容量、数据文件、`.env` 权限 | §3.1 |
-| `spore restart` | 重启服务：未运行时直接启动 | `docker compose restart bot` |
+| `spore restart` | 重启服务：未运行时直接启动（不重建容器） | `docker compose restart bot` |
+| `spore recreate` | 完整重启：重建容器以加载最新 `.env` 环境变量 | `docker compose stop bot && docker compose up -d --force-recreate bot` |
 | `spore stop` | 停止服务：保留容器与数据 | `docker compose stop` |
 | `spore uninstall` | 卸载服务：数据与配置按提示保留或删除 | §5 |
 | `spore exit` | 退出脚本：等价菜单 13 | — |
@@ -365,7 +375,8 @@ chmod 600 .env
 docker compose config --quiet
 ```
 
-应用新的环境变量必须重新创建容器：
+应用新的环境变量必须重新创建容器（一键脚本部署可用 `spore recreate`，即菜单
+「完整重启」）：
 
 ```bash
 docker compose up -d --force-recreate bot
@@ -666,7 +677,7 @@ HTTPS 地址检查。
 docker compose exec bot spore admin reset-key
 ```
 
-或使用一键脚本菜单「7) 重设密钥」（`install-spore.sh reset-key`）。
+或使用一键脚本菜单「10) 重设密钥」（`install-spore.sh reset-key`）。
 
 只保存命令输出的新密钥。不要直接修改数据库中的哈希，也不要将旧密钥写入 URL。
 
@@ -686,7 +697,7 @@ docker compose logs -f bot
 
 查看 `/readyz`、bot 日志和 `data/` 权限。不要在运行中复制 SQLite 主文件作为备份，
 使用管理端导出以获得一致快照。若磁盘满，先处理 `data/tmp/` 中确认的孤儿临时文件
-（一键脚本菜单「8) 清理临时文件」会自动停机清空再启动），再检查数据库和宿主机反向
+（一键脚本菜单「11) 清理临时」会自动停机清空再启动），再检查数据库和宿主机反向
 代理的证书/配置存储空间；`install-spore.sh diskcheck` 可快速查看容量与数据文件分布。
 
 ### 6.6 大文件发送失败（超过 50MB 的媒体）

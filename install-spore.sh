@@ -303,7 +303,7 @@ init_env() {
   if [ -n "$skipped" ]; then
     warn "本次跳过未填：${skipped}"
     warn "部署会继续，但 Telegram 登录会失败。请稍后编辑 ${SPORE_DIR}/.env 填入凭据，"
-    warn "再执行 spore upgrade（或菜单「2) 升级 Spore」）使其生效"
+    warn "再执行 spore upgrade（或菜单「2) 升级服务」；仅改环境变量时 spore recreate 即可）使其生效"
   fi
   echo
 }
@@ -452,6 +452,9 @@ do_upgrade() {
   docker compose ps
   (install_cmd) || warn "spore 命令刷新失败（不影响本次升级），可重新运行 upgrade 重试"
   info "升级完成（配置未改动；如需回滚见 docs/ops/operations.md §3.3）"
+  echo
+  # 升级后自动验证；失败时本函数返回非零，脚本化调用可据此感知升级异常
+  do_verify
 }
 
 do_uninstall() {
@@ -531,6 +534,18 @@ do_restart() {
     info "容器未运行，直接启动 ..."
     docker compose up -d bot
   fi
+  wait_healthy || true
+  docker compose ps
+}
+
+# 完整重启：docker compose restart 不会重建容器、不重读 env_file，修改 .env 后需用本操作
+do_recreate() {
+  require_installed
+  info "完整重启：重建容器以加载最新环境变量 ..."
+  if is_running; then
+    docker compose stop bot
+  fi
+  docker compose up -d --force-recreate bot
   wait_healthy || true
   docker compose ps
 }
@@ -658,19 +673,26 @@ show_menu() {
   cat <<'EOF'
 
 请选择操作：
-   1) 安装服务
-   2) 升级服务
-   3) 升级验证
-   4) 查看状态
-   5) 查看日志
-   6) 查看密钥
-   7) 重设密钥
-   8) 清理临时
-   9) 磁盘检查
-  10) 重启服务
-  11) 停止服务
-  12) 卸载服务
-  13) 退出脚本
+
+── 🚀 部署管理 ────────────────────────
+   1) 📦 安装服务
+   2) ⬆️ 升级服务（完成后自动验证）
+   3) 🗑 卸载服务
+
+── ⚙️ 服务控制 ────────────────────────
+   4) 🔁 重启服务
+   5) ♻️ 完整重启（重建容器，加载环境变量）
+   6) 🛑 停止服务
+   7) 📊 查看状态
+   8) 📜 查看日志
+
+── 🧰 密钥与维护 ──────────────────────
+   9) 🔑 查看密钥
+  10) 🗝 重设密钥
+  11) 🧹 清理临时
+  12) 💾 磁盘检查
+
+  13) 🚪 退出脚本
 EOF
   printf '输入选项 [1-13]: '
 }
@@ -682,20 +704,20 @@ main_menu() {
   trap ':' INT
   while true; do
     show_menu
-    read_input || die "无可用交互终端；请用子命令方式运行：install-spore.sh <install|upgrade|verify|status|logs|show-key|reset-key|clean-tmp|diskcheck|restart|stop|uninstall|exit>"
+    read_input || die "无可用交互终端；请用子命令方式运行：install-spore.sh <install|upgrade|verify|status|logs|show-key|reset-key|clean-tmp|diskcheck|restart|recreate|stop|uninstall|exit>"
     case "$REPLY" in
       1) (do_install) || true ;;
       2) (do_upgrade) || true ;;
-      3) (do_verify) || true ;;
-      4) (do_status) || true ;;
-      5) (do_logs) || true ;;
-      6) (do_show_key) || true ;;
-      7) (do_reset_key) || true ;;
-      8) (do_clean_tmp) || true ;;
-      9) (do_diskcheck) || true ;;
-      10) (do_restart) || true ;;
-      11) (do_stop) || true ;;
-      12) (do_uninstall) || true ;;
+      3) (do_uninstall) || true ;;
+      4) (do_restart) || true ;;
+      5) (do_recreate) || true ;;
+      6) (do_stop) || true ;;
+      7) (do_status) || true ;;
+      8) (do_logs) || true ;;
+      9) (do_show_key) || true ;;
+      10) (do_reset_key) || true ;;
+      11) (do_clean_tmp) || true ;;
+      12) (do_diskcheck) || true ;;
       13) echo "再见"; exit 0 ;;
       '') : ;;
       *) warn "无效选项，请输入 1-13" ;;
@@ -717,6 +739,7 @@ main() {
     clean-tmp) do_clean_tmp ;;
     diskcheck) do_diskcheck ;;
     restart) do_restart ;;
+    recreate) do_recreate ;;
     stop) do_stop ;;
     uninstall) do_uninstall ;;
     exit) echo "再见"; exit 0 ;;
