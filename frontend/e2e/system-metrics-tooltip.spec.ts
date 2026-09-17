@@ -127,7 +127,8 @@ test.describe("资源与传输监控", () => {
     await page.goto("/admin");
 
     const grid = page.locator(".system-metrics-grid");
-    await expect(page.getByRole("heading", { name: "资源与传输监控" })).toBeVisible();
+    // 分区标题在骨架统一后为 PageSection 标题（非 heading 角色）
+    await expect(page.getByText("资源与传输监控")).toBeVisible();
     await expect(grid.locator(".chart-panel h5")).toHaveText([
       "进程 CPU",
       "进程内存",
@@ -143,7 +144,8 @@ test.describe("资源与传输监控", () => {
     await page.getByRole("link", { name: "业务统计" }).click();
     await expect(page).toHaveURL(/\/admin\/stats$/);
     await page.getByRole("link", { name: "总览" }).click();
-    await expect(page.getByRole("heading", { name: "资源与传输监控" })).toBeVisible();
+    // 分区标题在骨架统一后为 PageSection 标题（非 heading 角色）
+    await expect(page.getByText("资源与传输监控")).toBeVisible();
     await expect(page.getByRole("radiogroup").locator(".ant-segmented-item-selected")).toHaveText("实时");
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -153,7 +155,8 @@ test.describe("资源与传输监控", () => {
   test("轮询刷新不隐藏悬停 tooltip，移出后不复活", async ({ page }) => {
     await mockMetricsAPI(page);
     await page.goto("/admin");
-    await expect(page.getByRole("heading", { name: "资源与传输监控" })).toBeVisible();
+    // 分区标题在骨架统一后为 PageSection 标题（非 heading 角色）
+    await expect(page.getByText("资源与传输监控")).toBeVisible();
 
     // 切到实时（2s 轮询），等待首个图表渲染并滚入视口中部
     await page.getByRole("radiogroup").getByText("实时", { exact: true }).click();

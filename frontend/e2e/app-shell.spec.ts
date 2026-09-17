@@ -113,6 +113,8 @@ const userDetailFixture = {
 
 const settingsFixture = {
   timezone: "Asia/Shanghai",
+  // 运行设置页拆分后首个数字输入是「单次最大链接数」：深链刷新回填断言依赖该字段
+  max_links_per_message: 30,
   dedup_window_min: 30,
   queue_capacity: 8,
   queue_runtime: 8,
@@ -397,7 +399,7 @@ test.describe("管理端 SPA 本机安全验收", () => {
     await page.getByRole("menuitem", { name: "BotUser受邀频道" }).click();
     await page.getByRole("link", { name: "受邀设置" }).click();
     await expect(page).toHaveURL(/\/admin\/join-settings$/);
-    await expect(page.getByRole("heading", { name: "受邀设置（/join）" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "受邀设置" })).toBeVisible();
   });
 
   test("呈现会话错误态并保持 CSRF 错误为 JSON 受控信封", async ({ page }) => {
@@ -513,7 +515,8 @@ test.describe("管理端 SPA 本机安全验收", () => {
 
     // 登录成功由 SPA 导航进入管理端入口并完成会话引导
     await page.waitForURL("**/admin");
-    await expect(page.getByRole("heading", { name: "实时运行状态" })).toBeVisible();
+    // 总览页骨架统一后：H1 为「总览」（实时运行状态是页面状态标识）
+    await expect(page.getByRole("heading", { name: "总览" })).toBeVisible();
     const accountMenu = page.getByRole("button", { name: "管理员账户菜单" });
     // 账户菜单为 click 触发（69d0254b 起），hover 不再展开
     await accountMenu.click();
