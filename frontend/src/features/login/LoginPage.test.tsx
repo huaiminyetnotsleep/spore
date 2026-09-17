@@ -76,7 +76,9 @@ describe("登录页", () => {
 
     renderPage();
 
-    expect(await screen.findByText("使用 GitHub 登录")).toHaveAttribute("href", "/auth/github");
+    // GitHub 登录为次操作按钮（href 渲染为链接），可访问名与目的地保持不变
+    const githubLink = await screen.findByRole("link", { name: "使用 GitHub 登录" });
+    expect(githubLink).toHaveAttribute("href", "/auth/github");
     expect(screen.getByLabelText("访问密钥")).toBeInTheDocument();
   });
 

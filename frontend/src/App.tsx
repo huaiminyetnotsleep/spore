@@ -10,12 +10,12 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ReloadOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
 import {
   App as AntApp,
   Avatar,
   Breadcrumb,
+  Button,
   Dropdown,
   Layout,
   Menu,
@@ -41,7 +41,6 @@ import {
   routeMeta,
   type RouteKey,
 } from "./router/routes";
-import "./styles.css";
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -106,6 +105,8 @@ function AppLayout() {
     window.matchMedia("(max-width: 991px)").matches,
   );
   const [siderCollapsed, setSiderCollapsed] = useState(isMobile);
+  // 头像外链（DiceBear）加载失败时切换为带背景色的文字回退头像
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") {
@@ -229,9 +230,24 @@ function AppLayout() {
                 placement="bottomRight"
                 menu={{ items: accountMenuItems, onClick: handleAccountMenuClick }}
               >
-                <span className="account-avatar-trigger" aria-label="管理员账户菜单" role="button" tabIndex={0}>
-                  <Avatar icon={<UserOutlined />} />
-                </span>
+                {/* 原生 Button 作为 trigger：键盘 Enter/Space 可展开（设计 6 可访问性），
+                    可访问名保持「管理员账户菜单」与既有 e2e 断言一致。 */}
+                <Button
+                  type="text"
+                  aria-label="管理员账户菜单"
+                  icon={
+                    <Avatar
+                      src="https://api.dicebear.com/10.x/lorelei/svg?seed=2"
+                      onError={() => {
+                        setAvatarFailed(true);
+                        return true;
+                      }}
+                      style={avatarFailed ? { backgroundColor: "#fde3cf", color: "#f56a00" } : undefined}
+                    >
+                      U
+                    </Avatar>
+                  }
+                />
               </Dropdown>
             </div>
           ) : null}
@@ -257,7 +273,12 @@ class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
 
   render() {
     if (this.state.hasError) {
-      return <Result status="error" title="页面加载失败" subTitle="请刷新页面后重试。" />;
+      // 错误兜底复用页面内容宽度（.page-content），与页面级视觉语言一致。
+      return (
+        <div className="page-content">
+          <Result status="error" title="页面加载失败" subTitle="请刷新页面后重试。" />
+        </div>
+      );
     }
     return this.props.children;
   }

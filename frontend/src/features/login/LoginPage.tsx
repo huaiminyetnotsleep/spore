@@ -8,7 +8,8 @@
  * GitHub 登录入口沿用既有 /auth/github 流程，仅在服务端报告通道已配置时展示。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Form, Input, Typography } from "antd";
+import { GithubOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Form, Input, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -82,9 +83,14 @@ export function LoginPage() {
             />
           </Form.Item>
           {error ? (
-            <Text type="danger" role="alert" className="login-error">
-              {error}
-            </Text>
+            // 服务端受控文案经统一 Alert 呈现（role=alert，与页面级错误态一致）
+            <Alert
+              type="error"
+              showIcon
+              role="alert"
+              className="login-error"
+              message={error}
+            />
           ) : null}
           <Form.Item className="layout-margin-bottom-0">
             <Button type="primary" htmlType="submit" block loading={pending}>
@@ -97,9 +103,11 @@ export function LoginPage() {
             <Text type="secondary" className="login-hint">
               也可以使用已绑定的 GitHub 账号登录：
             </Text>
-            <a className="login-github-link" href="/auth/github">
+            {/* GitHub 登录是明确的次操作：默认（非主要）按钮，整宽排在密钥登录之下；
+                图标为装饰，aria-hidden 保证链接可访问名就是按钮文字。 */}
+            <Button href="/auth/github" block icon={<GithubOutlined aria-hidden />} className="login-github-action">
               使用 GitHub 登录
-            </a>
+            </Button>
           </>
         ) : null}
       </Card>

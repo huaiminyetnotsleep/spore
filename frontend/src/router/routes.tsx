@@ -23,10 +23,10 @@ import {
   UserOutlined,
   UsergroupAddOutlined,
 } from "@ant-design/icons";
-import { Result, Spin } from "antd";
+import { Result, Spin, Button } from "antd";
 import type { ReactNode } from "react";
 import { Suspense } from "react";
-import { matchPath, Route, Routes } from "react-router-dom";
+import { matchPath, Route, Routes, useNavigate } from "react-router-dom";
 
 import { AuditPage } from "../features/audit/AuditPage";
 import { BackupPage } from "../features/backup/BackupPage";
@@ -371,8 +371,21 @@ export function isActivePath(pathname: string, path: RoutePath): boolean {
   return getActiveNavRoute(pathname)?.path === path;
 }
 
+/** 通配 404：与详情不存在（DetailNotFound）一致的主返回动作与页面宽度。 */
 function NotFoundPage() {
-  return <Result status="404" title="页面不存在" subTitle="请从左侧导航选择一个管理端页面。" />;
+  const navigate = useNavigate();
+  return (
+    <Result
+      status="404"
+      title="页面不存在"
+      subTitle="请从左侧导航选择一个管理端页面。"
+      extra={
+        <Button type="primary" onClick={() => navigate("/")}>
+          返回总览
+        </Button>
+      }
+    />
+  );
 }
 
 /** SPA 路由树：全部管理页面均已挂载真实页面，另含 404 兜底。 */

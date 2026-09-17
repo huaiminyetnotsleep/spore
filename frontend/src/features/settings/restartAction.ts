@@ -16,7 +16,15 @@ export function useRestartAction() {
   const confirmAction = useConfirmAction();
 
   const trigger = () => {
-    confirmAction(CONFIRM_RESTART_TEXT, () => void restart.run(undefined));
+    // 重启可恢复但影响运行中的任务：按设计使用 warning 意图（非 danger 红色确认），
+    // onOk 返回 mutation Promise，弹层在重启请求期间保持 pending。
+    confirmAction({
+      intent: "warning",
+      title: "优雅重启",
+      content: CONFIRM_RESTART_TEXT,
+      okText: "确认重启",
+      action: () => restart.run(undefined),
+    });
   };
 
   return { pending: restart.pending, trigger };
