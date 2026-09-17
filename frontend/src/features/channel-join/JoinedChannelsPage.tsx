@@ -7,18 +7,7 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Alert,
-  Button,
-  Input,
-  Popconfirm,
-  Select,
-  Space,
-  Spin,
-  Table,
-  Tag,
-  Typography,
-} from "antd";
+import { Alert, Button, Input, Select, Space, Tag, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { TableRowSelection } from "antd/es/table/interface";
@@ -26,9 +15,13 @@ import type { TableRowSelection } from "antd/es/table/interface";
 import { fetchJoinedChannels, type JoinedChannelRow } from "../../api/admin";
 import { leaveJoinedChannels } from "../../api/mutations";
 import { fmtTime, JOIN_SOURCE_LABELS, joinSourceLabel } from "../../shared/format";
-import { useAdminAction } from "../shared/actions";
+import { useAdminAction, useConfirmAction } from "../shared/actions";
+import { DataTable } from "../shared/DataTable";
+import { FilterBar } from "../shared/FilterBar";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { LoadError } from "../shared/PageStates";
+import { RowActions, type RowActionItem } from "../shared/RowActions";
 import { useTitleMask } from "../shared/titleMask";
-import { LoadError, PageCard } from "../shared/PageStates";
 
 const { Text } = Typography;
 
@@ -44,6 +37,9 @@ export function JoinedChannelsPage() {
   const [kindFilter, setKindFilter] = useState<string>("");
   const [sourceFilter, setSourceFilter] = useState<string>("");
   const [keyword, setKeyword] = useState<string>("");
+  const [leavingIDs, setLeavingIDs] = useState<number[]>([]);
+  const [batchLeaving, setBatchLeaving] = useState(false);
+  const confirm = useConfirmAction();
   // 敏感频道名默认暗文（含 @用户名），顶部按钮一键显隐
   const { toggle: titleToggle, text: titleText } = useTitleMask();
 
@@ -62,7 +58,10 @@ export function JoinedChannelsPage() {
       const failed = result.outcomes.length - ok;
       return failed === 0
         ? `已退出 ${ok} 个频道。`
-        : `已退出 ${ok} 个，${failed} 个失败（详见列表刷新后的状态）。`;
+        : {
+            type: "warning",
+            text: `已退出 ${ok} 个，${failed} 个失败（详见列表刷新后的状态）。`,
+          };
     },
     onDone: () => {
       setSelectedIDs([]);
@@ -70,6 +69,14 @@ export function JoinedChannelsPage() {
       void joined.refetch();
     },
   });
+  const handleLeave = (ids: number[], batch = false) => {
+    setLeavingIDs(ids);
+    setBatchLeaving(batch);
+    return leave.run(ids).finally(() => {
+      setLeavingIDs([]);
+      setBatchLeaving(false);
+    });
+  };
 
   const joinedItems = joined.data?.items ?? [];
   const filteredItems = useMemo(() => {
@@ -120,46 +127,62 @@ export function JoinedChannelsPage() {
     {
       title: "操作",
       key: "leave",
+      // 统一行操作（RowActions）：退群为 danger 确认（与批量退出同语义）；
+      // 创建者频道 Telegram 不允许退出，仅保留文字说明
+      width: 140,
       render: (_, row) =>
         row.creator ? (
           <Text type="secondary" title="账号是频道创建者，无法退出">
             创建者（不可退出）
           </Text>
         ) : (
-          <Popconfirm
-            title="确认退出该频道？"
-            description="退出后该频道的消息链接将无法再提取。"
-            okText="退出"
-            cancelText="取消"
-            onConfirm={() => void leave.run([row.channel_id])}
-          >
-            <Button size="small" danger loading={leave.pending}>
-              退出
-            </Button>
-          </Popconfirm>
+          <RowActions
+            actions={[
+              {
+                key: "leave",
+                label: "退出",
+                danger: true,
+                disabled: leave.pending,
+                loading: leave.pending && !batchLeaving && leavingIDs.includes(row.channel_id),
+                onClick: () =>
+                  confirm({
+                    intent: "danger",
+                    title: "确认退出该频道？",
+                    content: "退出后该频道的消息链接将无法再提取。",
+                    okText: "退出",
+                    action: () => handleLeave([row.channel_id]),
+                  }),
+              } satisfies RowActionItem,
+            ]}
+          />
         ),
     },
   ];
 
   const rowSelection: TableRowSelection<JoinedChannelRow> = {
     selectedRowKeys: selectedIDs,
-    onChange: (keys) => setSelectedIDs(keys.map(Number)),
-    getCheckboxProps: (row) => ({ disabled: row.creator }),
+    onChange: (keys) => {
+      if (!batchLeaving) setSelectedIDs(keys.map(Number));
+    },
+    getCheckboxProps: (row) => ({ disabled: row.creator || batchLeaving }),
   };
 
   const changeFilter = <T,>(setter: (v: T) => void) => (v: T) => {
+    if (batchLeaving) return;
     setter(v);
     setSelectedIDs([]); // 筛选变化时清空选择，避免对不可见行误操作
   };
 
   return (
-    <PageCard
-      title="已加入频道（实时）"
-      extra={
-        <Space>
+    <PageScaffold
+      title="已加入频道"
+      description="来自 Telegram 用户号的实时对话列表；退出频道后自动刷新。"
+      actions={
+        <>
           {titleToggle}
           <Button
             icon={<ReloadOutlined />}
+            disabled={batchLeaving}
             loading={joined.isFetching}
             onClick={() => void joined.refetch()}
           >
@@ -167,66 +190,76 @@ export function JoinedChannelsPage() {
           </Button>
           <Button
             danger
-            disabled={deletableSelected.length === 0}
-            loading={leave.pending}
-            onClick={() => void leave.run(deletableSelected)}
+            disabled={deletableSelected.length === 0 || batchLeaving}
+            loading={leave.pending && batchLeaving}
+            onClick={() => {
+              const selectedSnapshot = [...deletableSelected];
+              confirm({
+                intent: "danger",
+                title: "确认批量退出频道",
+                content: `确定退出选中的 ${selectedSnapshot.length} 个频道？退出后这些频道的消息链接将无法再提取。`,
+                okText: "确认退出",
+                action: () => handleLeave(selectedSnapshot, true),
+              });
+            }}
           >
             批量退出（{deletableSelected.length}）
           </Button>
-        </Space>
+        </>
       }
     >
-      <Space direction="vertical" size="small" className="field-width-full">
-        <Alert
-          type="info"
-          showIcon
-          message="列表来自 Telegram 用户号的实时对话，进入页面自动加载，退出频道后自动刷新；「外部拉入」表示非本系统加入的频道。开启「自动退出外部拉入」（BotUser受邀频道 → 受邀设置）后，每次刷新会自动退出这类频道；默认关闭。"
-
-        />
-        <Space wrap>
-          <Select
-            value={kindFilter}
-            onChange={changeFilter(setKindFilter)}
-            options={[{ value: "", label: "全部类型" }, ...KIND_OPTIONS]}
-            className="field-width-130"
+      <PageSection>
+        <Space direction="vertical" size="middle" className="field-width-full">
+          <Alert
+            type="info"
+            showIcon
+            message="列表来自 Telegram 用户号的实时对话，进入页面自动加载，退出频道后自动刷新；「外部拉入」表示非本系统加入的频道。开启「自动退出外部拉入」（BotUser受邀频道 → 受邀设置）后，每次刷新会自动退出这类频道；默认关闭。"
           />
-          <Select
-            value={sourceFilter}
-            onChange={changeFilter(setSourceFilter)}
-            options={[{ value: "", label: "全部来源" }, ...SOURCE_OPTIONS]}
-            className="field-width-130"
-          />
-          <Input.Search
-            placeholder="频道标题或用户名"
-            allowClear
-            value={keyword}
-            onChange={(e) => changeFilter(setKeyword)(e.target.value)}
-            onSearch={changeFilter(setKeyword)}
-            className="field-width-200"
-          />
+          {/* 客户端即时筛选：无提交按钮，字段变化立即生效 */}
+          <FilterBar mode="instant">
+            <Select
+              value={kindFilter}
+              disabled={batchLeaving}
+              onChange={changeFilter(setKindFilter)}
+              options={[{ value: "", label: "全部类型" }, ...KIND_OPTIONS]}
+              className="field-width-140"
+            />
+            <Select
+              value={sourceFilter}
+              disabled={batchLeaving}
+              onChange={changeFilter(setSourceFilter)}
+              options={[{ value: "", label: "全部来源" }, ...SOURCE_OPTIONS]}
+              className="field-width-140"
+            />
+            <Input.Search
+              placeholder="频道标题或用户名"
+              allowClear
+              value={keyword}
+              disabled={batchLeaving}
+              onChange={(e) => changeFilter(setKeyword)(e.target.value)}
+              onSearch={changeFilter(setKeyword)}
+              className="field-width-200"
+            />
+          </FilterBar>
+          {joined.isError && !joined.data ? (
+            <LoadError onRetry={() => void joined.refetch()} />
+          ) : (
+            <DataTable<JoinedChannelRow>
+              rowKey="channel_id"
+              columns={columns}
+              dataSource={filteredItems}
+              rowSelection={rowSelection}
+              loading={joined.isFetching}
+              emptyText="没有符合条件的频道。"
+              pagination={{
+                pageSize: 10,
+                hideOnSinglePage: true,
+                onChange: () => setSelectedIDs([]),
+              }}
+            />
+          )}
         </Space>
-        {joined.isError ? (
-          <LoadError onRetry={() => void joined.refetch()} />
-        ) : joined.isFetching ? (
-          <Spin className="page-loading" tip="正在读取实时对话…" />
-        ) : (
-          <Table<JoinedChannelRow>
-            rowKey="channel_id"
-            size="small"
-            columns={columns}
-            dataSource={filteredItems}
-            rowSelection={rowSelection}
-            locale={{ emptyText: "没有符合条件的频道。" }}
-            scroll={{ x: "max-content" }}
-            pagination={{
-              pageSize: 10,
-              showSizeChanger: true,
-              hideOnSinglePage: true,
-              onChange: () => setSelectedIDs([]),
-            }}
-          />
-        )}
-      </Space>
-    </PageCard>
+      </PageSection>
+    </PageScaffold>
   );
 }

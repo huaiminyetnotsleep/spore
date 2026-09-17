@@ -2,17 +2,23 @@
  * 频道详情页（SSR /channels/{key} 的 SPA 对应实现）。
  * 头部统计为全时段聚合（与 SSR 同口径），按日趋势与媒体/错误分布
  * 应用时间范围筛选；展示名直接用频道键，不为取名访问 Telegram。
+ * KPI 使用响应式 MetricGrid，时间筛选走统一 FilterBar（筛选/重置），
+ * 附表为紧凑密度 DataTable，空分区展示明确的空态。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, Col, DatePicker, Form, Row, Space, Statistic, Table, Typography } from "antd";
+import { Button, DatePicker, Form, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { fetchChannelDetail, type ChannelBotRow, type DistRow, type TrendPoint } from "../../api/admin";
 import { botLabel, distKeyText, fmtRate, fmtTime } from "../../shared/format";
-import { DetailGate, PageCard, SectionCard } from "../shared/PageStates";
+import { DataTable } from "../shared/DataTable";
+import { FilterBar } from "../shared/FilterBar";
+import { MetricGrid } from "../shared/MetricGrid";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { DetailGate } from "../shared/PageStates";
 
 const { Text } = Typography;
 
@@ -53,6 +59,7 @@ export function ChannelDetailPage() {
   const { key } = useParams();
   const [form] = Form.useForm<RangeFormValues>();
   const [range, setRange] = useState<{ since?: string; until?: string }>({});
+  const navigate = useNavigate();
 
   const query = useQuery({
     queryKey: ["channels", "detail", key, range],
@@ -62,7 +69,24 @@ export function ChannelDetailPage() {
   const { data: detail } = query;
 
   return (
-    <Space direction="vertical" size="middle" className="field-width-full">
+    <PageScaffold
+      title="频道详情"
+      description="全时段汇总与按日趋势、媒体/错误分布；数据全部来自请求记录聚合。"
+      actions={
+        detail ? (
+          <>
+            <Button
+              onClick={() => void navigate(`/requests?channel=${encodeURIComponent(detail.key)}`)}
+            >
+              查看请求记录
+            </Button>
+            <Button onClick={() => void navigate("/channels")}>返回频道统计</Button>
+          </>
+        ) : (
+          <Button onClick={() => void navigate("/channels")}>返回频道统计</Button>
+        )
+      }
+    >
       <DetailGate
         loading={query.isPending}
         error={query.error}
@@ -73,119 +97,103 @@ export function ChannelDetailPage() {
       >
         {detail && (
           <>
-            <PageCard
-              title={`频道 ${detail.key}`}
-              extra={
-                <Space>
-                  <Link to={`/requests?channel=${encodeURIComponent(detail.key)}`}>
-                    <Button>查看请求记录</Button>
-                  </Link>
-                  <Link to="/channels">
-                    <Button>返回频道统计</Button>
-                  </Link>
-                </Space>
-              }
-            >
-              <Row gutter={16}>
-                <Col span={4}>
-                  <Statistic title="请求量" value={detail.stats.total} />
-                </Col>
-                <Col span={4}>
-                  <Statistic title="成功" value={detail.stats.succeeded} />
-                </Col>
-                <Col span={4}>
-                  <Statistic title="失败" value={detail.stats.failed} />
-                </Col>
-                <Col span={4}>
-                  <Statistic
-                    title="成功率"
-                    value={fmtRate(
-                      detail.stats.success_rate,
-                      detail.stats.succeeded + detail.stats.failed,
-                    )}
-                  />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="最近请求" value={fmtTime(detail.stats.last_requested_at)} />
-                </Col>
-              </Row>
-
-              <Form
-                form={form}
-                layout="inline"
-                className="layout-margin-top-16"
-                onFinish={(values) => {
-                  setRange({
-                    since: values.since ? values.since.format("YYYY-MM-DD") : undefined,
-                    until: values.until ? values.until.format("YYYY-MM-DD") : undefined,
-                  });
-                }}
-              >
-                <Form.Item name="since">
-                  <DatePicker placeholder="开始日期" maxDate={dayjs()} />
-                </Form.Item>
-                <Form.Item name="until">
-                  <DatePicker placeholder="结束日期" maxDate={dayjs()} />
-                </Form.Item>
-                <Form.Item>
-                  <Button type="primary" htmlType="submit">
-                    应用
-                  </Button>
-                </Form.Item>
-              </Form>
-            </PageCard>
-
-            {detail.trend.length > 0 && (
-              <SectionCard title="按日趋势">
-                <Table<TrendPoint>
-                  rowKey="day"
-                  size="small"
-                  columns={trendColumns}
-                  dataSource={detail.trend}
-                  pagination={false}
+            <PageSection title={`频道 ${detail.key}`}>
+              <div className="field-width-full">
+                {/* 全时段聚合口径（与 SSR 一致），不受下方时间筛选影响 */}
+                <MetricGrid
+                  items={[
+                    { label: "请求量", value: detail.stats.total },
+                    { label: "成功", value: detail.stats.succeeded, tone: "success" },
+                    { label: "失败", value: detail.stats.failed, tone: "danger" },
+                    {
+                      label: "成功率",
+                      value: fmtRate(
+                        detail.stats.success_rate,
+                        detail.stats.succeeded + detail.stats.failed,
+                      ),
+                    },
+                    { label: "最近请求", value: fmtTime(detail.stats.last_requested_at) },
+                  ]}
                 />
-              </SectionCard>
-            )}
 
-            <Space direction="vertical" size="middle" className="field-width-full">
-              {detail.media_dist.length > 0 && (
-                <SectionCard title="媒体类型分布">
-                  <Table<DistRow>
-                    rowKey="key"
-                    size="small"
-                    columns={distColumns}
-                    dataSource={detail.media_dist}
-                    pagination={false}
-                  />
-                </SectionCard>
-              )}
-              {detail.error_dist.length > 0 && (
-                <SectionCard title="错误分布">
-                  <Table<DistRow>
-                    rowKey="key"
-                    size="small"
-                    columns={distColumns}
-                    dataSource={detail.error_dist}
-                    pagination={false}
-                  />
-                </SectionCard>
-              )}
-              {detail.bot_dist?.length > 0 && (
-                <SectionCard title="按机器人分布" data-testid="channel-bot-dist">
-                  <Table<ChannelBotRow>
-                    rowKey="bot_id"
-                    size="small"
-                    columns={botDistColumns}
-                    dataSource={detail.bot_dist}
-                    pagination={false}
-                  />
-                </SectionCard>
-              )}
-            </Space>
+                <div className="layout-margin-top-16">
+                  <FilterBar<RangeFormValues>
+                    mode="submit"
+                    form={form}
+                    onFinish={(values) => {
+                      setRange({
+                        since: values.since ? values.since.format("YYYY-MM-DD") : undefined,
+                        until: values.until ? values.until.format("YYYY-MM-DD") : undefined,
+                      });
+                    }}
+                    onReset={() => {
+                      // 条件未变化时显式刷新；变化时由新 query key 触发查询
+                      if (range.since === undefined && range.until === undefined) {
+                        void query.refetch();
+                      } else {
+                        setRange({});
+                      }
+                    }}
+                  >
+                    <Form.Item name="since">
+                      <DatePicker placeholder="开始日期" maxDate={dayjs()} />
+                    </Form.Item>
+                    <Form.Item name="until">
+                      <DatePicker placeholder="结束日期" maxDate={dayjs()} />
+                    </Form.Item>
+                  </FilterBar>
+                </div>
+              </div>
+            </PageSection>
+
+            <PageSection title="按日趋势">
+              <DataTable<TrendPoint>
+                density="compact"
+                rowKey="day"
+                columns={trendColumns}
+                dataSource={detail.trend}
+                pagination={false}
+                emptyText="当前筛选范围内没有按日趋势数据。"
+              />
+            </PageSection>
+
+            <PageSection title="媒体类型分布">
+              <DataTable<DistRow>
+                density="compact"
+                rowKey="key"
+                columns={distColumns}
+                dataSource={detail.media_dist}
+                pagination={false}
+                emptyText="当前筛选范围内没有媒体类型分布数据。"
+              />
+            </PageSection>
+
+            <PageSection title="错误分布">
+              <DataTable<DistRow>
+                density="compact"
+                rowKey="key"
+                columns={distColumns}
+                dataSource={detail.error_dist}
+                pagination={false}
+                emptyText="当前筛选范围内没有错误分布数据。"
+              />
+            </PageSection>
+
+            <PageSection title="按机器人分布" data-testid="channel-bot-dist">
+              <DataTable<ChannelBotRow>
+                density="compact"
+                rowKey="bot_id"
+                columns={botDistColumns}
+                dataSource={detail.bot_dist ?? []}
+                pagination={false}
+                emptyText="当前筛选范围内没有按机器人分布数据。"
+              />
+            </PageSection>
+
             <Text type="secondary">全部指标来自请求记录聚合，不触发主动抓取。</Text>
           </>
         )}
       </DetailGate>
-    </Space>
+    </PageScaffold>
   );
 }

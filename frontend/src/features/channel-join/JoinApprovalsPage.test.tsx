@@ -68,6 +68,16 @@ beforeEach(() => {
 });
 
 describe("加入审批页", () => {
+  it("渲染唯一 H1 页面标题「加入审批」", async () => {
+    mockRequests.mockResolvedValue(pageOf([requestRow()]));
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "加入审批" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("渲染待审批列表与操作按钮，默认按待审批筛选；频道名默认暗文可切换", async () => {
     mockRequests.mockResolvedValue(pageOf([requestRow()]));
     renderPage();
@@ -83,13 +93,53 @@ describe("加入审批页", () => {
     });
     expect(screen.getByText(/AbCd…5678/)).toBeInTheDocument();
     expect(screen.getAllByText(/待审批/).length).toBeGreaterThan(0);
+    // 同意保持行内主操作（primary 按钮两字间插空格），拒绝为链接动作
     expect(screen.getByRole("button", { name: "同 意" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "拒 绝" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拒绝" })).toBeInTheDocument();
     await waitFor(() => {
       expect(mockRequests).toHaveBeenCalledWith(
         expect.objectContaining({ status: "pending", page: 1, page_size: 20 }),
       );
     });
+  });
+
+  it("后台刷新时保留已加载表格内容", async () => {
+    mockRequests
+      .mockResolvedValueOnce(pageOf([requestRow()]))
+      .mockReturnValueOnce(new Promise(() => undefined));
+    renderPage();
+
+    await screen.findByText("***");
+    fireEvent.click(screen.getByRole("button", { name: /刷新/ }));
+
+    expect(screen.getByText("***")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByTestId("page-error")).not.toBeInTheDocument();
+  });
+
+  it("筛选提交带条件查询，重置恢复默认待审批筛选", async () => {
+    mockRequests.mockResolvedValue(pageOf([requestRow()]));
+    renderPage();
+
+    await screen.findByText("***");
+
+    // 提交筛选：状态 + 用户 ID
+    fireEvent.change(screen.getByPlaceholderText("申请用户 ID"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+    await waitFor(() => {
+      expect(mockRequests).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "pending", user_id: 100, page: 1, page_size: 20 }),
+      );
+    });
+
+    // 重置：恢复仅默认待审批筛选，输入框清空
+    fireEvent.click(screen.getByRole("button", { name: "重 置" }));
+    await waitFor(() => {
+      expect(mockRequests).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "pending", page: 1, page_size: 20 }),
+      );
+    });
+    expect(screen.getByPlaceholderText("申请用户 ID")).toHaveValue("");
   });
 
   it("历史状态行无审批按钮，但可删除", async () => {
@@ -102,7 +152,7 @@ describe("加入审批页", () => {
       expect(screen.getByText("已通过")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "同 意" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /删 除/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
   });
 
   it("同意审批调用 API", async () => {
@@ -120,6 +170,34 @@ describe("加入审批页", () => {
     await waitFor(() => {
       expect(mockApprove).toHaveBeenCalledWith(1);
     });
+  });
+
+  it("拒绝审批需确认，并在请求完成前保持确认 pending", async () => {
+    let resolveReject: (value: unknown) => void = () => undefined;
+    mockReject.mockReturnValue(
+      new Promise((resolve) => {
+        resolveReject = resolve;
+      }) as never,
+    );
+    mockRequests.mockResolvedValue(pageOf([requestRow()]));
+    renderPage();
+
+    // 拒绝为 RowActions 链接动作（link 按钮两个汉字间不插空格）
+    fireEvent.click(await screen.findByRole("button", { name: "拒绝" }));
+    expect(mockReject).not.toHaveBeenCalled();
+    const confirmButton = await screen.findByRole("button", { name: "确 认" });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(mockReject).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(confirmButton).toHaveClass("ant-btn-loading"));
+
+    resolveReject({
+      ok: true,
+      request: { id: 1, user_id: 100, channel_title: "私有频道", status: "rejected" },
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(/确定拒绝该加入申请/)).not.toBeInTheDocument(),
+    );
   });
 
   it("审批进行中连点只发送一次请求（防重复提交）", async () => {
@@ -173,11 +251,43 @@ describe("加入审批页", () => {
       expect(batch).not.toBeDisabled();
     });
     fireEvent.click(batch);
-    // Popconfirm 二次确认
-    fireEvent.click(await screen.findByRole("button", { name: /确认删除/ }));
+    // 批量删除为危险操作：使用 danger Modal 二次确认（与单条删除同一危险语义）
+    const confirmButton = await screen.findByRole("button", { name: /确认删除/ });
+    expect(confirmButton).toHaveClass("ant-btn-dangerous");
+    fireEvent.click(confirmButton);
     await waitFor(() => {
       expect(mockDelete).toHaveBeenCalledWith([1, 2]);
     });
+  });
+
+  it("单条删除仅目标行 pending，部分结果使用 warning", async () => {
+    let resolveDelete: (value: unknown) => void = () => undefined;
+    mockDelete.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDelete = resolve;
+      }) as never,
+    );
+    mockRequests.mockResolvedValue(
+      pageOf([
+        requestRow({ id: 1, status: "approved", reviewed_at: 1757030500000 }),
+        requestRow({ id: 2, status: "rejected", reviewed_at: 1757030500000 }),
+      ]),
+    );
+    renderPage();
+
+    const deleteButtons = await screen.findAllByRole("button", { name: "删除" });
+    fireEvent.click(deleteButtons[0]);
+    // 单条删除确认弹层的 OK 按钮文案为「删除」（普通按钮两字间插空格）
+    const confirmButton = await screen.findByRole("button", { name: "删 除" });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith([1]));
+    await waitFor(() => expect(deleteButtons[0]).toHaveClass("ant-btn-loading"));
+    expect(deleteButtons[1]).not.toHaveClass("ant-btn-loading");
+
+    resolveDelete({ ok: true, outcomes: [{ id: 1, ok: false, error: "conflict" }] });
+    expect(await screen.findByText(/已删除 0 条，1 条无法删除/)).toBeInTheDocument();
+    expect(document.querySelector(".ant-message-warning")).toBeInTheDocument();
   });
 
   it("pending 行复选框禁用（不可勾选删除）", async () => {

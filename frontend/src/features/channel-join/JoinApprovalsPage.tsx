@@ -5,8 +5,6 @@
  * 防止重复提交的"操作冲突"）；终态记录支持单条与批量删除。
  * 业务规则在 internal/joinmgr，页面只做展示与触发。
  */
-import type { ReactNode } from "react";
-import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
 import {
@@ -15,17 +13,15 @@ import {
   Form,
   Input,
   InputNumber,
-  Popconfirm,
   Select,
   Space,
-  Spin,
-  Table,
-  Tag,
   Typography,
 } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { TableRowSelection } from "antd/es/table/interface";
+import type { ReactNode } from "react";
+import { useRef, useState } from "react";
 
 import { fetchJoinRequests, type JoinRequestListParams, type JoinRequestRow } from "../../api/admin";
 import {
@@ -34,19 +30,24 @@ import {
   rejectJoinRequest,
 } from "../../api/mutations";
 import { fmtTime } from "../../shared/format";
+import { useAdminAction, useConfirmAction } from "../shared/actions";
+import { DataTable } from "../shared/DataTable";
+import { FilterBar } from "../shared/FilterBar";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { LoadError } from "../shared/PageStates";
 import { applyListFilters } from "../shared/listFilters";
-import { useAdminAction } from "../shared/actions";
+import { RowActions, type RowActionItem } from "../shared/RowActions";
+import { StatusTag, type StatusTone } from "../shared/StatusTag";
 import { useTitleMask } from "../shared/titleMask";
-import { LoadError, PageCard } from "../shared/PageStates";
 
 const { Text } = Typography;
 
-/** 申请状态中文标签与颜色。 */
-const STATUS_META: Record<JoinRequestRow["status"], { label: string; color: string }> = {
-  pending: { label: "待审批", color: "gold" },
-  approved: { label: "已通过", color: "green" },
-  rejected: { label: "已拒绝", color: "default" },
-  failed: { label: "加入失败", color: "red" },
+/** 申请状态中文标签与语义色调（StatusTag tone 由本领域模块定义）。 */
+const STATUS_META: Record<JoinRequestRow["status"], { label: string; tone: StatusTone }> = {
+  pending: { label: "待审批", tone: "warning" },
+  approved: { label: "已通过", tone: "success" },
+  rejected: { label: "已拒绝", tone: "inactive" },
+  failed: { label: "加入失败", tone: "error" },
 };
 
 const STATUS_OPTIONS = Object.entries(STATUS_META).map(([value, meta]) => ({
@@ -75,8 +76,8 @@ function toQueryValues(values: ApprovalFormValues): JoinRequestListParams {
 }
 
 function statusTag(status: JoinRequestRow["status"]): ReactNode {
-  const meta = STATUS_META[status] ?? { label: status, color: "default" };
-  return <Tag color={meta.color}>{meta.label}</Tag>;
+  const meta = STATUS_META[status] ?? { label: status, tone: "default" as StatusTone };
+  return <StatusTag tone={meta.tone}>{meta.label}</StatusTag>;
 }
 
 export function JoinApprovalsPage() {
@@ -85,6 +86,7 @@ export function JoinApprovalsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [selectedIDs, setSelectedIDs] = useState<number[]>([]);
+  const confirm = useConfirmAction();
   // 敏感频道名默认暗文，顶部按钮一键显隐
   const { toggle: titleToggle, text: titleText } = useTitleMask();
 
@@ -98,7 +100,10 @@ export function JoinApprovalsPage() {
     successText: (result, vars) =>
       vars.kind === "approve"
         ? result.request.status === "failed"
-          ? "执行加入失败，申请已标记为失败（链接可能已失效）。"
+          ? {
+              type: "warning",
+              text: "执行加入失败，申请已标记为失败（链接可能已失效）。",
+            }
           : "已同意并执行加入，申请人会收到通知。"
         : "已拒绝该申请，申请人会收到通知。",
   });
@@ -106,15 +111,17 @@ export function JoinApprovalsPage() {
   // 同步防重：双击在 React 重渲染前到达时 state 守卫不生效，用 ref 拦截
   const actingRef = useRef(false);
   const handleReview = (kind: "approve" | "reject", id: number) => {
-    if (actingRef.current) return;
+    if (actingRef.current) return Promise.resolve(undefined);
     actingRef.current = true;
     setActing({ id, kind });
-    void review.run({ kind, id }).finally(() => {
+    return review.run({ kind, id }).finally(() => {
       actingRef.current = false;
       setActing(null);
     });
   };
 
+  const [removingIDs, setRemovingIDs] = useState<number[]>([]);
+  const [removingBatch, setRemovingBatch] = useState(false);
   const remove = useAdminAction({
     action: (ids: number[]) => deleteJoinRequests(ids),
     invalidate: [["channel-join"]],
@@ -123,10 +130,21 @@ export function JoinApprovalsPage() {
       const failed = result.outcomes.length - ok;
       return failed === 0
         ? `已删除 ${ok} 条记录。`
-        : `已删除 ${ok} 条，${failed} 条无法删除（待审批记录须先同意或拒绝）。`;
+        : {
+            type: "warning",
+            text: `已删除 ${ok} 条，${failed} 条无法删除（待审批记录须先同意或拒绝）。`,
+          };
     },
     onDone: () => setSelectedIDs([]),
   });
+  const handleRemove = (ids: number[], batch = false) => {
+    setRemovingIDs(ids);
+    setRemovingBatch(batch);
+    return remove.run(ids).finally(() => {
+      setRemovingIDs([]);
+      setRemovingBatch(false);
+    });
+  };
 
   const requests = useQuery({
     queryKey: ["channel-join", "requests", { ...filters, page, pageSize }],
@@ -150,64 +168,87 @@ export function JoinApprovalsPage() {
       title: "审批",
       key: "review",
       fixed: "right",
-      render: (_, row) =>
-        row.status === "pending" ? (
-          <Space>
-            <Button
-              size="small"
-              type="primary"
-              loading={acting?.id === row.id && acting?.kind === "approve"}
-              disabled={reviewBusy}
-              onClick={() => handleReview("approve", row.id)}
-            >
-              同意
-            </Button>
-            <Button
-              size="small"
-              danger
-              loading={acting?.id === row.id && acting?.kind === "reject"}
-              disabled={reviewBusy}
-              onClick={() => handleReview("reject", row.id)}
-            >
-              拒绝
-            </Button>
-          </Space>
-        ) : (
-          <Space>
+      width: 160,
+      // 统一行操作（RowActions）：同意保持行内主操作；拒绝经 warning 确认；
+      // 终态行保留审批时间/备注说明，删除经 danger 确认（与批量删除同语义）
+      render: (_, row) => {
+        if (row.status === "pending") {
+          return (
+            <RowActions
+              actions={[
+                {
+                  key: "approve",
+                  label: "同意",
+                  primary: true,
+                  loading: acting?.id === row.id && acting?.kind === "approve",
+                  disabled: reviewBusy,
+                  onClick: () => void handleReview("approve", row.id),
+                },
+                {
+                  key: "reject",
+                  label: "拒绝",
+                  loading: acting?.id === row.id && acting?.kind === "reject",
+                  disabled: reviewBusy,
+                  onClick: () =>
+                    confirm({
+                      intent: "warning",
+                      title: "确认拒绝申请",
+                      content: "确定拒绝该加入申请？申请人将收到未通过通知。",
+                      action: () => handleReview("reject", row.id),
+                    }),
+                },
+              ]}
+            />
+          );
+        }
+        return (
+          <Space size={8} wrap>
             <Text type="secondary">
               {fmtTime(row.reviewed_at)}
               {row.note ? `（${row.note}）` : ""}
             </Text>
-            <Popconfirm
-              title="确认删除该记录？"
-              description="删除后不可恢复。"
-              okText="删除"
-              cancelText="取消"
-              onConfirm={() => void remove.run([row.id])}
-            >
-              <Button size="small" danger loading={remove.pending}>
-                删除
-              </Button>
-            </Popconfirm>
+            <RowActions
+              actions={[
+                {
+                  key: "delete",
+                  label: "删除",
+                  danger: true,
+                  disabled: remove.pending,
+                  loading: remove.pending && !removingBatch && removingIDs.includes(row.id),
+                  onClick: () =>
+                    confirm({
+                      intent: "danger",
+                      title: "确认删除该记录？",
+                      content: "删除后不可恢复。",
+                      okText: "删除",
+                      action: () => handleRemove([row.id]),
+                    }),
+                } satisfies RowActionItem,
+              ]}
+            />
           </Space>
-        ),
+        );
+      },
     },
   ];
 
   const rowSelection: TableRowSelection<JoinRequestRow> = {
     selectedRowKeys: selectedIDs,
-    onChange: (keys) => setSelectedIDs(keys.map(Number)),
-    getCheckboxProps: (row) => ({ disabled: row.status === "pending" }),
+    onChange: (keys) => {
+      if (!removingBatch) setSelectedIDs(keys.map(Number));
+    },
+    getCheckboxProps: (row) => ({ disabled: row.status === "pending" || removingBatch }),
   };
   const deletableSelected = selectedIDs.filter((id) =>
     (requests.data?.items ?? []).some((row) => row.id === id && row.status !== "pending"),
   );
 
   return (
-    <PageCard
+    <PageScaffold
       title="加入审批"
-      extra={
-        <Space>
+      description="审批 /join 命令产生的频道加入申请；同意后立即执行真实加入。"
+      actions={
+        <>
           {titleToggle}
           <Button
             icon={<ReloadOutlined />}
@@ -216,93 +257,85 @@ export function JoinApprovalsPage() {
           >
             刷新
           </Button>
-          <Popconfirm
-            title={`确认删除选中的 ${deletableSelected.length} 条记录？`}
-            description="仅终态记录会被删除；待审批记录须先同意或拒绝。删除后不可恢复。"
-            okText="确认删除"
-            cancelText="取消"
-            onConfirm={() => void remove.run(deletableSelected)}
+          <Button
+            danger
+            disabled={deletableSelected.length === 0 || remove.pending}
+            loading={remove.pending && removingBatch}
+            onClick={() => {
+              const idsSnapshot = [...deletableSelected];
+              confirm({
+                intent: "danger",
+                title: "确认批量删除记录",
+                content: `确认删除选中的 ${idsSnapshot.length} 条记录？仅终态记录会被删除；待审批记录须先同意或拒绝。删除后不可恢复。`,
+                okText: "确认删除",
+                action: () => handleRemove(idsSnapshot, true),
+              });
+            }}
           >
-            <Button danger disabled={deletableSelected.length === 0} loading={remove.pending}>
-              批量删除（{deletableSelected.length}）
-            </Button>
-          </Popconfirm>
-        </Space>
+            批量删除（{deletableSelected.length}）
+          </Button>
+        </>
       }
     >
-      <Space direction="vertical" size="small" className="field-width-full">
-        <Form<ApprovalFormValues>
-          form={form}
-          layout="inline"
-          initialValues={{ status: "pending" }}
-          onFinish={(values) => {
-            applyListFilters(toQueryValues(values), filters, page, setPage, setFilters, requests.refetch);
-          }}
-        >
-          <Form.Item name="status">
-            <Select
-              placeholder="状态"
-              allowClear
-              className="field-width-110"
-              options={[{ value: "", label: "全部" }, ...STATUS_OPTIONS]}
-            />
-          </Form.Item>
-          <Form.Item name="user_id">
-            <InputNumber placeholder="申请用户 ID" min={1} className="field-width-140" />
-          </Form.Item>
-          <Form.Item name="keyword">
-            <Input placeholder="频道标题关键词" allowClear className="field-width-160" />
-          </Form.Item>
-          <Form.Item name="since">
-            <DatePicker placeholder="申请开始日期" maxDate={dayjs()} />
-          </Form.Item>
-          <Form.Item name="until">
-            <DatePicker placeholder="申请结束日期" maxDate={dayjs()} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              筛选
-            </Button>
-          </Form.Item>
-          <Form.Item>
-            <Button
-              onClick={() => {
-                form.resetFields();
-                applyListFilters({ status: "pending" }, filters, page, setPage, setFilters, requests.refetch);
-              }}
-            >
-              重置
-            </Button>
-          </Form.Item>
-        </Form>
-
-        {requests.isError ? (
-          <LoadError onRetry={() => void requests.refetch()} />
-        ) : requests.isPending ? (
-          <Spin className="page-loading" tip="加载中…" />
-        ) : (
-          <Table<JoinRequestRow>
-            rowKey="id"
-            size="small"
-            columns={columns}
-            dataSource={requests.data?.items}
-            rowSelection={rowSelection}
-            locale={{ emptyText: "没有符合条件的申请记录。" }}
-            scroll={{ x: "max-content" }}
-            pagination={{
-              current: requests.data?.page ?? page,
-              pageSize: requests.data?.page_size ?? pageSize,
-              total: requests.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (nextPage, nextSize) => {
-                setSelectedIDs([]);
-                setPage(nextPage);
-                setPageSize(nextSize);
-              },
+      <PageSection>
+        <Space direction="vertical" size="middle" className="field-width-full">
+          <FilterBar<ApprovalFormValues>
+            mode="submit"
+            form={form}
+            initialValues={{ status: "pending" }}
+            onFinish={(values) => {
+              applyListFilters(toQueryValues(values), filters, page, setPage, setFilters, requests.refetch);
             }}
-          />
-        )}
-      </Space>
-    </PageCard>
+            onReset={() => {
+              applyListFilters({ status: "pending" }, filters, page, setPage, setFilters, requests.refetch);
+            }}
+          >
+            <Form.Item name="status">
+              <Select
+                placeholder="状态"
+                allowClear
+                className="field-width-110"
+                options={[{ value: "", label: "全部" }, ...STATUS_OPTIONS]}
+              />
+            </Form.Item>
+            <Form.Item name="user_id">
+              <InputNumber placeholder="申请用户 ID" min={1} className="field-width-140" />
+            </Form.Item>
+            <Form.Item name="keyword">
+              <Input placeholder="频道标题关键词" allowClear className="field-width-160" />
+            </Form.Item>
+            <Form.Item name="since">
+              <DatePicker placeholder="申请开始日期" maxDate={dayjs()} />
+            </Form.Item>
+            <Form.Item name="until">
+              <DatePicker placeholder="申请结束日期" maxDate={dayjs()} />
+            </Form.Item>
+          </FilterBar>
+
+          {requests.isError && !requests.data ? (
+            <LoadError onRetry={() => void requests.refetch()} />
+          ) : (
+            <DataTable<JoinRequestRow>
+              rowKey="id"
+              columns={columns}
+              dataSource={requests.data?.items}
+              rowSelection={rowSelection}
+              loading={requests.isFetching}
+              emptyText="没有符合条件的申请记录。"
+              pagination={{
+                current: requests.data?.page ?? page,
+                pageSize: requests.data?.page_size ?? pageSize,
+                total: requests.data?.total ?? 0,
+                onChange: (nextPage, nextSize) => {
+                  setSelectedIDs([]);
+                  setPage(nextPage);
+                  setPageSize(nextSize);
+                },
+              }}
+            />
+          )}
+        </Space>
+      </PageSection>
+    </PageScaffold>
   );
 }

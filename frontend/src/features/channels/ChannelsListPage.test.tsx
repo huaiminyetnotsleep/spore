@@ -83,6 +83,59 @@ describe("频道统计列表页", () => {
     );
   });
 
+  it("渲染唯一 H1 页面标题「频道统计」", async () => {
+    fetchChannelsMock.mockResolvedValue(envelope([channelRow({})]));
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "频道统计" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("筛选提交与重置都会重新发起查询", async () => {
+    fetchChannelsMock.mockResolvedValue(envelope([channelRow({})]));
+
+    renderPage();
+    await screen.findByText("example");
+
+    // 机器人下拉（虚拟滚动关闭，全量渲染选项）：选「全部」后提交
+    const botSelect = screen.getAllByRole("combobox")[0]
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selector");
+    expect(botSelect).not.toBeNull();
+    fireEvent.mouseDown(botSelect as HTMLElement);
+    fireEvent.click(await screen.findByRole("option", { name: "全部" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+    await waitFor(() => expect(fetchChannelsMock.mock.calls.length).toBeGreaterThan(1));
+
+    // 重置清空表单并按无条件查询刷新
+    fireEvent.click(screen.getByRole("button", { name: "重 置" }));
+    await waitFor(() =>
+      expect(fetchChannelsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ since: undefined, until: undefined, bot_id: undefined }),
+      ),
+    );
+  });
+
+  it("删除 pending 只让目标行按钮进入 loading", async () => {
+    deleteChannelRequestsMock.mockReturnValue(new Promise(() => undefined) as never);
+    fetchChannelsMock.mockResolvedValue(
+      envelope([channelRow({}), channelRow({ key: "other", total: 3 })]),
+    );
+
+    renderPage();
+
+    const deleteButtons = await screen.findAllByRole("button", { name: "删除" });
+    fireEvent.click(deleteButtons[0]);
+    // 删除是破坏性操作：确认按钮为 danger 样式
+    const confirmButton = await screen.findByRole("button", { name: "确 认" });
+    expect(confirmButton).toHaveClass("ant-btn-dangerous");
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(deleteButtons[0]).toHaveClass("ant-btn-loading"));
+    expect(deleteButtons[1]).not.toHaveClass("ant-btn-loading");
+  });
+
   it("空数据时展示受控空态文案", async () => {
     fetchChannelsMock.mockResolvedValue(envelope([]));
 
@@ -111,7 +164,7 @@ describe("频道统计列表页", () => {
     fetchChannelsMock.mockResolvedValue(envelope([channelRow({})]));
     const invalidateSpy = renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "删 除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
 
     // 确认文案携带频道键与全部记录数（频道删除即清空其全部请求记录）
     expect(
@@ -137,7 +190,7 @@ describe("频道统计列表页", () => {
     fetchChannelsMock.mockResolvedValue(envelope([channelRow({})]));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "删 除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
 
     expect(

@@ -58,6 +58,56 @@ beforeEach(() => {
 });
 
 describe("频道绑定管理页", () => {
+  it("渲染唯一 H1 页面标题「频道绑定」", async () => {
+    mockFetch.mockResolvedValue({ items: [bindingRow()] });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "频道绑定" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  function renderPageAt(initialEntry: string) {
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <AntApp component={false}>
+          <MemoryRouter initialEntries={[initialEntry]}>
+            <BindingsPage />
+          </MemoryRouter>
+        </AntApp>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("URL user_id 参数驱动筛选：查询带入参数且回填输入框", async () => {
+    mockFetch.mockResolvedValue({ items: [] });
+    renderPageAt("/channel-bindings?user_id=7");
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith({ user_id: "7" }));
+    expect(await screen.findByPlaceholderText("按用户 ID 筛选")).toHaveValue("7");
+
+    // 修改筛选并提交：URL 驱动查询更新
+    fireEvent.change(screen.getByPlaceholderText("按用户 ID 筛选"), {
+      target: { value: "9" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenLastCalledWith({ user_id: "9" }));
+  });
+
+  it("重置筛选清除 URL user_id 并按无条件查询", async () => {
+    mockFetch.mockResolvedValue({ items: [] });
+    renderPageAt("/channel-bindings?user_id=7");
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith({ user_id: "7" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "重 置" }));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenLastCalledWith({}));
+    expect(screen.getByPlaceholderText("按用户 ID 筛选")).toHaveValue("");
+  });
+
   it("渲染绑定列表与所属用户", async () => {
     mockFetch.mockResolvedValue({ items: [bindingRow()] });
     renderPage();
@@ -122,10 +172,8 @@ describe("频道绑定管理页", () => {
     mockUnbind.mockResolvedValue({ ok: true, binding: { channel_id: -1001234567890, user_id: 7, title: "我的频道" } } as UnbindChannelResult);
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "解 绑" })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "解 绑" }));
+    // 行操作统一为 RowActions 链接按钮（link 按钮两个汉字间不插空格）
+    fireEvent.click(await screen.findByRole("button", { name: "解绑" }));
     // 确认弹窗出现后点击确认（antd 中文两字按钮内含空格）
     const confirmBtn = await screen.findByRole("button", { name: "确 认" });
     fireEvent.click(confirmBtn);
@@ -133,5 +181,37 @@ describe("频道绑定管理页", () => {
     await waitFor(() => {
       expect(mockUnbind).toHaveBeenCalledWith(-1001234567890);
     });
+  });
+
+  it("解绑 pending 只让目标行按钮进入 loading", async () => {
+    mockFetch.mockResolvedValue({
+      items: [bindingRow(), bindingRow({ channel_id: -100999, title: "第二频道" })],
+    });
+    mockUnbind.mockReturnValue(new Promise(() => undefined) as never);
+    renderPage();
+
+    const unbindButtons = await screen.findAllByRole("button", { name: "解绑" });
+    fireEvent.click(unbindButtons[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(unbindButtons[0]).toHaveClass("ant-btn-loading"));
+    expect(unbindButtons[1]).not.toHaveClass("ant-btn-loading");
+  });
+
+  it("绑定弹窗取消后默认重置草稿", async () => {
+    mockFetch.mockResolvedValue({ items: [] });
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "绑定频道" }));
+    fireEvent.change(await screen.findByLabelText(/所属用户/), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText(/频道标识/), { target: { value: "@mychan" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "取 消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "绑定频道" }));
+    expect(await screen.findByLabelText(/所属用户/)).toHaveValue("");
+    expect(screen.getByLabelText(/频道标识/)).toHaveValue("");
+    expect(mockBind).not.toHaveBeenCalled();
   });
 });
