@@ -101,6 +101,31 @@ describe("MTProto 连接页", () => {
     expect(screen.getByText("DC 2")).toBeInTheDocument();
   });
 
+  it("单 bot 部署也渲染逐 bot 直传会话列表（状态与 DC 可见）", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(
+      status({
+        bot_state: "ready",
+        bot_dc_id: 4,
+        bots: [{ bot_id: 42, username: "spore_bot", state: "ready", dc_id: 4, updated_at: 1757000000000 }],
+      }),
+    );
+
+    renderPage();
+
+    const list = await screen.findByTestId("mtproto-bot-list");
+    expect(list).toHaveTextContent("@spore_bot");
+    expect(screen.getByText("已连接 · DC 4")).toBeInTheDocument();
+  });
+
+  it("无 bots 数据时不渲染逐 bot 会话列表", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(status());
+
+    renderPage();
+
+    await screen.findByTestId("mtproto-state");
+    expect(screen.queryByTestId("mtproto-bot-list")).not.toBeInTheDocument();
+  });
+
   it("仅离线可触发重连：确认弹层为 warning（非 danger），确认后调用 API", async () => {
     reloginMTProtoMock.mockResolvedValue({ ok: true });
     fetchMTProtoStatusMock.mockResolvedValue(status({ state: "offline" }));

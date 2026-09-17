@@ -99,7 +99,9 @@ export function MTProtoPage() {
                   {data?.bot_dc_id ? <StatusTag tone="processing">DC {data.bot_dc_id}</StatusTag> : null}
                 </Space>
 
-                {data?.bots && data.bots.length > 1 ? (
+                {/* 逐 bot 直传会话：单 bot 也渲染——顶层"机器人 Bot 会话"是主 bot 汇总，
+                    这里给出逐 bot 的真实状态与 DC，避免单 bot 部署看不到运行态。 */}
+                {data?.bots && data.bots.length >= 1 ? (
                   <Space size="small" wrap data-testid="mtproto-bot-list">
                     <Text>各机器人直传会话：</Text>
                     {data.bots.map((bot) => (
