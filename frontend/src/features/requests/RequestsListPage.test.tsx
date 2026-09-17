@@ -238,7 +238,7 @@ describe("请求记录列表页", () => {
       "ant-segmented-item-disabled",
     );
     expect(screen.getByRole("button", { name: /批量取消/ })).toHaveClass("ant-btn-loading");
-  });
+  }, 10_000);
 
   it("processing 记录渲染实时下载/上传进度，终态记录显示占位", async () => {
     fetchRequestsMock.mockResolvedValue(

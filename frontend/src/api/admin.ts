@@ -702,6 +702,8 @@ export interface NotificationCredentialState {
 /** 与 notifycfg.View 对齐的脱敏配置；敏感 URL、Token、Secret 永不出现。 */
 export interface NotificationConfigView {
   version: number;
+  /** 是否将真实系统事件自动投递到已启用的外部通知通道。旧服务端缺省为 false。 */
+  automatic_events?: boolean;
   bot: {
     enabled: boolean;
     chat_id: string;
@@ -727,6 +729,67 @@ export interface NotificationConfigView {
 
 export function fetchNotificationConfig(): Promise<NotificationConfigView> {
   return apiRequest<NotificationConfigView>("/api/v1/notification/config");
+}
+
+export type NotificationSeverity = "info" | "warn" | "error";
+export type NotificationOverride = "inherit" | "enabled" | "disabled";
+export type NotificationChannel = "admin_badge" | "bot" | "webhook";
+
+export interface NotificationEventCatalogItem {
+  type: string;
+  category: string;
+  type_label: string;
+  severity: NotificationSeverity;
+  title: string;
+  description: string;
+  supports_recovery: boolean;
+}
+
+export interface NotificationCategoryPolicy {
+  admin_badge: boolean;
+  bot: boolean;
+  webhook: boolean;
+}
+
+export interface NotificationEventPolicy {
+  admin_badge: NotificationOverride;
+  bot: NotificationOverride;
+  webhook: NotificationOverride;
+  recovery: NotificationOverride;
+}
+
+export interface NotificationPolicy {
+  version: number;
+  minimum_severity: NotificationSeverity;
+  categories: Record<string, NotificationCategoryPolicy>;
+  events: Record<string, NotificationEventPolicy>;
+}
+
+export type NotificationMuteMatchMode = "all" | "category" | "events";
+
+export interface NotificationMute {
+  id: string;
+  name: string;
+  match_mode: NotificationMuteMatchMode;
+  category: string;
+  event_types: string[];
+  channels: NotificationChannel[];
+  starts_at: number;
+  ends_at: number;
+  permanent: boolean;
+  enabled: boolean;
+}
+
+export function fetchNotificationEventCatalog(): Promise<NotificationEventCatalogItem[]> {
+  return apiRequest<NotificationEventCatalogItem[]>("/api/v1/notification/event-catalog");
+}
+
+export function fetchNotificationPolicy(): Promise<NotificationPolicy> {
+  return apiRequest<NotificationPolicy>("/api/v1/notification/policy");
+}
+
+export function fetchNotificationMutes(): Promise<NotificationMute[]> {
+  return apiRequest<NotificationMute[]>("/api/v1/notification/mutes");
 }
 
 // ---- GitHub OAuth（高风险页面迁移） ----

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
@@ -74,7 +73,7 @@ type Options struct {
 	Now                func() time.Time                // 可注入时钟（测试用）；缺省 time.Now
 }
 
-// Hub 是事件中心：事件写库去重合并 + 冷却窗口内的 Telegram 管理员通知。
+// Hub 是事件中心：事件写库去重合并 + 冷却窗口内的配置化或兼容 Telegram 管理员通知。
 // 零值不可用，经 New 构造；全部方法并发安全。
 type Hub struct {
 	st                 *store.Store
@@ -89,7 +88,10 @@ type Hub struct {
 	now                func() time.Time
 
 	senderMu sync.RWMutex
-	sender   Notifier // Bot 就绪后经 SetSender 注入；nil 表示通道不可用
+	sender   Notifier // 兼容旧业务 Bot owner 私聊通道；nil 表示通道不可用
+
+	runtimeMu sync.RWMutex
+	runtime   RuntimeNotifier // 配置化通知通道；由装配层按需注入
 
 	notifyMu sync.Mutex // 串行化通知判定与写回，避免并发 Raise 重复推送
 
@@ -160,11 +162,28 @@ func (h *Hub) SetSender(snd Notifier) {
 	h.FlushPending(ctx)
 }
 
-// snapshotSender 返回当前通知通道快照（可能为 nil：Bot 尚未就绪）。
+// SetRuntimeNotifier 注入通知设置页配置的运行时通道。
+// 配置通道可在业务 Bot 尚未就绪时独立投递；注入后补发仍未成功通知的事件。
+func (h *Hub) SetRuntimeNotifier(snd RuntimeNotifier) {
+	h.runtimeMu.Lock()
+	h.runtime = snd
+	h.runtimeMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), raiseTimeout)
+	defer cancel()
+	h.FlushPending(ctx)
+}
+
+// snapshotSender 返回当前兼容 owner 私聊通道快照（可能为 nil：Bot 尚未就绪）。
 func (h *Hub) snapshotSender() Notifier {
 	h.senderMu.RLock()
 	defer h.senderMu.RUnlock()
 	return h.sender
+}
+
+func (h *Hub) snapshotRuntimeNotifier() RuntimeNotifier {
+	h.runtimeMu.RLock()
+	defer h.runtimeMu.RUnlock()
+	return h.runtime
 }
 
 // Raise 记录（或按 key 合并）一次事件，并在冷却窗口外尝试通知管理员：
@@ -215,9 +234,31 @@ func (h *Hub) maybeNotify(ctx context.Context, e store.Event) {
 	h.deliver(ctx, current, now)
 }
 
-// deliver 执行一次通知尝试；只有发送成功才推进冷却期，发送失败保留为未通知，
-// 便于下一次事件发生时再次尝试，同时不阻塞事件写入主链路。
+// deliver 执行一次通知尝试；只有至少一个实际通道发送成功才推进冷却期。
+// 配置化运行时通道启用后由它接管事件投递；未启用时回退到旧的 owner 私聊，
+// 保持旧部署的行为兼容。事件本身始终先落库，不受策略抑制影响。
 func (h *Hub) deliver(ctx context.Context, e store.Event, now time.Time) {
+	message := h.eventNotification(ctx, e, false)
+	if runtime := h.snapshotRuntimeNotifier(); runtime != nil {
+		result, err := runtime.NotifyEvent(ctx, message)
+		if err != nil {
+			h.log.Warn("配置化通知通道读取失败，将尝试兼容通知", "key", e.Key, "error", err.Error())
+		}
+		if result.Managed {
+			if result.Delivered > 0 {
+				h.log.Info("已通过配置化通知通道推送事件", "key", e.Key,
+					"delivered", result.Delivered, "failed", result.Failed)
+				if err := h.st.MarkEventNotified(ctx, e.Key, now.UnixMilli()); err != nil {
+					h.log.Warn("记录事件通知时间失败", "key", e.Key, "error", err.Error())
+				}
+			} else if result.Failed > 0 {
+				h.log.Warn("配置化通知通道发送失败，将在后续事件中重试", "key", e.Key,
+					"failed", result.Failed)
+			}
+			return
+		}
+	}
+
 	snd := h.snapshotSender()
 	if snd == nil {
 		// Bot 未就绪：事件保留在 Web 事件中心，SetSender 时补发
@@ -226,7 +267,6 @@ func (h *Hub) deliver(ctx context.Context, e store.Event, now time.Time) {
 	}
 	// 管理员 Chat ID 取 users 表 owner 用户的 Telegram ID（Bot 私聊 chat_id
 	// 与用户 ID 相同）：不新增环境变量，Web 变更 owner 后下次发送即生效。
-	// 每次发送前查询（SQLite 本地读，事件频度下开销可忽略）。
 	chatID, err := h.st.OwnerID(ctx)
 	if errors.Is(err, store.ErrNotFound) {
 		h.log.Warn("未设置 owner 用户，事件通知暂无法投递", "key", e.Key)
@@ -236,7 +276,7 @@ func (h *Hub) deliver(ctx context.Context, e store.Event, now time.Time) {
 		h.log.Error("查询管理员失败", "key", e.Key, "error", err.Error())
 		return
 	}
-	if _, err := snd.SendMessage(ctx, chatID, h.notifyHTML(ctx, e)); err != nil {
+	if _, err := snd.SendMessage(ctx, chatID, RenderHTML(message)); err != nil {
 		h.log.Warn("管理员通知发送失败，将在后续事件中重试", "key", e.Key, "error", err.Error())
 		return
 	}
@@ -374,73 +414,37 @@ func (h *Hub) CheckTempDir(ctx context.Context) {
 // controlledEventMessage 返回事件中心允许对外展示的固定中文文案。
 // 事件消息不接收底层错误、链接、消息正文或凭据，避免通知和 Web 页面越界泄露。
 func controlledEventMessage(key string) string {
-	switch key {
-	case KeySessionOffline:
-		return "MTProto 会话已离线，请在管理端重新登录。"
-	case KeyBotSendFailures:
-		return "Bot API 连续发送失败，请检查网络与 Bot 配置。"
-	case KeyTaskFailures:
-		return "任务连续失败，请到管理端消息记录页查看失败原因。"
-	case KeyStoreWriteFailed:
-		return "数据库写入失败，请检查磁盘空间与数据库文件。"
-	case KeyTempDirUsage:
-		return "临时目录占用超过配置阈值，请及时清理或扩容。"
-	case KeyStartupRecovered:
-		return "启动恢复发现上次运行遗留的未完成任务，已标记为中断失败。"
-	case KeyMediaConfigInvalid:
-		return "数据库中的媒体传输配置无效，当前暂使用环境配置；请在管理端修正后重启。"
-	case KeyCloudUploadFailed:
-		return "云盘下载任务连续失败，请到管理端消息记录页查看失败原因。"
-	case KeyCloudConfigInvalid:
-		return "云盘下载配置无效（文件损坏或默认目的地悬空），功能暂按未配置处理；请在管理端修正。"
-	case KeyCloudDisabled:
-		return "云盘下载已开启但 rclone 不可用，/download 暂不可用；请安装或修复 rclone 后重启。"
-	default:
-		return "系统异常事件，请查看管理端事件中心。"
+	if definition, ok := GetDefinition(key); ok {
+		return definition.Description
+	}
+	return "系统异常事件，请查看管理端事件中心。"
+}
+
+func (h *Hub) eventNotification(ctx context.Context, e store.Event, recovery bool) EventNotification {
+	definition, ok := GetDefinition(e.Key)
+	if !ok {
+		definition = EventDefinition{
+			Type: e.Key, Category: CategorySystemAlert, TypeLabel: "系统告警",
+			Severity: e.Severity, Title: "系统异常", Description: controlledEventMessage(e.Key),
+		}
+	}
+	severity := e.Severity
+	if severity == "" {
+		severity = definition.Severity
+	}
+	return EventNotification{
+		SourceName: syscfg.Name(ctx, h.st), TypeCode: definition.Category,
+		TypeLabel: definition.TypeLabel, Category: definition.Category,
+		Severity: severity, EventType: e.Key, Title: definition.Title,
+		Body: definition.Description, Count: e.Count, OccurredAt: time.UnixMilli(e.LastAt),
+		Recovery: recovery,
 	}
 }
 
-// eventTitle 返回受控事件标题，不把调用方传入的 key 原样发送到 Telegram。
-func eventTitle(key string) string {
-	switch key {
-	case KeySessionOffline:
-		return "MTProto 会话离线"
-	case KeyBotSendFailures:
-		return "Bot API 连续发送失败"
-	case KeyTaskFailures:
-		return "任务连续失败"
-	case KeyStoreWriteFailed:
-		return "数据库写入失败"
-	case KeyTempDirUsage:
-		return "临时目录占用超限"
-	case KeyStartupRecovered:
-		return "启动恢复中断任务"
-	case KeyMediaConfigInvalid:
-		return "媒体配置无效"
-	case KeyCloudUploadFailed:
-		return "云盘任务连续失败"
-	case KeyCloudConfigInvalid:
-		return "云盘配置无效"
-	case KeyCloudDisabled:
-		return "云盘功能不可用"
-	default:
-		return "系统异常"
-	}
-}
-
-// notifyHTML 渲染通知正文（HTML parse_mode）：只使用受控中文描述与计数，
-// 不含链接、错误原文、消息正文或任何敏感值。
-// 标题前缀为可配置的系统名称（internal/syscfg，管理端修改即时生效）。
+// notifyHTML 渲染通知正文（HTML parse_mode）：只使用事件目录中的受控文案、
+// 系统名称和计数，不含链接、错误原文、消息正文或任何敏感值。
 func (h *Hub) notifyHTML(ctx context.Context, e store.Event) string {
-	label := map[string]string{
-		SeverityInfo: "提示", SeverityWarn: "警告", SeverityError: "错误",
-	}[e.Severity]
-	if label == "" {
-		label = "事件"
-	}
-	return fmt.Sprintf("<b>[%s %s] %s</b>\n%s\n\n已发生 %d 次，详情见管理端事件中心。",
-		syscfg.Name(ctx, h.st), label, html.EscapeString(eventTitle(e.Key)),
-		html.EscapeString(controlledEventMessage(e.Key)), e.Count)
+	return RenderHTML(h.eventNotification(ctx, e, false))
 }
 
 // humanBytes 把字节数格式化为人类可读大小（事件文案用）。

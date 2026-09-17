@@ -1,4 +1,4 @@
-// Package notifycfg 管理通知通道配置、凭据加密和测试发送。
+// Package notifycfg 管理通知通道配置、凭据加密、测试发送和运行时事件投递。
 package notifycfg
 
 import (
@@ -45,8 +45,12 @@ type Options struct {
 
 // ConfigInput 是 PUT 全量替换通知配置的输入。两个通道会原子校验并保存。
 type ConfigInput struct {
-	Bot     BotInput     `json:"bot"`
-	Webhook WebhookInput `json:"webhook"`
+	// AutomaticEvents enables delivery of system events through configured
+	// channels. The legacy owner Bot route remains the compatibility fallback
+	// when this switch is disabled or the configuration cannot be loaded.
+	AutomaticEvents bool         `json:"automatic_events"`
+	Bot             BotInput     `json:"bot"`
+	Webhook         WebhookInput `json:"webhook"`
 }
 
 // BotInput 是 Telegram Bot 通道的保存输入。Token 为空时沿用已保存凭据。
@@ -107,9 +111,10 @@ type WebhookView struct {
 
 // View 是 notification_channels 的完整脱敏视图。
 type View struct {
-	Version int         `json:"version"`
-	Bot     BotView     `json:"bot"`
-	Webhook WebhookView `json:"webhook"`
+	Version         int         `json:"version"`
+	AutomaticEvents bool        `json:"automatic_events"`
+	Bot             BotView     `json:"bot"`
+	Webhook         WebhookView `json:"webhook"`
 }
 
 // RecentChat 描述 getUpdates 中最近出现的会话。

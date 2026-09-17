@@ -20,20 +20,11 @@ import {
   type CloudDriveBackupStatus,
 } from "../../api/admin";
 import {
-  cancelCloudDriveBackupPending,
   confirmBackupImport,
-  confirmCloudDriveBackupImport,
   exportBackup,
   exportBackupAllJSON,
   exportBackupFull,
   exportBackupJSON,
-  exportCloudDriveBackup,
-  importCloudDriveBackup,
-  restartServer,
-  rollbackCloudDriveBackup,
-  uploadBackup,
-  uploadBackupAllJSON,
-  uploadBackupJSON,
 } from "../../api/mutations";
 import { BackupPage, CONFIRM_IMPORT_TEXT } from "./BackupPage";
 

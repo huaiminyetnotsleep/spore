@@ -22,8 +22,9 @@ const (
 )
 
 type document struct {
-	Version  int               `json:"version"`
-	Channels []json.RawMessage `json:"channels"`
+	Version         int               `json:"version"`
+	AutomaticEvents bool              `json:"automatic_events"`
+	Channels        []json.RawMessage `json:"channels"`
 }
 
 type channelHeader struct {
@@ -68,6 +69,7 @@ type Manager struct {
 	botAPIBase string
 	now        func() time.Time
 	saveMu     sync.Mutex
+	policy     *PolicyManager
 }
 
 // NewManager 创建通知配置管理器。HTTPClient 为空时使用 10 秒总超时客户端。
@@ -84,7 +86,10 @@ func NewManager(store SettingsStore, rootKey []byte, opts Options) *Manager {
 	if now == nil {
 		now = time.Now
 	}
-	return &Manager{store: store, crypt: newCryptor(rootKey), client: client, botAPIBase: base, now: now}
+	return &Manager{
+		store: store, crypt: newCryptor(rootKey), client: client, botAPIBase: base, now: now,
+		policy: NewPolicyManager(store, now),
+	}
 }
 
 // Descriptors 返回已注册 Webhook 格式的稳定描述符列表。
@@ -98,7 +103,7 @@ func (m *Manager) Snapshot(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	view := View{Version: documentVersion}
+	view := View{Version: documentVersion, AutomaticEvents: doc.AutomaticEvents}
 	if bot, ok, err := findChannel[storedBot](doc, botChannelID, ChannelBot); err != nil {
 		return View{}, err
 	} else if ok {
@@ -158,6 +163,7 @@ func (m *Manager) Save(ctx context.Context, input ConfigInput) error {
 	if err := replaceChannel(&doc, webhookChannelID, webhook); err != nil {
 		return err
 	}
+	doc.AutomaticEvents = input.AutomaticEvents
 	return m.saveDocument(ctx, doc)
 }
 

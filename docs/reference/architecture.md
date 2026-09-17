@@ -104,8 +104,8 @@ spore/
 │   ├── transfercfg/             # 下载/上传线程与连接数的运行时覆盖（DB 覆盖 env）
 │   ├── cloudarchive/            # 云盘下载：cloud-drive.json 配置、rclone 封装、远端布局
 │   ├── monitor/                 # 进程资源与传输速率采样（RSS/临时目录/CPU，48h 历史）
-│   ├── notify/                  # 系统事件：按 key 合并、冷却通知、owner 私聊
-│   ├── notifycfg/               # 通知通道配置、凭据加密与测试发送适配器
+│   ├── notify/                  # 系统事件：按 key 合并、冷却、受控消息与运行时投递接口
+│   ├── notifycfg/               # 通知通道/策略配置、凭据加密与 Bot/Webhook 适配器
 │   └── web/                     # 管理端：SPA 壳、/api/v1 JSON、登录会话、CSV/QR 端点
 ├── data/                        # spore.db / session.json / bot-session.json / peers.json /
 │                                #   tmp/ / cloud-drive.json 等（gitignore）
@@ -126,7 +126,7 @@ spore/
 | `store` | SQLite 连接/迁移与各聚合 DAO（用户、请求、用量、审计、事件、设置、会话、加入留痕等） | 业务准入规则、Telegram 协议 |
 | `web` | SPA 壳与 `/api/v1` JSON API、登录会话/CSRF、CSV/QR 功能端点 | 业务准入决策（经 access/joinmgr 等服务） |
 | `config` / `apperr` / `syscfg` / `transfercfg` | 横切：环境配置、错误模型、运行设置与传输覆盖 | — |
-| `cloudarchive` / `monitor` / `notify` / `notifycfg` / `progress` | 云盘 rclone 封装、资源监控、事件通知、通知通道配置/测试发送、进度注册表 | — |
+| `cloudarchive` / `monitor` / `notify` / `notifycfg` / `progress` | 云盘 rclone 封装、资源监控、事件目录/冷却/受控消息、通知通道与策略配置/投递、进度注册表 | — |
 
 ## 3. 关键技术决策
 
@@ -302,8 +302,8 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 | `requests` | 一次提取请求的全生命周期：queued → processing → succeeded/failed，含 attempt、error_code 与媒体诊断元数据 |
 | `usage_daily` | (user_id, 运营时区日 YYYY-MM-DD) 的当日用量与重置次数 |
 | `audit_log` | 管理员/系统变更审计（actor/action/target/before/after JSON） |
-| `events` | 系统异常事件，按 key 去重合并（count/last_at），open/resolved；通知成功时间用于 30 分钟冷却 |
-| `settings` | 运行时键值（时区、去重窗口、队列容量、访问密钥哈希等） |
+| `events` | 系统异常事件，按 key 去重合并（count/last_at），open/resolved；通知成功时间用于 30 分钟冷却；屏蔽/静音不删除事件 |
+| `settings` | 运行时键值（时区、去重窗口、队列容量、访问密钥哈希、通知通道与通知策略等） |
 | `web_sessions` | 管理端会话（只存 ID 哈希）、CSRF token 与过期时间 |
 
 **数据红线**：消息正文、caption、媒体本体与任何凭据（Token/Session/手机号）不入库；`data/session.json`、`data/peers.json`、`data/tmp/` 维持原有文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
@@ -554,8 +554,8 @@ main()
  ├─ 12. cloud Manager               # 创建 cloud-drive.json 管理器（文件缺失 = 关闭态；
  │        #   损坏/校验失败保持关闭并产生 cloud.config_invalid，不阻断启动）
  ├─ 13. access.ImportLegacyWhitelist  # 首次启动（users 表为空）导入 ALLOWED_USER_IDS
- ├─ 14. notify Hub + rclone 探测    # 事件通知 Hub（冷却/阈值/owner 私聊）；rclone 可用性
- │        #   探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）
+ ├─ 14. notify Hub + rclone 探测    # 事件通知 Hub（冷却/阈值/配置通道与兼容 owner 私聊）；
+ │        #   rclone 可用性探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）
  ├─ 15. FailInterruptedRequests     # 上次遗留的 queued/processing 批量置 failed(INTERRUPTED)
  ├─ 16. queue.New(LoadQueueCapacity) # 内存队列与 access 服务在 MTProto 就绪前创建：
  │        # 容量经设置项 queue_capacity 配置（缺省 64，重启生效），
@@ -636,7 +636,7 @@ ready(ctx, api)
  │        # 业务发送走路由：Size ≤ Bot API 上限（官方服务器 50MB）→ Bot API 上传；
  │        # 超限 → Bot 号 MTProto 大文件直传；相册含超限成员 → 同通道整组直传；
  │        # 文本/删除 → Bot API。
- │        # hub.SetSender 用 Bot API 原始实现（通知只发文本，避免自激回路）
+ │        # hub.SetSender 保留 Bot API 原始 owner 通道作兼容回退；配置化通知由 main 装配的 runtime sink 投递
  ├─ 4. deps := queue.Deps{Fetcher, Sender: counted(router), Store, Media 下载参数, Log}
  ├─ 5. go q.Run(ctx, cfg.WorkerCount, queue.Process(deps))   # worker 协程组
  └─ 6. b.Start(ctx)                      # 阻塞长轮询；ctx 结束后等队列 drain 完再返回

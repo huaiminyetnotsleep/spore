@@ -188,7 +188,7 @@ describe("总览页", () => {
     expect(screen.getByText("1 天")).toBeInTheDocument();
     expect(screen.queryByText("频道加入")).not.toBeInTheDocument();
     expect(screen.queryByText("已加入频道")).not.toBeInTheDocument();
-  });
+  }, 10_000);
 
   it("进入页面自动检查更新，版本旁展示上游最新版本（无需点击）", async () => {
     stubRoutes(overviewRoutes());

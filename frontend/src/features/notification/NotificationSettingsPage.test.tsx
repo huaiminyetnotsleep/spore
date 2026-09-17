@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App as AntApp } from "antd";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchNotificationConfig,
+  fetchNotificationEventCatalog,
+  fetchNotificationMutes,
   type NotificationConfigView,
 } from "../../api/admin";
 import { ApiError } from "../../api/client";
@@ -18,7 +20,12 @@ import { NotificationSettingsPage } from "./NotificationSettingsPage";
 
 vi.mock("../../api/admin", async () => {
   const actual = await vi.importActual<typeof import("../../api/admin")>("../../api/admin");
-  return { ...actual, fetchNotificationConfig: vi.fn() };
+  return {
+    ...actual,
+    fetchNotificationConfig: vi.fn(),
+    fetchNotificationEventCatalog: vi.fn(),
+    fetchNotificationMutes: vi.fn(),
+  };
 });
 vi.mock("../../api/mutations", async () => {
   const actual = await vi.importActual<typeof import("../../api/mutations")>(
@@ -33,6 +40,8 @@ vi.mock("../../api/mutations", async () => {
 });
 
 const fetchConfigMock = vi.mocked(fetchNotificationConfig);
+const fetchCatalogMock = vi.mocked(fetchNotificationEventCatalog);
+const fetchMutesMock = vi.mocked(fetchNotificationMutes);
 const fetchChatIDMock = vi.mocked(fetchNotificationBotChatID);
 const saveConfigMock = vi.mocked(saveNotificationConfig);
 const testNotificationMock = vi.mocked(testNotification);
@@ -40,6 +49,7 @@ const testNotificationMock = vi.mocked(testNotification);
 function configView(overrides: Partial<NotificationConfigView> = {}): NotificationConfigView {
   return {
     version: 1,
+    automatic_events: false,
     bot: {
       enabled: true,
       chat_id: "-1001234567890",
@@ -59,13 +69,19 @@ function configView(overrides: Partial<NotificationConfigView> = {}): Notificati
   };
 }
 
-function renderPage() {
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+
+function renderPage(initialEntry = "/settings/notification") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <AntApp>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[initialEntry]}>
           <NotificationSettingsPage />
+          <LocationProbe />
         </MemoryRouter>
       </AntApp>
     </QueryClientProvider>,
@@ -85,6 +101,8 @@ async function selectWebhookFormat(name: string) {
 
 afterEach(() => {
   fetchConfigMock.mockReset();
+  fetchCatalogMock.mockReset();
+  fetchMutesMock.mockReset();
   fetchChatIDMock.mockReset();
   saveConfigMock.mockReset();
   testNotificationMock.mockReset();
@@ -110,6 +128,35 @@ describe("通知设置页", () => {
     expect(await screen.findByRole("button", { name: "保存通知配置" })).toBeInTheDocument();
   });
 
+  it("一级 Tabs 与 URL 查询参数同步并在刷新入口恢复", async () => {
+    fetchConfigMock.mockResolvedValue(configView());
+    fetchCatalogMock.mockResolvedValue([]);
+    fetchMutesMock.mockResolvedValue([]);
+
+    renderPage("/settings/notification?tab=mutes");
+
+    expect(await screen.findByRole("tab", { name: "静音计划", selected: true })).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("?tab=mutes");
+    fireEvent.click(screen.getByRole("tab", { name: "通知渠道" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("?tab=channels"));
+  });
+
+  it("保存真实系统事件自动通知开关", async () => {
+    fetchConfigMock.mockResolvedValue(configView());
+    saveConfigMock.mockResolvedValue({ ok: true, message: "通知配置已保存。" });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("switch", { name: "启用真实系统事件自动通知" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存通知配置" }));
+
+    await waitFor(() =>
+      expect(saveConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ automatic_events: true }),
+      ),
+    );
+  });
+
   it("敏感字段不回填明文，并按凭据状态显示留空沿用占位", async () => {
     fetchConfigMock.mockResolvedValue(configView());
 
@@ -118,6 +165,7 @@ describe("通知设置页", () => {
     expect(await screen.findByLabelText("Bot Token")).toHaveValue("");
     expect(screen.getByPlaceholderText("已保存，留空则沿用")).toBeInTheDocument();
     await openWebhookTab();
+    expect(screen.getByText("已配置 · 飞书")).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("已保存，留空则沿用").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByLabelText("Webhook URL")).toHaveValue("");
     expect(screen.getByLabelText("签名密钥")).toHaveValue("");
@@ -129,6 +177,7 @@ describe("通知设置页", () => {
     renderPage();
     await openWebhookTab();
 
+    expect(screen.getByText("当前保存格式：飞书")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "指定用户" })).toBeChecked();
     expect(screen.getByLabelText("飞书 open_id")).toHaveValue("ou_saved");
 
@@ -148,7 +197,7 @@ describe("通知设置页", () => {
     expect(screen.getByLabelText("签名请求头")).toBeInTheDocument();
     expect(screen.getByLabelText("HMAC 密钥")).toBeInTheDocument();
     expect(screen.queryByText("@ 提醒模式")).not.toBeInTheDocument();
-  });
+  }, 10_000);
 
   it("保存提交完整 Bot 与当前 Webhook 格式 body，敏感空值保留沿用语义", async () => {
     fetchConfigMock.mockResolvedValue(configView());
@@ -175,6 +224,7 @@ describe("通知设置页", () => {
 
     await waitFor(() =>
       expect(saveConfigMock).toHaveBeenCalledWith({
+        automatic_events: false,
         bot: {
           enabled: true,
           token: "new-bot-token",
@@ -209,7 +259,7 @@ describe("通知设置页", () => {
     expect(screen.getByText(/测试发送明确使用服务端已保存的 Webhook 配置/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "测试 Webhook" }));
     await waitFor(() => expect(testNotificationMock).toHaveBeenCalledWith("webhook"));
-  });
+  }, 10_000);
 
   it("获取最近 Chat ID 后回填表单", async () => {
     fetchConfigMock.mockResolvedValue(configView());

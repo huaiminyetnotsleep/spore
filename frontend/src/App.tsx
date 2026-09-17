@@ -30,6 +30,7 @@ import { ApiError } from "./api/client";
 import { logout } from "./api/mutations";
 import { fetchSessionBootstrap } from "./api/session";
 import { LoginPage } from "./features/login/LoginPage";
+import { NotificationBell } from "./features/notification/NotificationBell";
 import { useRestartAction } from "./features/settings/restartAction";
 import { useAdminAction } from "./features/shared/actions";
 import { appName } from "./shared/appName";
@@ -225,6 +226,7 @@ function AppLayout() {
           )}
           {session.data?.authenticated ? (
             <div className="app-header-actions">
+              <NotificationBell />
               <Dropdown
                 trigger={["click"]}
                 placement="bottomRight"
