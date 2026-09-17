@@ -84,11 +84,6 @@ export const REQUEST_STATUS_TAG_COLORS: Record<string, string> = {
   cancelled: "default",
 };
 
-export const EVENT_STATUS_TAG_COLORS: Record<string, string> = {
-  open: "red",
-  resolved: "green",
-};
-
 /** 投递方式标签配色（Ant Tag color）。 */
 export const DELIVERY_MODE_TAG_COLORS: Record<string, string> = {
   reference: "green",

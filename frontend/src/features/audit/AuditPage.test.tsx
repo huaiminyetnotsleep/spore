@@ -71,6 +71,17 @@ describe("审计日志页", () => {
     clearAuditMock.mockReset();
   });
 
+  it("渲染唯一 H1 页面标题「审计日志」", async () => {
+    fetchAuditMock.mockResolvedValue(envelope([auditRow({})]));
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "审计日志" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("渲染审计行：动作、操作者与空对象占位", async () => {
     fetchAuditMock.mockResolvedValue(
       envelope([auditRow({}), auditRow({ id: 2, action: "backup.export", target: "" })]),
@@ -145,6 +156,31 @@ describe("审计日志页", () => {
     );
   });
 
+  it("重置筛选后恢复无条件查询", async () => {
+    fetchAuditMock.mockResolvedValue(envelope([auditRow({})]));
+    renderPage();
+    await screen.findByText("user.enable");
+
+    const since = screen.getByPlaceholderText("开始日期");
+    fireEvent.change(since, { target: { value: "2026-09-01" } });
+    fireEvent.keyDown(since, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+
+    await waitFor(() =>
+      expect(fetchAuditMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ since: "2026-09-01" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "重 置" }));
+
+    // 重置后无条件查询：仅分页参数（筛选键不再出现）
+    await waitFor(() =>
+      expect(fetchAuditMock).toHaveBeenLastCalledWith({ page: 1, page_size: 20 }),
+    );
+    expect(screen.getByPlaceholderText("开始日期")).toHaveValue("");
+  });
+
   it("删除当前页明确选中的审计记录", async () => {
     deleteAuditEntriesMock.mockResolvedValue({ ok: true, deleted: 1 });
     fetchAuditMock.mockResolvedValue(envelope([auditRow({ id: 11 }), auditRow({ id: 12 })]));
@@ -157,9 +193,33 @@ describe("审计日志页", () => {
     expect(await screen.findByText(/当前页明确选中的 1 条审计记录/)).toBeInTheDocument();
     expect(deleteAuditEntriesMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确 认" }));
+    const confirmButton = screen.getByRole("button", { name: "确 认" });
+    // 删除已选为危险操作：确认按钮使用 danger 语义
+    expect(confirmButton).toHaveClass("ant-btn-dangerous");
+    fireEvent.click(confirmButton);
     await waitFor(() => expect(deleteAuditEntriesMock).toHaveBeenCalledWith([11]));
     expect(await screen.findByText(/已删除 1 条审计记录/)).toBeInTheDocument();
+  });
+
+  it("批量删除提交使用快照并冻结 selection", async () => {
+    deleteAuditEntriesMock.mockReturnValue(new Promise(() => undefined) as never);
+    fetchAuditMock.mockResolvedValue(envelope([auditRow({ id: 11 }), auditRow({ id: 12 })]));
+    renderPage();
+    await screen.findAllByText("user.enable");
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: /删除已选/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    // 提交的是确认瞬间的快照；pending 期间勾选被冻结
+    await waitFor(() => expect(deleteAuditEntriesMock).toHaveBeenCalledWith([11]));
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).disabled),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("button", { name: /删除已选/ })).toHaveClass("ant-btn-loading");
   });
 
   it("清除全部要求确认且明确忽略当前筛选", async () => {
@@ -171,7 +231,10 @@ describe("审计日志页", () => {
     expect(await screen.findByText(/不受当前时间筛选影响/)).toBeInTheDocument();
     expect(clearAuditMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "确 认" }));
+    const confirmButton = screen.getByRole("button", { name: "确 认" });
+    // 清除全部为危险操作：确认按钮使用 danger 语义
+    expect(confirmButton).toHaveClass("ant-btn-dangerous");
+    fireEvent.click(confirmButton);
     await waitFor(() => expect(clearAuditMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/已清除 3 条历史审计/)).toBeInTheDocument();
   });

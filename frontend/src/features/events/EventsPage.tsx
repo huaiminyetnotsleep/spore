@@ -5,7 +5,7 @@
  * 解决后同一事件再次发生会重开并重新通知）。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, Form, Select, Space, Table, Tag, Typography } from "antd";
+import { Form, Select, Space, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 
@@ -13,21 +13,32 @@ import { fetchEvents, type EventRow } from "../../api/admin";
 import { resolveEvent } from "../../api/mutations";
 import {
   EVENT_STATUS_LABELS,
-  EVENT_STATUS_TAG_COLORS,
   fmtTime,
   labelOf,
 } from "../../shared/format";
 import { useAdminAction } from "../shared/actions";
+import { DataTable } from "../shared/DataTable";
+import { FilterBar } from "../shared/FilterBar";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { LoadError } from "../shared/PageStates";
 import { applyListFilters } from "../shared/listFilters";
-import { LoadError, PageCard } from "../shared/PageStates";
+import { RowActions, type RowActionItem } from "../shared/RowActions";
+import { StatusTag, type StatusTone } from "../shared/StatusTag";
 
 const { Text } = Typography;
 
-const SEVERITY_COLORS: Record<string, string> = {
-  error: "red",
-  warn: "gold",
-  warning: "gold",
-  info: "blue",
+/** 事件级别 → 语义色调（领域映射由本页定义）。 */
+const SEVERITY_TONES: Record<string, StatusTone> = {
+  error: "error",
+  warn: "warning",
+  warning: "warning",
+  info: "processing",
+};
+
+/** 事件状态 → 语义色调（与 EVENT_STATUS_LABELS 同 key）。 */
+const EVENT_STATUS_TONES: Record<string, StatusTone> = {
+  open: "error",
+  resolved: "success",
 };
 
 interface EventsQuery {
@@ -39,6 +50,8 @@ export function EventsPage() {
   const [filters, setFilters] = useState<EventsQuery>({ status: "" });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  /** 行级目标 key：解决 pending 只让当前行按钮进入 loading。 */
+  const [busyEventId, setBusyEventId] = useState<number | null>(null);
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["events", "list", { ...filters, page, pageSize }],
@@ -47,7 +60,10 @@ export function EventsPage() {
   });
 
   const resolve = useAdminAction({
-    action: (id: number) => resolveEvent(id),
+    action: (id: number) => {
+      setBusyEventId(id);
+      return resolveEvent(id);
+    },
     invalidate: [["events"], ["overview"]],
     successText: "已标记为已解决。",
   });
@@ -58,7 +74,7 @@ export function EventsPage() {
       dataIndex: "severity",
       key: "severity",
       render: (severity: string) => (
-        <Tag color={SEVERITY_COLORS[severity] ?? "default"}>{severity}</Tag>
+        <StatusTag tone={SEVERITY_TONES[severity] ?? "default"}>{severity}</StatusTag>
       ),
     },
     {
@@ -91,87 +107,96 @@ export function EventsPage() {
       dataIndex: "status",
       key: "status",
       render: (status: string) => (
-        <Tag color={EVENT_STATUS_TAG_COLORS[status]}>{labelOf(EVENT_STATUS_LABELS, status)}</Tag>
+        <StatusTag tone={EVENT_STATUS_TONES[status] ?? "default"}>
+          {labelOf(EVENT_STATUS_LABELS, status)}
+        </StatusTag>
       ),
     },
     {
       title: "操作",
       key: "actions",
+      // 统一行操作（RowActions）：解决为即时执行（无确认），仅未解决行提供
+      width: 100,
       render: (_, row) =>
         row.status === "open" ? (
-          <Button
-            size="small"
-            loading={resolve.pending}
-            disabled={resolve.pending}
-            onClick={() => void resolve.run(row.id)}
-          >
-            标记解决
-          </Button>
+          <RowActions
+            actions={[
+              {
+                key: "resolve",
+                label: "标记解决",
+                loading: busyEventId === row.id && resolve.pending,
+                disabled: resolve.pending,
+                onClick: () => void resolve.run(row.id),
+              } satisfies RowActionItem,
+            ]}
+          />
         ) : null,
     },
   ];
 
   return (
-    <PageCard title="事件中心">
-      <Space direction="vertical" size="middle" className="field-width-full">
-        <Form
-          form={form}
-          layout="inline"
-          initialValues={filters}
-          onFinish={(values) => {
-            applyListFilters(
-              { status: values.status ?? "" },
-              filters,
-              page,
-              setPage,
-              setFilters,
-              refetch,
-            );
-          }}
-        >
-          <Form.Item name="status">
-            <Select
-              className="field-width-120"
-              options={[
-                { value: "", label: "全部" },
-                ...Object.entries(EVENT_STATUS_LABELS).map(([value, label]) => ({ value, label })),
-              ]}
-            />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              筛选
-            </Button>
-          </Form.Item>
-        </Form>
-
-        {isError ? (
-          <LoadError onRetry={() => void refetch()} />
-        ) : (
-          <Table<EventRow>
-            rowKey="id"
-            size="middle"
-            loading={isPending}
-            columns={columns}
-            dataSource={data?.items}
-            locale={{ emptyText: "暂无事件记录。" }}
-            pagination={{
-              current: data?.page ?? page,
-              pageSize: data?.page_size ?? pageSize,
-              total: data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (nextPage, nextSize) => {
-                setPage(nextPage);
-                setPageSize(nextSize);
-              },
+    <PageScaffold
+      title="事件中心"
+      description="系统异常按 key 去重合并；同一事件在冷却窗口内只推送一次通知。"
+    >
+      <PageSection>
+        <Space direction="vertical" size="middle" className="field-width-full">
+          <FilterBar<EventsQuery>
+            mode="submit"
+            form={form}
+            initialValues={filters}
+            onFinish={(values) => {
+              applyListFilters(
+                { status: values.status ?? "" },
+                filters,
+                page,
+                setPage,
+                setFilters,
+                refetch,
+              );
             }}
-          />
-        )}
-        <Text type="secondary">
-          事件由系统异常自动生成并按 key 去重合并；Bot API 可用时，同一事件在冷却窗口内只向管理员
-          Telegram 私聊推送一次。标记解决后，若同一事件再次发生会重新打开并重新通知。
-        </Text>
-      </Space>
-    </PageCard>
+            onReset={() => {
+              applyListFilters({ status: "" }, filters, page, setPage, setFilters, refetch);
+            }}
+          >
+            <Form.Item name="status">
+              <Select
+                className="field-width-120"
+                virtual={false}
+                options={[
+                  { value: "", label: "全部" },
+                  ...Object.entries(EVENT_STATUS_LABELS).map(([value, label]) => ({ value, label })),
+                ]}
+              />
+            </Form.Item>
+          </FilterBar>
+
+          {isError ? (
+            <LoadError onRetry={() => void refetch()} />
+          ) : (
+            <DataTable<EventRow>
+              rowKey="id"
+              loading={isPending}
+              columns={columns}
+              dataSource={data?.items}
+              emptyText="暂无事件记录。"
+              pagination={{
+                current: data?.page ?? page,
+                pageSize: data?.page_size ?? pageSize,
+                total: data?.total ?? 0,
+                onChange: (nextPage, nextSize) => {
+                  setPage(nextPage);
+                  setPageSize(nextSize);
+                },
+              }}
+            />
+          )}
+          <Text type="secondary">
+            事件由系统异常自动生成并按 key 去重合并；Bot API 可用时，同一事件在冷却窗口内只向管理员
+            Telegram 私聊推送一次。标记解决后，若同一事件再次发生会重新打开并重新通知。
+          </Text>
+        </Space>
+      </PageSection>
+    </PageScaffold>
   );
 }

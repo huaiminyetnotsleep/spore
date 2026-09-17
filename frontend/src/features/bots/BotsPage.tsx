@@ -5,7 +5,7 @@
  * 任何位置不回显 token，添加后输入框即清空。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Form, Input, Modal, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Form, Input, Space, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 
@@ -13,7 +13,12 @@ import { fetchBots, type BotRow } from "../../api/admin";
 import { addBot, deleteBot, pauseBot, resumeBot } from "../../api/mutations";
 import { MTPROTO_STATE_LABELS, botLabel, labelOf } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
-import { LoadError, PageCard } from "../shared/PageStates";
+import { DataTable } from "../shared/DataTable";
+import { FormModal } from "../shared/FormModal";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { LoadError } from "../shared/PageStates";
+import { RowActions, type RowActionItem } from "../shared/RowActions";
+import { StatusTag, type StatusTone } from "../shared/StatusTag";
 
 const { Text } = Typography;
 
@@ -21,10 +26,17 @@ interface AddBotFormValues {
   token: string;
 }
 
+/** MTProto 会话状态 → 语义色调（ready 为正常，其余中性展示）。 */
+function mtprotoTone(state: string): StatusTone {
+  return state === "ready" ? "success" : "inactive";
+}
+
 export function BotsPage() {
   const [form] = Form.useForm<AddBotFormValues>();
   const [addOpen, setAddOpen] = useState(false);
   const confirm = useConfirmAction();
+  /** 行级目标 key：暂停/恢复/移除 pending 只让当前行按钮进入 loading。 */
+  const [busyBotId, setBusyBotId] = useState<number | null>(null);
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["bots"],
@@ -35,22 +47,24 @@ export function BotsPage() {
     action: (values: AddBotFormValues) => addBot(values.token.trim()),
     invalidate: [["bots"], ["overview"]],
     successText: (result) => result.restart_hint,
-    onDone: () => {
-      setAddOpen(false);
-      form.resetFields();
-    },
+    // 弹窗关闭与表单重置由 FormModal 负责
   });
 
   const remove = useAdminAction({
-    action: (botID: number) => deleteBot(botID),
+    action: (botID: number) => {
+      setBusyBotId(botID);
+      return deleteBot(botID);
+    },
     invalidate: [["bots"], ["overview"]],
     successText: (result) => result.restart_hint,
   });
 
   // 暂停/恢复：即时生效（暂停停止接收新消息，在途任务由原 bot 正常完成）
   const runtime = useAdminAction({
-    action: (vars: { botID: number; paused: boolean }) =>
-      (vars.paused ? pauseBot : resumeBot)(vars.botID),
+    action: (vars: { botID: number; paused: boolean }) => {
+      setBusyBotId(vars.botID);
+      return (vars.paused ? pauseBot : resumeBot)(vars.botID);
+    },
     invalidate: [["bots"], ["overview"]],
     successText: (result) => result.message ?? result.restart_hint,
   });
@@ -73,19 +87,21 @@ export function BotsPage() {
       render: (_, row) => (
         <Space size={4} wrap>
           {row.restart_pending ? (
-            <Tag color="gold">待重启生效</Tag>
+            <StatusTag tone="warning">待重启生效</StatusTag>
           ) : (
-            <Tag color={row.online ? "green" : "default"}>{row.online ? "在线" : "离线"}</Tag>
+            <StatusTag tone={row.online ? "success" : "inactive"}>
+              {row.online ? "在线" : "离线"}
+            </StatusTag>
           )}
           {row.paused ? (
-            <Tag color="gold" data-testid={`bot-paused-${row.bot_id}`}>
+            <StatusTag tone="warning" data-testid={`bot-paused-${row.bot_id}`}>
               已暂停
-            </Tag>
+            </StatusTag>
           ) : null}
           {row.conflict ? (
-            <Tag color="red" data-testid={`bot-conflict-${row.bot_id}`}>
+            <StatusTag tone="error" data-testid={`bot-conflict-${row.bot_id}`}>
               收不到消息
-            </Tag>
+            </StatusTag>
           ) : null}
         </Space>
       ),
@@ -95,9 +111,9 @@ export function BotsPage() {
       key: "mtproto",
       render: (_, row) =>
         row.mtproto_state ? (
-          <Tag color={row.mtproto_state === "ready" ? "green" : "default"}>
+          <StatusTag tone={mtprotoTone(row.mtproto_state)}>
             {labelOf(MTPROTO_STATE_LABELS, row.mtproto_state)}
-          </Tag>
+          </StatusTag>
         ) : (
           "—"
         ),
@@ -111,127 +127,121 @@ export function BotsPage() {
     {
       title: "操作",
       key: "actions",
-      width: 200,
-      render: (_, row) => (
-        <Space size="small" wrap>
-          {!row.restart_pending ? (
-            row.paused ? (
-              <Button
-                size="small"
-                type="primary"
-                loading={runtime.pending}
-                disabled={runtime.pending}
-                onClick={() => void runtime.run({ botID: row.bot_id, paused: false })}
-              >
-                恢复
-              </Button>
-            ) : (
-              <Button
-                size="small"
-                loading={runtime.pending}
-                disabled={runtime.pending}
-                onClick={() =>
-                  confirm(
-                    `确定暂停机器人 ${botLabel(row.bot_id, row.username)}？暂停后停止接收该机器人的新消息（已在处理的任务会正常完成），可随时恢复。`,
-                    () => {
-                      void runtime.run({ botID: row.bot_id, paused: true });
-                    },
-                  )
+      // 统一行操作（RowActions）：暂停经 warning 确认，恢复即时执行；
+      // 移除为 danger 且重启后生效；env 来源不提供移除入口（文字说明）
+      width: 130,
+      render: (_, row) => {
+        const actions: RowActionItem[] = [];
+        if (!row.restart_pending) {
+          actions.push(
+            row.paused
+              ? {
+                  key: "resume",
+                  label: "恢复",
+                  loading: busyBotId === row.bot_id && runtime.pending,
+                  disabled: runtime.pending,
+                  onClick: () => void runtime.run({ botID: row.bot_id, paused: false }),
                 }
-              >
-                暂停
-              </Button>
-            )
-          ) : null}
-          {row.source === "file" ? (
-            <Button
-              size="small"
-              danger
-              loading={remove.pending}
-              disabled={remove.pending}
-              onClick={() =>
-                confirm(
-                  `确定移除机器人 ${botLabel(row.bot_id, row.username)}？重启进程后生效；生效前该 bot 仍会继续收发消息。`,
-                  () => {
-                    void remove.run(row.bot_id);
-                  },
-                )
-              }
-            >
-              移除
-            </Button>
-          ) : (
-            <Text type="secondary">环境变量配置</Text>
-          )}
-        </Space>
-      ),
+              : {
+                  key: "pause",
+                  label: "暂停",
+                  loading: busyBotId === row.bot_id && runtime.pending,
+                  disabled: runtime.pending,
+                  onClick: () =>
+                    confirm({
+                      intent: "warning",
+                      title: "确认暂停机器人",
+                      content: `确定暂停机器人 ${botLabel(row.bot_id, row.username)}？暂停后停止接收该机器人的新消息（已在处理的任务会正常完成），可随时恢复。`,
+                      action: () => runtime.run({ botID: row.bot_id, paused: true }),
+                    }),
+                },
+          );
+        }
+        if (row.source === "file") {
+          actions.push({
+            key: "remove",
+            label: "移除",
+            danger: true,
+            loading: busyBotId === row.bot_id && remove.pending,
+            disabled: remove.pending,
+            onClick: () =>
+              confirm({
+                intent: "danger",
+                title: "确认移除机器人",
+                content: `确定移除机器人 ${botLabel(row.bot_id, row.username)}？重启进程后生效；生效前该 bot 仍会继续收发消息。`,
+                action: () => remove.run(row.bot_id),
+              }),
+          });
+        }
+        return (
+          <Space size={4} wrap>
+            <RowActions actions={actions} />
+            {row.source === "env" ? <Text type="secondary">环境变量配置</Text> : null}
+          </Space>
+        );
+      },
     },
   ];
 
   return (
-    <PageCard
+    <PageScaffold
       title="机器人管理"
-      extra={
+      description="多机器人池平等服务同一套频道绑定；token 只写入服务端，页面不回显。"
+      actions={
         <Button type="primary" onClick={() => setAddOpen(true)}>
           添加机器人
         </Button>
       }
     >
-      <Space direction="vertical" size="middle" className="field-width-full">
-        {data?.need_apply ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="有机器人配置变更尚未生效，重启进程后应用（可在「系统运维」页受控重启）。"
-            data-testid="bots-restart-hint"
-          />
-        ) : null}
-        {isError ? (
-          <LoadError onRetry={() => void refetch()} />
-        ) : (
-          <Table<BotRow>
-            rowKey="bot_id"
-            size="middle"
-            loading={isPending}
-            columns={columns}
-            dataSource={data?.bots}
-            locale={{ emptyText: "尚未接入任何机器人。" }}
-            pagination={false}
-          />
-        )}
-        <Text type="secondary">
-          多机器人池：所有机器人平等服务同一套频道绑定，用户从任意机器人提交，回复从受理机器人返回。
-          新机器人需先在 BotFather 创建并持有 token；绑定频道与缓存频道要求所有机器人都是管理员。
-        </Text>
-      </Space>
+      <PageSection>
+        <Space direction="vertical" size="middle" className="field-width-full">
+          {data?.need_apply ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="有机器人配置变更尚未生效，重启进程后应用（可在「系统运维」页受控重启）。"
+              data-testid="bots-restart-hint"
+            />
+          ) : null}
+          {isError ? (
+            <LoadError onRetry={() => void refetch()} />
+          ) : (
+            <DataTable<BotRow>
+              rowKey="bot_id"
+              loading={isPending}
+              columns={columns}
+              dataSource={data?.bots}
+              emptyText="尚未接入任何机器人。"
+              pagination={false}
+            />
+          )}
+          <Text type="secondary">
+            多机器人池：所有机器人平等服务同一套频道绑定，用户从任意机器人提交，回复从受理机器人返回。
+            新机器人需先在 BotFather 创建并持有 token；绑定频道与缓存频道要求所有机器人都是管理员。
+          </Text>
+        </Space>
+      </PageSection>
 
-      <Modal
+      <FormModal<AddBotFormValues>
         title="添加机器人"
         open={addOpen}
-        onCancel={() => setAddOpen(false)}
-        onOk={() => form.submit()}
-        confirmLoading={add.pending}
-        okText="添加"
-        destroyOnHidden
+        form={form}
+        onOpenChange={setAddOpen}
+        submitText="添加"
+        onSubmit={async (values) => (await add.run(values)) !== undefined}
       >
-        <Form<AddBotFormValues>
-          form={form}
-          layout="vertical"
-          onFinish={(values) => add.run(values)}
+        <Form.Item
+          name="token"
+          label="Bot Token"
+          rules={[
+            { required: true, message: "请输入 BotFather 下发的 token" },
+            { pattern: /^\d+:[A-Za-z0-9_-]{20,}$/, message: "token 格式无效（形如 123456:ABC…）" },
+          ]}
+          extra="token 仅写入服务端数据目录的 0600 配置文件，不会出现在页面、日志或备份中；保存后需重启生效。"
         >
-          <Form.Item
-            name="token"
-            label="Bot Token"
-            rules={[
-              { required: true, message: "请输入 BotFather 下发的 token" },
-              { pattern: /^\d+:[A-Za-z0-9_-]{20,}$/, message: "token 格式无效（形如 123456:ABC…）" },
-            ]}
-            extra="token 仅写入服务端数据目录的 0600 配置文件，不会出现在页面、日志或备份中；保存后需重启生效。"
-          >
-            <Input.Password placeholder="123456789:AA…" autoComplete="off" />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </PageCard>
+          <Input.Password placeholder="123456789:AA…" autoComplete="off" />
+        </Form.Item>
+      </FormModal>
+    </PageScaffold>
   );
 }
