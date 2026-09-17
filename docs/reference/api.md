@@ -1190,11 +1190,11 @@ cloud-drive.json.enc
 
 创建静音计划（认证 + CSRF）。请求体使用上述字段但不需要 `id`；服务端忽略客户端 `id` 并生成稳定 ID。成功返回创建后的静音对象，HTTP `201`，写审计 `notification.mute.create`。
 
-### PUT /api/v1/notification/mutes/{id}
+### PUT /api/v1/notification/mutes/\{id\}
 
 全量更新静音计划（认证 + CSRF）。路径 `id` 为准，请求体中的 `id` 不参与选择；成功返回更新后的静音对象并写审计 `notification.mute.update`。不存在返回 `404 NOT_FOUND`。
 
-### DELETE /api/v1/notification/mutes/{id}
+### DELETE /api/v1/notification/mutes/\{id\}
 
 删除静音计划（认证 + CSRF）。成功响应 `{"ok":true,"message":"静音计划已删除。"}` 并写审计 `notification.mute.delete`；不存在返回 `404 NOT_FOUND`。
 
