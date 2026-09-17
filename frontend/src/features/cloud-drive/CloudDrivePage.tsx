@@ -4,8 +4,10 @@
  * （名称/类型/路径前缀/启用/默认 Radio + options 通用键值对编辑器）。
  * 类型切换按内置建议键数据表预填空值行（仅当该目的地尚无 options）；
  * pass/2fa/secret/token/key 类敏感键名的值用密码输入掩码显示；
- * 「测试」按钮对已保存的目的地执行 rclone 只读探测，结果行内 Alert 展示
- * 服务端受控 message。保存为整表单一次 PUT，服务端全量校验并返回受控 400 文案。
+ * 「测试」按钮对已保存的目的地执行 rclone 只读探测（按目的地行级 pending），
+ * 结果行内 Alert 展示服务端受控 message。保存为整表单一次 PUT，服务端全量
+ * 校验并返回受控 400 文案。备份导出走 Form Modal（pending 防重复、关闭重置）；
+ * 回滚/确认导入为整体替换级破坏操作，统一 danger 二次确认。
  */
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -17,7 +19,6 @@ import {
   Descriptions,
   Form,
   Input,
-  Modal,
   Radio,
   Space,
   Switch,
@@ -40,7 +41,10 @@ import {
 } from "../../api/mutations";
 import { fmtBytes } from "../../shared/format";
 import { errorText, useAdminAction, useConfirmAction } from "../shared/actions";
-import { LoadError, PageCard, SectionCard } from "../shared/PageStates";
+import { FormActions } from "../shared/FormActions";
+import { FormModal } from "../shared/FormModal";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { PageQueryState, QueryError } from "../shared/QueryStates";
 
 const { Text } = Typography;
 
@@ -129,6 +133,7 @@ export function CloudDrivePage() {
     queryKey: ["cloud-drive-backup"],
     queryFn: fetchCloudDriveBackupStatus,
   });
+  const confirm = useConfirmAction();
 
   // 服务端配置异步返回后显式回填（initialValues 只在首挂载读取）。
   // options 对象转为键值行编辑器的数组形态。
@@ -172,13 +177,15 @@ export function CloudDrivePage() {
     onDone: () => setTestResults({}),
   });
 
-  const exportAction = useAdminAction({
-    action: (values: ExportBackupFormValues) => exportCloudDriveBackup(values.password),
-    successText: "云盘配置加密备份已导出，请查收浏览器下载。",
-    onDone: () => {
-      setExportModalOpen(false);
-      exportForm.resetFields();
+  const exportAction = useAdminAction<{ exported: true }, ExportBackupFormValues>({
+    // exportCloudDriveBackup 为 Promise<void>：映射为显式成功标记，
+    // 让 FormModal 能区分「成功关闭」与「失败保留草稿」。
+    action: async (values) => {
+      await exportCloudDriveBackup(values.password);
+      return { exported: true };
     },
+    successText: "云盘配置加密备份已导出，请查收浏览器下载。",
+    // 弹窗关闭与表单重置由 FormModal 负责
   });
 
   const importAction = useAdminAction({
@@ -211,23 +218,6 @@ export function CloudDrivePage() {
     successText: "已恢复上一个云盘配置并立即生效。",
     onDone: () => setTestResults({}),
   });
-
-  const confirmAction = useConfirmAction();
-
-  if (isError) {
-    return (
-      <PageCard
-        title="云盘下载"
-        extra={
-          <a href={DOWNLOAD_DOC_URL} target="_blank" rel="noopener noreferrer">
-            查看下载配置文档
-          </a>
-        }
-      >
-        <LoadError onRetry={() => void refetch()} />
-      </PageCard>
-    );
-  }
 
   /** 列表内名称唯一校验（排除自身行；服务端保存时仍会全量复核）。 */
   const validateNameUnique = (index: number) => async (_rule: unknown, value: string) => {
@@ -273,14 +263,20 @@ export function CloudDrivePage() {
   const pendingBackup = backupStatus.data?.pending ? backupStatus.data : null;
 
   return (
-    <>
-      <PageCard
-        title="云盘下载"
-        extra={
-          <a href={DOWNLOAD_DOC_URL} target="_blank" rel="noopener noreferrer">
-            查看下载配置文档
-          </a>
-        }
+    <PageScaffold
+      title="云盘下载"
+      description="配置 /download 指令与「存到网盘」补存的多网盘目的地；配置为整表保存，备份恢复为整体替换。"
+      actions={
+        <Button href={DOWNLOAD_DOC_URL} target="_blank" rel="noopener noreferrer">
+          查看下载配置文档
+        </Button>
+      }
+    >
+      <PageQueryState
+        initialLoading={isPending && !data}
+        error={isError && !data}
+        hasData={!!data}
+        onRetry={() => void refetch()}
       >
         <Space direction="vertical" size="middle" className="field-width-full">
           <Form<CloudDriveFormValues>
@@ -290,224 +286,221 @@ export function CloudDrivePage() {
             disabled={isPending}
             onFinish={(values) => void save.run(values)}
           >
-            <Space direction="vertical" size="middle" className="field-width-full">
-          <SectionCard
-            title="全局开关"
-            extra={enabledWatch ? <Tag color="green">已开启</Tag> : <Tag>已关闭</Tag>}
-          >
-            <Space direction="vertical" size="small" className="field-width-full">
-              {data && !data.rclone_available ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="未检测到 rclone 二进制，云盘上传与目的地测试暂不可用"
-                  description="官方镜像已内置固定版本 rclone；自定义部署可通过 RCLONE_BIN 环境变量指定路径，安装后重启服务生效。"
-                />
-              ) : null}
-              <Space wrap>
-                <Form.Item name="enabled" valuePropName="checked" className="layout-margin-0">
-                  <Switch aria-label="云盘下载总开关" />
-                </Form.Item>
-                <Text>开启云盘下载（/download 指令与「存到网盘」补存）</Text>
+            <PageSection
+              title="全局开关"
+              extra={enabledWatch ? <Tag color="green">已开启</Tag> : <Tag>已关闭</Tag>}
+            >
+              <Space direction="vertical" size="small" className="field-width-full">
+                {data && !data.rclone_available ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="未检测到 rclone 二进制，云盘上传与目的地测试暂不可用"
+                    description="官方镜像已内置固定版本 rclone；自定义部署可通过 RCLONE_BIN 环境变量指定路径，安装后重启服务生效。"
+                  />
+                ) : null}
+                <Space wrap>
+                  <Form.Item name="enabled" valuePropName="checked" className="layout-margin-0">
+                    <Switch aria-label="云盘下载总开关" />
+                  </Form.Item>
+                  <Text>开启云盘下载（/download 指令与「存到网盘」补存）</Text>
+                </Space>
+                <Text type="secondary" className="layout-margin-block-end-0">
+                  关闭时授权用户使用 /download 会收到「云盘下载功能未开启」，裸链接请求不受任何影响；开启前需保存至少一个启用的目的地并将其设为默认。
+                </Text>
               </Space>
-              <Text type="secondary" className="layout-margin-block-end-0">
-                关闭时授权用户使用 /download 会收到「云盘下载功能未开启」，裸链接请求不受任何影响；开启前需保存至少一个启用的目的地并将其设为默认。
-              </Text>
-            </Space>
-          </SectionCard>
+            </PageSection>
 
-          <SectionCard title="目的地">
-            {/* default_destination 绑定在包裹整列表的 Radio.Group 上：每个目的地
-                卡片内一个 Radio，取值跟随该行当前编辑的名称。 */}
-            <Form.Item noStyle name="default_destination" initialValue="">
-              <Radio.Group className="cloud-dest-list">
-                <Form.List name="destinations">
-                  {(fields: FormListFieldData[], { add, remove }) => (
-                    <>
-                      {fields.length === 0 ? (
-                        <div className="cloud-dest-empty">
-                          <Text type="secondary">
-                            尚未配置目的地。添加一个网盘目的地（如 MEGA），填写参数并测试连通后，即可在上方开启云盘下载。
-                          </Text>
-                          <Button type="primary" onClick={() => addDestination(add)}>
+            <PageSection title="目的地">
+              {/* default_destination 绑定在包裹整列表的 Radio.Group 上：每个目的地
+                  卡片内一个 Radio，取值跟随该行当前编辑的名称。 */}
+              <Form.Item noStyle name="default_destination" initialValue="">
+                <Radio.Group className="cloud-dest-list">
+                  <Form.List name="destinations">
+                    {(fields: FormListFieldData[], { add, remove }) => (
+                      <>
+                        {fields.length === 0 ? (
+                          <div className="cloud-dest-empty">
+                            <Text type="secondary">
+                              尚未配置目的地。添加一个网盘目的地（如 MEGA），填写参数并测试连通后，即可在上方开启云盘下载。
+                            </Text>
+                            <Button type="primary" onClick={() => addDestination(add)}>
+                              添加目的地
+                            </Button>
+                          </div>
+                        ) : null}
+                        {fields.map((field) => {
+                          const row = destinationsWatch?.[field.name];
+                          const rowName = row?.name ?? "";
+                          const testResult = testResults[field.key];
+                          return (
+                            <div className="cloud-dest-card" key={field.key}>
+                              <div className="cloud-dest-card__head">
+                                <Radio value={rowName} disabled={!rowName}>
+                                  默认
+                                </Radio>
+                                <Form.Item
+                                  name={[field.name, "name"]}
+                                  className="layout-margin-0 cloud-dest-card__name"
+                                  rules={[
+                                    { required: true, message: "名称不能为空。" },
+                                    {
+                                      pattern: DEST_NAME_PATTERN,
+                                      message:
+                                        "名称须为小写字母开头，仅含小写字母、数字或连字符，最长 32 字符（禁用下划线）。",
+                                    },
+                                    { validator: validateNameUnique(field.name) },
+                                  ]}
+                                >
+                                  <Input placeholder="如 mega-1" allowClear />
+                                </Form.Item>
+                                <Space className="cloud-dest-card__actions">
+                                  <Button
+                                    size="small"
+                                    disabled={!rowName}
+                                    loading={testingKey === field.key}
+                                    onClick={() => void runTest(field.key, rowName)}
+                                  >
+                                    测试
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    danger
+                                    onClick={() => removeDestination(field.name, rowName, remove)}
+                                  >
+                                    删除
+                                  </Button>
+                                </Space>
+                              </div>
+                              <div className="settings-field-grid">
+                                <Form.Item
+                                  name={[field.name, "type"]}
+                                  label="类型（rclone 后端）"
+                                  rules={[{ required: true, message: "类型不能为空。" }]}
+                                  extra="常用类型可直接选择，其余 rclone 后端类型可自由输入；切换类型会按建议参数表预填参数键。"
+                                >
+                                  <AutoComplete
+                                    options={DEST_TYPE_OPTIONS}
+                                    filterOption={(input, option) =>
+                                      (option?.value ?? "").includes(input.trim().toLowerCase())
+                                    }
+                                    placeholder="如 mega"
+                                    onChange={(value) => prefillSuggestedKeys(field.name, value)}
+                                  />
+                                </Form.Item>
+                                <Form.Item
+                                  name={[field.name, "path_prefix"]}
+                                  label="路径前缀"
+                                  extra="上传文件的远端根目录（如 spore），留空表示存到网盘根目录。"
+                                >
+                                  <Input placeholder="如 spore" allowClear />
+                                </Form.Item>
+                                <Form.Item
+                                  name={[field.name, "enabled"]}
+                                  label="启用"
+                                  valuePropName="checked"
+                                >
+                                  <Switch aria-label={`启用目的地 ${rowName || "（未命名）"}`} />
+                                </Form.Item>
+                              </div>
+                              <div className="cloud-options">
+                                <Text type="secondary" className="cloud-options__label">
+                                  参数（options）：rclone 后端参数键值对，管理端可直接填写 MEGA 原始密码，保存时自动混淆；手动编辑配置文件时填写 rclone obscure 混淆值。敏感键名的值以掩码显示。
+                                </Text>
+                                <Form.List name={[field.name, "options"]}>
+                                  {(
+                                    optFields: FormListFieldData[],
+                                    optOps: FormListOperation,
+                                  ) => (
+                                    <div className="cloud-options-list">
+                                      {optFields.map((optField) => {
+                                        const optKey =
+                                          row?.options?.[optField.name]?.key ?? "";
+                                        const sensitive = SENSITIVE_OPTION_KEY.test(optKey);
+                                        return (
+                                          <div className="cloud-option-row" key={optField.key}>
+                                            <Form.Item
+                                              name={[optField.name, "key"]}
+                                              className="layout-margin-0 cloud-option-row__key"
+                                              rules={[{ required: true, message: "参数键不能为空。" }]}
+                                            >
+                                              <Input placeholder="参数名，如 user" allowClear />
+                                            </Form.Item>
+                                            <Form.Item
+                                              name={[optField.name, "value"]}
+                                              className="layout-margin-0 cloud-option-row__value"
+                                              rules={[
+                                                { required: true, message: "参数值不能为空。" },
+                                              ]}
+                                            >
+                                              {sensitive ? (
+                                                <Input.Password
+                                                  autoComplete="new-password"
+                                                  placeholder="参数值（敏感参数，掩码显示）"
+                                                  visibilityToggle
+                                                />
+                                              ) : (
+                                                <Input placeholder="参数值" allowClear />
+                                              )}
+                                            </Form.Item>
+                                            <Button
+                                              size="small"
+                                              danger
+                                              onClick={() => optOps.remove(optField.name)}
+                                              aria-label="删除参数行"
+                                            >
+                                              删除
+                                            </Button>
+                                          </div>
+                                        );
+                                      })}
+                                      <Button
+                                        size="small"
+                                        type="dashed"
+                                        onClick={() => optOps.add({ key: "", value: "" })}
+                                      >
+                                        添加参数
+                                      </Button>
+                                    </div>
+                                  )}
+                                </Form.List>
+                              </div>
+                              {testResult ? (
+                                <Alert
+                                  type={testResult.ok ? "success" : "error"}
+                                  showIcon
+                                  message={testResult.message}
+                                  className="cloud-dest-test-result"
+                                />
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                        {fields.length > 0 ? (
+                          <Button type="dashed" onClick={() => addDestination(add)}>
                             添加目的地
                           </Button>
-                        </div>
-                      ) : null}
-                      {fields.map((field) => {
-                        const row = destinationsWatch?.[field.name];
-                        const rowName = row?.name ?? "";
-                        const testResult = testResults[field.key];
-                        return (
-                          <div className="cloud-dest-card" key={field.key}>
-                            <div className="cloud-dest-card__head">
-                              <Radio value={rowName} disabled={!rowName}>
-                                默认
-                              </Radio>
-                              <Form.Item
-                                name={[field.name, "name"]}
-                                className="layout-margin-0 cloud-dest-card__name"
-                                rules={[
-                                  { required: true, message: "名称不能为空。" },
-                                  {
-                                    pattern: DEST_NAME_PATTERN,
-                                    message:
-                                      "名称须为小写字母开头，仅含小写字母、数字或连字符，最长 32 字符（禁用下划线）。",
-                                  },
-                                  { validator: validateNameUnique(field.name) },
-                                ]}
-                              >
-                                <Input placeholder="如 mega-1" allowClear />
-                              </Form.Item>
-                              <Space className="cloud-dest-card__actions">
-                                <Button
-                                  size="small"
-                                  disabled={!rowName}
-                                  loading={testingKey === field.key}
-                                  onClick={() => void runTest(field.key, rowName)}
-                                >
-                                  测试
-                                </Button>
-                                <Button
-                                  size="small"
-                                  danger
-                                  onClick={() => removeDestination(field.name, rowName, remove)}
-                                >
-                                  删除
-                                </Button>
-                              </Space>
-                            </div>
-                            <div className="settings-field-grid">
-                              <Form.Item
-                                name={[field.name, "type"]}
-                                label="类型（rclone 后端）"
-                                rules={[{ required: true, message: "类型不能为空。" }]}
-                                extra="常用类型可直接选择，其余 rclone 后端类型可自由输入；切换类型会按建议参数表预填参数键。"
-                              >
-                                <AutoComplete
-                                  options={DEST_TYPE_OPTIONS}
-                                  filterOption={(input, option) =>
-                                    (option?.value ?? "").includes(input.trim().toLowerCase())
-                                  }
-                                  placeholder="如 mega"
-                                  onChange={(value) => prefillSuggestedKeys(field.name, value)}
-                                />
-                              </Form.Item>
-                              <Form.Item
-                                name={[field.name, "path_prefix"]}
-                                label="路径前缀"
-                                extra="上传文件的远端根目录（如 spore），留空表示存到网盘根目录。"
-                              >
-                                <Input placeholder="如 spore" allowClear />
-                              </Form.Item>
-                              <Form.Item
-                                name={[field.name, "enabled"]}
-                                label="启用"
-                                valuePropName="checked"
-                              >
-                                <Switch aria-label={`启用目的地 ${rowName || "（未命名）"}`} />
-                              </Form.Item>
-                            </div>
-                            <div className="cloud-options">
-                              <Text type="secondary" className="cloud-options__label">
-                                参数（options）：rclone 后端参数键值对，管理端可直接填写 MEGA 原始密码，保存时自动混淆；手动编辑配置文件时填写 rclone obscure 混淆值。敏感键名的值以掩码显示。
-                              </Text>
-                              <Form.List name={[field.name, "options"]}>
-                                {(
-                                  optFields: FormListFieldData[],
-                                  optOps: FormListOperation,
-                                ) => (
-                                  <div className="cloud-options-list">
-                                    {optFields.map((optField) => {
-                                      const optKey =
-                                        row?.options?.[optField.name]?.key ?? "";
-                                      const sensitive = SENSITIVE_OPTION_KEY.test(optKey);
-                                      return (
-                                        <div className="cloud-option-row" key={optField.key}>
-                                          <Form.Item
-                                            name={[optField.name, "key"]}
-                                            className="layout-margin-0 cloud-option-row__key"
-                                            rules={[{ required: true, message: "参数键不能为空。" }]}
-                                          >
-                                            <Input placeholder="参数名，如 user" allowClear />
-                                          </Form.Item>
-                                          <Form.Item
-                                            name={[optField.name, "value"]}
-                                            className="layout-margin-0 cloud-option-row__value"
-                                            rules={[
-                                              { required: true, message: "参数值不能为空。" },
-                                            ]}
-                                          >
-                                            {sensitive ? (
-                                              <Input.Password
-                                                autoComplete="new-password"
-                                                placeholder="参数值（敏感参数，掩码显示）"
-                                                visibilityToggle
-                                              />
-                                            ) : (
-                                              <Input placeholder="参数值" allowClear />
-                                            )}
-                                          </Form.Item>
-                                          <Button
-                                            size="small"
-                                            danger
-                                            onClick={() => optOps.remove(optField.name)}
-                                            aria-label="删除参数行"
-                                          >
-                                            删除
-                                          </Button>
-                                        </div>
-                                      );
-                                    })}
-                                    <Button
-                                      size="small"
-                                      type="dashed"
-                                      onClick={() => optOps.add({ key: "", value: "" })}
-                                    >
-                                      添加参数
-                                    </Button>
-                                  </div>
-                                )}
-                              </Form.List>
-                            </div>
-                            {testResult ? (
-                              <Alert
-                                type={testResult.ok ? "success" : "error"}
-                                showIcon
-                                message={testResult.message}
-                                className="cloud-dest-test-result"
-                              />
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                      {fields.length > 0 ? (
-                        <Button type="dashed" onClick={() => addDestination(add)}>
-                          添加目的地
-                        </Button>
-                      ) : null}
-                    </>
-                  )}
-                </Form.List>
-              </Radio.Group>
-            </Form.Item>
-            <Text type="secondary" className="layout-margin-block-start-12 settings-note">
-              「测试」对已保存配置中的目的地执行只读探测：新增或改名的目的地请先保存再测试；网盘管理接口有限流风险，请按需点击。默认目的地在
-              /download 不指定名称时使用；用户可发送 /download 链接 或 /download
-              目的地名称 链接 触发云盘下载。
-            </Text>
-          </SectionCard>
-
-          <div className="settings-actions">
-            <Button type="primary" htmlType="submit" loading={save.pending}>
-              保存配置
-            </Button>
-          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </Form.List>
+                </Radio.Group>
+              </Form.Item>
+              <Text type="secondary" className="layout-margin-block-start-12 settings-note">
+                「测试」对已保存配置中的目的地执行只读探测：新增或改名的目的地请先保存再测试；网盘管理接口有限流风险，请按需点击。默认目的地在
+                /download 不指定名称时使用；用户可发送 /download 链接 或 /download
+                目的地名称 链接 触发云盘下载。
+              </Text>
+              <FormActions>
+                <Button type="primary" htmlType="submit" loading={save.pending}>
+                  保存配置
+                </Button>
+              </FormActions>
               {/* 服务端 400 受控文案统一经 useAdminAction 的 message.error 提示 */}
-            </Space>
+            </PageSection>
           </Form>
 
-          <SectionCard title="配置备份与恢复">
+          <PageSection title="配置备份与恢复">
             <Space direction="vertical" size="middle" className="field-width-full">
               <Alert
                 type="warning"
@@ -528,9 +521,12 @@ export function CloudDrivePage() {
                     danger
                     loading={rollback.pending}
                     onClick={() =>
-                      confirmAction(CONFIRM_CLOUD_DRIVE_ROLLBACK_TEXT, () =>
-                        void rollback.run(undefined),
-                      )
+                      confirm({
+                        intent: "danger",
+                        title: "确认恢复上一个云盘配置",
+                        content: CONFIRM_CLOUD_DRIVE_ROLLBACK_TEXT,
+                        action: () => rollback.run(undefined),
+                      })
                     }
                   >
                     恢复上一个配置
@@ -586,7 +582,7 @@ export function CloudDrivePage() {
               </div>
 
               {backupStatus.isError ? (
-                <LoadError onRetry={() => void backupStatus.refetch()} />
+                <QueryError onRetry={() => void backupStatus.refetch()} />
               ) : pendingBackup ? (
                 <Alert
                   type="info"
@@ -621,9 +617,12 @@ export function CloudDrivePage() {
                         type="primary"
                         loading={confirmImport.pending}
                         onClick={() =>
-                          confirmAction(CONFIRM_CLOUD_DRIVE_IMPORT_TEXT, () =>
-                            void confirmImport.run(undefined),
-                          )
+                          confirm({
+                            intent: "danger",
+                            title: "确认整体替换云盘配置",
+                            content: CONFIRM_CLOUD_DRIVE_IMPORT_TEXT,
+                            action: () => confirmImport.run(undefined),
+                          })
                         }
                       >
                         确认整体替换
@@ -643,59 +642,50 @@ export function CloudDrivePage() {
                 <Text type="secondary">当前没有待确认的备份候选。</Text>
               )}
             </Space>
-          </SectionCard>
+          </PageSection>
         </Space>
-      </PageCard>
+      </PageQueryState>
 
-      <Modal
+      <FormModal<ExportBackupFormValues>
         title="导出云盘配置加密备份"
         open={exportModalOpen}
-        okText="导出备份"
-        cancelText="取消"
-        confirmLoading={exportAction.pending}
-        onOk={() => exportForm.submit()}
-        onCancel={() => setExportModalOpen(false)}
-        afterClose={() => exportForm.resetFields()}
-      >
-        <Form<ExportBackupFormValues>
-          form={exportForm}
-          layout="vertical"
-          onFinish={(values) => void exportAction.run(values)}
+        form={exportForm}
+        onOpenChange={setExportModalOpen}
+        submitText="导出备份"
+        onSubmit={async (values) => (await exportAction.run(values)) !== undefined}      >
+        <Alert
+          className="layout-margin-bottom-12"
+          type="warning"
+          showIcon
+          message="请妥善保管密码：忘记密码后无法恢复此备份。"
+        />
+        <Form.Item
+          name="password"
+          label="备份密码"
+          rules={[
+            { required: true, message: "请输入备份密码。" },
+            { min: 8, message: "备份密码至少 8 个字符。" },
+          ]}
         >
-          <Alert
-            className="layout-margin-bottom-12"
-            type="warning"
-            showIcon
-            message="请妥善保管密码：忘记密码后无法恢复此备份。"
-          />
-          <Form.Item
-            name="password"
-            label="备份密码"
-            rules={[
-              { required: true, message: "请输入备份密码。" },
-              { min: 8, message: "备份密码至少 8 个字符。" },
-            ]}
-          >
-            <Input.Password autoComplete="new-password" placeholder="至少 8 个字符" />
-          </Form.Item>
-          <Form.Item
-            name="password_confirmation"
-            label="确认密码"
-            dependencies={["password"]}
-            rules={[
-              { required: true, message: "请再次输入备份密码。" },
-              ({ getFieldValue }) => ({
-                validator: async (_rule, value: string) => {
-                  if (!value || getFieldValue("password") === value) return;
-                  throw new Error("两次输入的备份密码不一致。");
-                },
-              }),
-            ]}
-          >
-            <Input.Password autoComplete="new-password" placeholder="再次输入备份密码" />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </>
+          <Input.Password autoComplete="new-password" placeholder="至少 8 个字符" />
+        </Form.Item>
+        <Form.Item
+          name="password_confirmation"
+          label="确认密码"
+          dependencies={["password"]}
+          rules={[
+            { required: true, message: "请再次输入备份密码。" },
+            ({ getFieldValue }) => ({
+              validator: async (_rule, value: string) => {
+                if (!value || getFieldValue("password") === value) return;
+                throw new Error("两次输入的备份密码不一致。");
+              },
+            }),
+          ]}
+        >
+          <Input.Password autoComplete="new-password" placeholder="再次输入备份密码" />
+        </Form.Item>
+      </FormModal>
+    </PageScaffold>
   );
 }

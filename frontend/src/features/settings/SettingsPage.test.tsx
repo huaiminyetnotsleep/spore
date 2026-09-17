@@ -109,6 +109,18 @@ afterEach(() => {
 });
 
 describe("运行设置页", () => {
+  it("渲染唯一 H1「运行设置」页面标题", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView());
+    fetchBackupStatusMock.mockResolvedValue(backupView);
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "运行设置" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("回填服务端当前值（时区/队列容量）", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
     fetchBackupStatusMock.mockResolvedValue(backupView);
@@ -263,25 +275,45 @@ describe("运行设置页", () => {
     expect(screen.queryByRole("switch", { name: "频道副本同步总开关" })).not.toBeInTheDocument();
   });
 
-  it("内部 Card 全宽铺满、字段网格与状态网格就位", async () => {
+  it("媒体大小字段为可选覆盖语义：留空保持当前值，无 required 标记", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView());
+    fetchBackupStatusMock.mockResolvedValue(backupView);
+
+    const { container } = renderPage();
+
+    // 四个「留空保持当前值」字段不再展示视觉 required 星号
+    for (const label of [
+      "下载内存预算（64MB–8GB，留空保持当前值）",
+      "文件大小上限（1MB–2000MB，留空保持当前值）",
+      "流式传输阈值（1MB–2GB，留空保持当前值）",
+      "临时目录最大大小（1MB–1TB，留空保持当前值）",
+    ]) {
+      const labelEl = await screen.findByText(label);
+      expect(labelEl.closest(".ant-form-item")).not.toHaveClass("ant-form-item-required");
+    }
+    // 占位符仍回显当前生效值
+    expect(container.querySelector('input[placeholder^="当前 "]')).not.toBeNull();
+  });
+
+  it("分区使用 PageSection 且保存按钮位于 FormActions", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
     fetchBackupStatusMock.mockResolvedValue(backupView);
 
     const { container } = renderPage();
 
     await waitFor(() => expect(screen.getByDisplayValue("Asia/Shanghai")).toBeInTheDocument());
-    // 分区 Card 均为公共 SectionCard：表单内 3 个 + 状态网格 2 个（外层 PageCard 同底板）
+    // 表单内 3 个分区 + 状态网格 2 个分区（页面骨架不再套外层 Card）
     const form = container.querySelector("form");
     expect(form).not.toBeNull();
-    expect(form?.querySelectorAll(".section-card").length).toBe(3);
-    expect(container.querySelectorAll(".settings-status-grid .section-card").length).toBe(2);
+    expect(form?.querySelectorAll(".page-section").length).toBe(3);
+    expect(container.querySelectorAll(".settings-status-grid .page-section").length).toBe(2);
     expect(form).toHaveClass("settings-form");
     expect(container.querySelector(".settings-field-grid")).toBeInTheDocument();
     expect(container.querySelector(".settings-status-grid")).toBeInTheDocument();
-    // 保存按钮仍在 Form 内（提交语义不变）
+    // 保存按钮仍在 Form 内（提交语义不变），位于统一 FormActions
     const submit = screen.getByRole("button", { name: "保存设置" });
     expect(submit.closest("form")).toBe(form);
-    expect(submit.closest(".settings-actions")).not.toBeNull();
+    expect(submit.closest(".form-actions")).not.toBeNull();
   });
 
   it("传输并发说明使用紧凑小字样式", async () => {

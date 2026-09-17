@@ -96,6 +96,39 @@ afterEach(() => {
 });
 
 describe("频道加入设置页", () => {
+  it("渲染唯一 H1「受邀设置」页面标题（与路由标签一致）", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView());
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "受邀设置" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // 说明区在配置加载完成后渲染；明确「切换即保存」与「保存上限」显式提交的差异
+    expect(
+      await screen.findByText(/加入数量上限修改后需点击「保存上限」提交/),
+    ).toBeInTheDocument();
+  });
+
+  it("首次加载完成前不渲染可提交 fallback 控件", async () => {
+    let resolveSettings: (value: SettingsView) => void = () => undefined;
+    fetchSettingsMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSettings = resolve;
+      }),
+    );
+
+    renderPage();
+
+    expect(screen.queryByRole("switch", { name: "允许加入频道总开关" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存上限" })).not.toBeInTheDocument();
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+
+    resolveSettings(settingsView());
+    expect(await screen.findByRole("switch", { name: "允许加入频道总开关" })).not.toBeChecked();
+  });
+
   it("回填服务端当前值（开关与数量上限）", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
     saveSettingsMock.mockResolvedValue({ ok: true, settings: settingsView() });

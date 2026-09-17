@@ -3,6 +3,8 @@
  * 按生效时机分区：基础运营（时区，保存后即时生效）、队列与媒体
  * （队列容量与媒体传输参数，重启生效）、传输并发调试；校验边界与 SSR 一致
  * （队列 1–4096、媒体 1MB–2000MB 且阈值 ≤ 上限，服务端复核）。
+ * 媒体大小输入为「可选覆盖」语义：留空表示保持当前值（占位符回显当前值），
+ * 不再使用视觉 required 标记；载荷仅携带明确编辑过的字段。
  * 频道加入（/join）与频道同步的配置分别在「受邀设置」「频道设置」页维护；
  * 受控重启从管理端 Header 的 Avatar 菜单触发。
  */
@@ -29,7 +31,9 @@ import {
 } from "../../api/mutations";
 import { fmtBytes, fmtTime } from "../../shared/format";
 import { useAdminAction } from "../shared/actions";
-import { LoadError, PageCard, SectionCard } from "../shared/PageStates";
+import { FormActions } from "../shared/FormActions";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { PageQueryState } from "../shared/QueryStates";
 
 const { Text } = Typography;
 
@@ -202,304 +206,305 @@ export function SettingsPage() {
     restartPendingReasons.push(`全局队列容量（${data.queue_capacity}）将在下次重启后生效`);
   }
 
-  if (isError) {
-    return (
-      <PageCard title="运行设置">
-        <LoadError onRetry={() => void refetch()} />
-      </PageCard>
-    );
-  }
-
   return (
-    <PageCard title="运行设置">
-      <Space direction="vertical" size="middle" className="field-width-full settings-page">
-        {data && !data.queue_same ? (
-          <Alert
-            type="info"
-            showIcon
-            message={`当前进程实际队列容量为 ${data.queue_runtime}，修改将在下次重启后生效。`}
-          />
-        ) : null}
+    <PageScaffold
+      title="运行设置"
+      description="运营时区、队列容量、媒体传输参数与传输并发调试；按生效时机分区，留空的媒体大小输入表示保持当前值。"
+    >
+      <PageQueryState
+        initialLoading={isPending && !data}
+        error={isError && !data}
+        hasData={!!data}
+        onRetry={() => void refetch()}
+      >
+        <Space direction="vertical" size="middle" className="field-width-full settings-page">
+          {data && !data.queue_same ? (
+            <Alert
+              type="info"
+              showIcon
+              message={`当前进程实际队列容量为 ${data.queue_runtime}，修改将在下次重启后生效。`}
+            />
+          ) : null}
 
-        <Form<SettingsFormValues>
-          form={form}
-          layout="vertical"
-          className="field-width-full settings-form"
-          disabled={isPending}
-          initialValues={{
-            timezone: data?.timezone,
-            max_links_per_message: data?.max_links_per_message,
-            queue_capacity: data?.queue_capacity,
-            worker_count: data?.worker_count,
-            download_threads: data?.download_threads,
-            upload_threads: data?.upload_threads,
-            download_connections: data?.download_connections,
-            upload_connections: data?.upload_connections,
-            max_file_unit: "MB",
-            stream_limit_unit: "MB",
-            temp_dir_max_size_unit: "GB",
-            memory_budget_unit: "GB",
-          }}
-          onValuesChange={(changed) => {
-            setDirtyFields((current) => {
-              const next = new Set(current);
-              Object.keys(changed).forEach((key) => next.add(key));
-              return next;
-            });
-          }}
-          onFinish={(values) => void save.run(values)}
-        >
-          <SectionCard
-            title="基础运营"
-            extra={<Tag color="green">保存后即时生效</Tag>}
+          <Form<SettingsFormValues>
+            form={form}
+            layout="vertical"
+            className="field-width-full settings-form"
+            disabled={isPending}
+            initialValues={{
+              timezone: data?.timezone,
+              max_links_per_message: data?.max_links_per_message,
+              queue_capacity: data?.queue_capacity,
+              worker_count: data?.worker_count,
+              download_threads: data?.download_threads,
+              upload_threads: data?.upload_threads,
+              download_connections: data?.download_connections,
+              upload_connections: data?.upload_connections,
+              max_file_unit: "MB",
+              stream_limit_unit: "MB",
+              temp_dir_max_size_unit: "GB",
+              memory_budget_unit: "GB",
+            }}
+            onValuesChange={(changed) => {
+              setDirtyFields((current) => {
+                const next = new Set(current);
+                Object.keys(changed).forEach((key) => next.add(key));
+                return next;
+              });
+            }}
+            onFinish={(values) => void save.run(values)}
           >
-            <div className="settings-field-grid">
-              <Form.Item
-                name="timezone"
-                label="运营时区（IANA 名称）"
-                extra="日额度按该时区 00:00 切换，页面时间统一按该时区显示；IANA 名称合法性由服务端校验。"
-              >
-                <Input placeholder="如 Asia/Shanghai" allowClear />
-              </Form.Item>
+            <PageSection
+              title="基础运营"
+              extra={<Tag color="green">保存后即时生效</Tag>}
+            >
+              <div className="settings-field-grid">
+                <Form.Item
+                  name="timezone"
+                  label="运营时区（IANA 名称）"
+                  extra="日额度按该时区 00:00 切换，页面时间统一按该时区显示；IANA 名称合法性由服务端校验。"
+                >
+                  <Input placeholder="如 Asia/Shanghai" allowClear />
+                </Form.Item>
 
-              <Form.Item
-                name="max_links_per_message"
-                label="单次最大链接数（1–50）"
-                rules={[{ type: "integer", min: 1, max: 50, message: "单次最大链接数必须为 1–50 的整数。" }]}
-                extra="一条普通消息或 /download 命令可提交的有效链接数；超过上限时整批拒绝。保存后即时生效。"
-              >
-                <InputNumber min={1} max={50} precision={0} className="field-width-160" />
-              </Form.Item>
+                <Form.Item
+                  name="max_links_per_message"
+                  label="单次最大链接数（1–50）"
+                  rules={[{ type: "integer", min: 1, max: 50, message: "单次最大链接数必须为 1–50 的整数。" }]}
+                  extra="一条普通消息或 /download 命令可提交的有效链接数；超过上限时整批拒绝。保存后即时生效。"
+                >
+                  <InputNumber min={1} max={50} precision={0} className="field-width-160" />
+                </Form.Item>
 
-              <Form.Item
-                label="下载内存预算（64MB–8GB）"
-                required
-                extra="所有“内存管道”下载共享的常驻内存上限；预算不足的文件自动改为落临时文件边下边传，内存占用被预算封顶。调整只影响新打开的媒体。"
-              >
-                <Space.Compact>
-                  <Form.Item name="memory_budget" noStyle>
-                    <Input placeholder={data ? `当前 ${fmtBytes(data.memory_budget_bytes)}` : "如 1"} className="field-width-200" />
-                  </Form.Item>
-                  <Form.Item name="memory_budget_unit" noStyle>
-                    <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
-                  </Form.Item>
-                </Space.Compact>
-              </Form.Item>
-            </div>
-            <Text type="secondary" className="settings-note">
-              重复链接相关配置（缓存频道、复用开关、重复链接检测窗口）在
-              「频道设置」页的缓存频道分区维护。
-            </Text>
-          </SectionCard>
+                <Form.Item
+                  label="下载内存预算（64MB–8GB，留空保持当前值）"
+                  extra="所有“内存管道”下载共享的常驻内存上限；预算不足的文件自动改为落临时文件边下边传，内存占用被预算封顶。调整只影响新打开的媒体。"
+                >
+                  <Space.Compact>
+                    <Form.Item name="memory_budget" noStyle>
+                      <Input placeholder={data ? `当前 ${fmtBytes(data.memory_budget_bytes)}` : "如 1"} className="field-width-200" />
+                    </Form.Item>
+                    <Form.Item name="memory_budget_unit" noStyle>
+                      <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
+                    </Form.Item>
+                  </Space.Compact>
+                </Form.Item>
+              </div>
+              <Text type="secondary" className="settings-note">
+                重复链接相关配置（缓存频道、复用开关、重复链接检测窗口）在
+                「频道设置」页的缓存频道分区维护。
+              </Text>
+            </PageSection>
 
-          <SectionCard
-            title="队列与媒体"
-            extra={<Tag color="gold">重启后生效</Tag>}
-          >
-            <div className="settings-field-grid">
-              <Form.Item
-                name="queue_capacity"
-                label="全局队列容量"
-                rules={[{ type: "integer", min: 1, max: 4096, message: "队列容量必须为 1–4096 的整数。" }]}
-              >
-                <InputNumber min={1} max={4096} className="field-width-160" />
-              </Form.Item>
+            <PageSection
+              title="队列与媒体"
+              extra={<Tag color="gold">重启后生效</Tag>}
+            >
+              <div className="settings-field-grid">
+                <Form.Item
+                  name="queue_capacity"
+                  label="全局队列容量"
+                  rules={[{ type: "integer", min: 1, max: 4096, message: "队列容量必须为 1–4096 的整数。" }]}
+                >
+                  <InputNumber min={1} max={4096} className="field-width-160" />
+                </Form.Item>
 
-              <Form.Item
-                name="worker_count"
-                label="任务并发 worker 数（1–16）"
-                rules={[{ type: "integer", min: 1, max: 16, message: "任务并发 worker 数必须为 1–16 的整数。" }]}
-                extra="同时处理的任务数；调大会按并发数放大内存与 Telegram 连接占用。"
-              >
-                <InputNumber min={1} max={16} precision={0} className="field-width-160" />
-              </Form.Item>
-              {data && !data.worker_count_same ? (
-                <span className="settings-meta">
-                  当前配置：{data.worker_count}；当前进程：{data.worker_count_runtime}（重启后生效）
-                </span>
-              ) : null}
-
-              <Form.Item label="文件大小上限（1MB–2000MB）" required>
-                <Space.Compact>
-                  <Form.Item name="max_file_size" noStyle>
-                    <Input placeholder={data ? `当前 ${fmtBytes(data.max_file_size_bytes)}` : "如 50"} className="field-width-200" />
-                  </Form.Item>
-                  <Form.Item name="max_file_unit" noStyle>
-                    <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
-                  </Form.Item>
-                </Space.Compact>
-                {data ? (
+                <Form.Item
+                  name="worker_count"
+                  label="任务并发 worker 数（1–16）"
+                  rules={[{ type: "integer", min: 1, max: 16, message: "任务并发 worker 数必须为 1–16 的整数。" }]}
+                  extra="同时处理的任务数；调大会按并发数放大内存与 Telegram 连接占用。"
+                >
+                  <InputNumber min={1} max={16} precision={0} className="field-width-160" />
+                </Form.Item>
+                {data && !data.worker_count_same ? (
                   <span className="settings-meta">
-                    当前配置：{fmtBytes(data.max_file_size_bytes)}；当前进程：
-                    {fmtBytes(data.max_file_size_runtime_bytes)}
+                    当前配置：{data.worker_count}；当前进程：{data.worker_count_runtime}（重启后生效）
                   </span>
                 ) : null}
-              </Form.Item>
 
-              <Form.Item label="流式传输阈值（1MB–2GB）" required>
-                <Space.Compact>
-                  <Form.Item name="stream_limit" noStyle>
-                    <Input placeholder={data ? `当前 ${fmtBytes(data.stream_limit_bytes)}` : "如 20"} className="field-width-200" />
-                  </Form.Item>
-                  <Form.Item name="stream_limit_unit" noStyle>
-                    <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
-                  </Form.Item>
-                </Space.Compact>
-                {data ? (
-                  <span className="settings-meta">
-                    当前配置：{fmtBytes(data.stream_limit_bytes)}；当前进程：
-                    {fmtBytes(data.stream_limit_runtime_bytes)}
-                  </span>
-                ) : null}
-              </Form.Item>
+                <Form.Item label="文件大小上限（1MB–2000MB，留空保持当前值）">
+                  <Space.Compact>
+                    <Form.Item name="max_file_size" noStyle>
+                      <Input placeholder={data ? `当前 ${fmtBytes(data.max_file_size_bytes)}` : "如 50"} className="field-width-200" />
+                    </Form.Item>
+                    <Form.Item name="max_file_unit" noStyle>
+                      <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
+                    </Form.Item>
+                  </Space.Compact>
+                  {data ? (
+                    <span className="settings-meta">
+                      当前配置：{fmtBytes(data.max_file_size_bytes)}；当前进程：
+                      {fmtBytes(data.max_file_size_runtime_bytes)}
+                    </span>
+                  ) : null}
+                </Form.Item>
 
-              <Form.Item label="临时目录最大大小（1MB–1TB）" required>
-                <Space.Compact>
-                  <Form.Item name="temp_dir_max_size" noStyle>
-                    <Input placeholder={data ? `当前 ${fmtBytes(data.temp_dir_max_size_bytes)}` : "如 5"} className="field-width-200" />
-                  </Form.Item>
-                  <Form.Item name="temp_dir_max_size_unit" noStyle>
-                    <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
-                  </Form.Item>
-                </Space.Compact>
-                {data ? (
-                  <span className="settings-meta">
-                    当前配置：{fmtBytes(data.temp_dir_max_size_bytes)}；当前进程：
-                    {fmtBytes(data.temp_dir_max_size_runtime_bytes)}
-                  </span>
-                ) : null}
-              </Form.Item>
-            </div>
-          </SectionCard>
+                <Form.Item label="流式传输阈值（1MB–2GB，留空保持当前值）">
+                  <Space.Compact>
+                    <Form.Item name="stream_limit" noStyle>
+                      <Input placeholder={data ? `当前 ${fmtBytes(data.stream_limit_bytes)}` : "如 20"} className="field-width-200" />
+                    </Form.Item>
+                    <Form.Item name="stream_limit_unit" noStyle>
+                      <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
+                    </Form.Item>
+                  </Space.Compact>
+                  {data ? (
+                    <span className="settings-meta">
+                      当前配置：{fmtBytes(data.stream_limit_bytes)}；当前进程：
+                      {fmtBytes(data.stream_limit_runtime_bytes)}
+                    </span>
+                  ) : null}
+                </Form.Item>
 
-          <SectionCard title="传输并发调试">
-            <Text type="secondary" className="settings-note">
-              线程数将在下一任务（上传为下一次上传）生效；连接并发上限对新分片即时生效。调低连接并发上限不会取消在途请求；实际文件分片并发取线程数与连接数的较小值。设置为
-              1 可做单线程/单连接基线。
-            </Text>
-            <div className="settings-field-grid settings-margin-top-12">
-              {TRANSFER_FIELDS.map((field) => {
-                const overridden = data?.[field.overriddenKey] ?? false;
-                return (
-                  <Form.Item
-                    key={field.key}
-                    name={field.key}
-                    label={field.label}
-                    rules={[
-                      {
-                        validator: async (_rule, value) => {
-                          if (value == null || value === "") return;
-                          const numeric = Number(value);
-                          if (!Number.isInteger(numeric) || numeric < 1 || numeric > 16) {
-                            throw new Error("传输并发值必须为 1–16 的整数。");
-                          }
+                <Form.Item label="临时目录最大大小（1MB–1TB，留空保持当前值）">
+                  <Space.Compact>
+                    <Form.Item name="temp_dir_max_size" noStyle>
+                      <Input placeholder={data ? `当前 ${fmtBytes(data.temp_dir_max_size_bytes)}` : "如 5"} className="field-width-200" />
+                    </Form.Item>
+                    <Form.Item name="temp_dir_max_size_unit" noStyle>
+                      <Select options={MEDIA_UNIT_OPTIONS} className="field-width-90" />
+                    </Form.Item>
+                  </Space.Compact>
+                  {data ? (
+                    <span className="settings-meta">
+                      当前配置：{fmtBytes(data.temp_dir_max_size_bytes)}；当前进程：
+                      {fmtBytes(data.temp_dir_max_size_runtime_bytes)}
+                    </span>
+                  ) : null}
+                </Form.Item>
+              </div>
+            </PageSection>
+
+            <PageSection title="传输并发调试">
+              <Text type="secondary" className="settings-note">
+                线程数将在下一任务（上传为下一次上传）生效；连接并发上限对新分片即时生效。调低连接并发上限不会取消在途请求；实际文件分片并发取线程数与连接数的较小值。设置为
+                1 可做单线程/单连接基线。
+              </Text>
+              <div className="settings-field-grid settings-margin-top-12">
+                {TRANSFER_FIELDS.map((field) => {
+                  const overridden = data?.[field.overriddenKey] ?? false;
+                  return (
+                    <Form.Item
+                      key={field.key}
+                      name={field.key}
+                      label={field.label}
+                      rules={[
+                        {
+                          validator: async (_rule, value) => {
+                            if (value == null || value === "") return;
+                            const numeric = Number(value);
+                            if (!Number.isInteger(numeric) || numeric < 1 || numeric > 16) {
+                              throw new Error("传输并发值必须为 1–16 的整数。");
+                            }
+                          },
                         },
-                      },
-                    ]}
-                    extra={
-                      data ? (
-                        <span className="settings-meta">
-                          当前生效：{data[field.key]} · .env 默认：{data[field.envKey]}
-                          <Tag color={overridden ? "blue" : "default"}>
-                            {overridden ? "数据库覆盖" : "环境默认"}
-                          </Tag>
-                        </span>
+                      ]}
+                      extra={
+                        data ? (
+                          <span className="settings-meta">
+                            当前生效：{data[field.key]} · .env 默认：{data[field.envKey]}
+                            <Tag color={overridden ? "blue" : "default"}>
+                              {overridden ? "数据库覆盖" : "环境默认"}
+                            </Tag>
+                          </span>
+                        ) : undefined
+                      }
+                    >
+                      <Space.Compact>
+                        <InputNumber aria-label={field.label} min={1} max={16} precision={0} className="field-width-160" />
+                        <Button
+                          disabled={!overridden}
+                          htmlType="button"
+                          loading={clearTransferOverride.pending}
+                          onClick={() => void clearTransferOverride.run(field.key)}
+                        >
+                          恢复环境默认
+                        </Button>
+                      </Space.Compact>
+                    </Form.Item>
+                  );
+                })}
+              </div>
+            </PageSection>
+
+            <FormActions>
+              <Button type="primary" htmlType="submit" loading={save.pending}>
+                保存设置
+              </Button>
+            </FormActions>
+            {/* 服务端 400/409 等受控文案统一经 useAdminAction 的 message.error 提示 */}
+          </Form>
+
+          <div className="settings-status-grid">
+            <PageSection title="生效状态">
+              <Space direction="vertical" size="small" className="field-width-full">
+                <Text>
+                  媒体传输配置：
+                  {data?.media_same ? (
+                    <Tag color="green">与当前进程一致</Tag>
+                  ) : (
+                    <Tag color="gold">待重启生效</Tag>
+                  )}
+                </Text>
+                <Text>
+                  任务并发 worker 数：
+                  {data?.worker_count_same ? (
+                    <Tag color="green">与当前进程一致</Tag>
+                  ) : (
+                    <Tag color="gold">待重启生效</Tag>
+                  )}
+                </Text>
+                <Text>
+                  全局队列容量：
+                  {data?.queue_same ? (
+                    <Tag color="green">与当前进程一致</Tag>
+                  ) : (
+                    <Tag color="gold">待重启生效</Tag>
+                  )}
+                </Text>
+                <Text type="secondary">最近备份：{fmtTime(data?.last_backup_at)}。</Text>
+                <Text type="secondary">
+                  时区保存后即时生效；重复链接相关配置在频道设置页即时生效；队列容量、worker
+                  数与媒体传输参数在下次重启后生效，运行中的任务不受影响。
+                </Text>
+              </Space>
+            </PageSection>
+
+            {/* 受控重启（与 SSR /settings 页面同一归属）：入口保持在 Header 头像菜单 */}
+            <PageSection title="受控重启">
+              <Space direction="vertical" size="small" className="field-width-full">
+                {restartPendingReasons.length > 0 ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`检测到 ${restartPendingReasons.length} 项待重启变更`}
+                    description={
+                      <ul className="settings-restart-list">
+                        {restartPendingReasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    }
+                    action={
+                      backup.data?.pending_state === "confirmed" ? (
+                        <Link to="/backup">查看数据备份</Link>
                       ) : undefined
                     }
-                  >
-                    <Space.Compact>
-                      <InputNumber aria-label={field.label} min={1} max={16} precision={0} className="field-width-160" />
-                      <Button
-                        disabled={!overridden}
-                        htmlType="button"
-                        loading={clearTransferOverride.pending}
-                        onClick={() => void clearTransferOverride.run(field.key)}
-                      >
-                        恢复环境默认
-                      </Button>
-                    </Space.Compact>
-                    </Form.Item>
-                );
-              })}
-            </div>
-          </SectionCard>
-
-          <div className="settings-actions">
-            <Button type="primary" htmlType="submit" loading={save.pending}>
-              保存设置
-            </Button>
+                  />
+                ) : (
+                  <Text type="secondary">当前没有检测到待生效变更。</Text>
+                )}
+                <Text type="secondary">
+                  优雅重启入口：右上角头像菜单 →「优雅重启」。重启只触发当前进程的
+                  SIGTERM，不执行 Shell；使用 Docker Compose
+                  等监管机制时会自动拉起，直接本地运行需手动重新启动。
+                </Text>
+              </Space>
+            </PageSection>
           </div>
-          {/* 服务端 400/409 等受控文案统一经 useAdminAction 的 message.error 提示 */}
-        </Form>
-
-        <div className="settings-status-grid">
-          <SectionCard title="生效状态">
-            <Space direction="vertical" size="small" className="field-width-full">
-              <Text>
-                媒体传输配置：
-                {data?.media_same ? (
-                  <Tag color="green">与当前进程一致</Tag>
-                ) : (
-                  <Tag color="gold">待重启生效</Tag>
-                )}
-              </Text>
-              <Text>
-                任务并发 worker 数：
-                {data?.worker_count_same ? (
-                  <Tag color="green">与当前进程一致</Tag>
-                ) : (
-                  <Tag color="gold">待重启生效</Tag>
-                )}
-              </Text>
-              <Text>
-                全局队列容量：
-                {data?.queue_same ? (
-                  <Tag color="green">与当前进程一致</Tag>
-                ) : (
-                  <Tag color="gold">待重启生效</Tag>
-                )}
-              </Text>
-              <Text type="secondary">最近备份：{fmtTime(data?.last_backup_at)}。</Text>
-              <Text type="secondary">
-                时区保存后即时生效；重复链接相关配置在频道设置页即时生效；队列容量、worker
-                数与媒体传输参数在下次重启后生效，运行中的任务不受影响。
-              </Text>
-            </Space>
-          </SectionCard>
-
-          {/* 受控重启（与 SSR /settings 页面同一归属）：入口保持在 Header 头像菜单 */}
-          <SectionCard title="受控重启">
-            <Space direction="vertical" size="small" className="field-width-full">
-              {restartPendingReasons.length > 0 ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  message={`检测到 ${restartPendingReasons.length} 项待重启变更`}
-                  description={
-                    <ul className="settings-restart-list">
-                      {restartPendingReasons.map((reason) => (
-                        <li key={reason}>{reason}</li>
-                      ))}
-                    </ul>
-                  }
-                  action={
-                    backup.data?.pending_state === "confirmed" ? (
-                      <Link to="/backup">查看数据备份</Link>
-                    ) : undefined
-                  }
-                />
-              ) : (
-                <Text type="secondary">当前没有检测到待生效变更。</Text>
-              )}
-              <Text type="secondary">
-                优雅重启入口：右上角头像菜单 →「优雅重启」。重启只触发当前进程的
-                SIGTERM，不执行 Shell；使用 Docker Compose
-                等监管机制时会自动拉起，直接本地运行需手动重新启动。
-              </Text>
-            </Space>
-          </SectionCard>
-        </div>
-      </Space>
-    </PageCard>
+        </Space>
+      </PageQueryState>
+    </PageScaffold>
   );
 }
