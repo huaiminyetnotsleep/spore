@@ -213,7 +213,7 @@ export function JoinedChannelsPage() {
           <Alert
             type="info"
             showIcon
-            message="列表来自 Telegram 用户号的实时对话，进入页面自动加载，退出频道后自动刷新；「外部拉入」表示非本系统加入的频道。开启「自动退出外部拉入」（BotUser受邀频道 → 受邀设置）后，每次刷新会自动退出这类频道；默认关闭。"
+            message="列表来自 Telegram 用户号的实时对话，进入页面自动加载，退出频道后自动刷新；「外部拉入」表示非本系统加入的频道。开启「自动退出外部拉入」（MTProto受邀管理 → 受邀设置）后，每次刷新会自动退出这类频道；默认关闭。"
           />
           {/* 客户端即时筛选：无提交按钮，字段变化立即生效 */}
           <FilterBar mode="instant">

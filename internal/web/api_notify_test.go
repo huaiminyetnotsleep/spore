@@ -54,7 +54,7 @@ func TestAPINotificationConfigFlow(t *testing.T) {
 		t.Fatalf("缺省通知配置不对: %+v", initial)
 	}
 
-	body := `{"bot":{"enabled":true,"token":"` + token + `","chat_id":"-1009988"},` +
+	body := `{"automatic_events":true,"bot":{"enabled":true,"token":"` + token + `","chat_id":"-1009988"},` +
 		`"webhook":{"enabled":true,"format":"generic","url":"` + remote.URL + `/hook","secret":"` + secret + `","generic_signature_header":"X-Spore-Signature"}}`
 	put := func(csrfToken string) *http.Response {
 		t.Helper()
@@ -92,7 +92,7 @@ func TestAPINotificationConfigFlow(t *testing.T) {
 		Config  notifycfg.View `json:"config"`
 	}
 	decodeAPIJSON(t, bodyOf(t, resp), &saved)
-	if !saved.OK || !saved.Config.Bot.HasToken || !saved.Config.Webhook.HasURL || !saved.Config.Webhook.HasSecret {
+	if !saved.OK || !saved.Config.AutomaticEvents || !saved.Config.Bot.HasToken || !saved.Config.Webhook.HasURL || !saved.Config.Webhook.HasSecret {
 		t.Fatalf("保存响应不对: %+v", saved)
 	}
 	if !e.containsAction("settings.notification") {

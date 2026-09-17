@@ -90,6 +90,26 @@ func (f *fakeNotifier) count() int {
 	return f.calls
 }
 
+type fakeRuntimeNotifier struct {
+	mu     sync.Mutex
+	calls  []EventNotification
+	result RuntimeDeliveryResult
+	err    error
+}
+
+func (f *fakeRuntimeNotifier) NotifyEvent(_ context.Context, message EventNotification) (RuntimeDeliveryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, message)
+	return f.result, f.err
+}
+
+func (f *fakeRuntimeNotifier) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 func newHub(t *testing.T, st *store.Store, clock *fakeClock) *Hub {
 	t.Helper()
 	h, err := New(Options{Store: st, Log: testLog(), Now: clock.Now})
@@ -133,6 +153,49 @@ func TestRaiseCreatesEventAndNotifies(t *testing.T) {
 	}
 	if e.LastNotifiedAt != clock.Now().UnixMilli() {
 		t.Fatalf("通知成功应记录 last_notified_at=%d，得到 %d", clock.Now().UnixMilli(), e.LastNotifiedAt)
+	}
+}
+
+func TestRuntimeNotifierManagedDeliverySkipsLegacyOwnerRoute(t *testing.T) {
+	st := openStore(t)
+	withOwner(t, st, 42)
+	clock := newClock(time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC))
+	h := newHub(t, st, clock)
+	runtime := &fakeRuntimeNotifier{result: RuntimeDeliveryResult{Managed: true, Attempted: 1, Delivered: 1}}
+	legacy := &fakeNotifier{}
+	h.SetRuntimeNotifier(runtime)
+	h.SetSender(legacy)
+	legacy.calls = 0
+
+	h.Raise(context.Background(), KeySessionOffline, SeverityError, "ignored")
+
+	if runtime.callCount() != 1 {
+		t.Fatalf("configured runtime should receive event once, got %d", runtime.callCount())
+	}
+	if legacy.count() != 0 {
+		t.Fatalf("managed runtime must not duplicate legacy owner notification, got %d", legacy.count())
+	}
+	e := mustEvent(t, st, KeySessionOffline)
+	if e.LastNotifiedAt != clock.Now().UnixMilli() {
+		t.Fatalf("successful configured delivery should advance cooldown, got %d", e.LastNotifiedAt)
+	}
+}
+
+func TestRuntimeNotifierDisabledFallsBackToLegacyOwnerRoute(t *testing.T) {
+	st := openStore(t)
+	withOwner(t, st, 7)
+	clock := newClock(time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC))
+	h := newHub(t, st, clock)
+	runtime := &fakeRuntimeNotifier{result: RuntimeDeliveryResult{Managed: false}}
+	legacy := &fakeNotifier{}
+	h.SetRuntimeNotifier(runtime)
+	h.SetSender(legacy)
+	legacy.calls = 0
+
+	h.Raise(context.Background(), KeySessionOffline, SeverityError, "ignored")
+
+	if runtime.callCount() != 1 || legacy.count() != 1 {
+		t.Fatalf("disabled runtime should fall back once: runtime=%d legacy=%d", runtime.callCount(), legacy.count())
 	}
 }
 

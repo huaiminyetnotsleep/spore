@@ -1107,7 +1107,9 @@ cloud-drive.json.enc
 
 ## 9b. 通知设置
 
-通知设置与事件中心现有 owner 私聊通道分离：本期只支持配置与手动测试发送，不会自动接收系统事件。敏感字段（Bot Token、Webhook URL、签名密钥）以 AES-256-GCM 密文存入 `settings.notification_channels`，任何读取响应、日志和审计都不含明文；空敏感字段表示沿用已保存值。配置随数据库备份，恢复环境需保留原 `WEB_OAUTH_ENCRYPTION_KEY`。
+通知通道凭据存放于 `settings.notification_channels`，通知策略与静音计划存放于独立的 `settings.notification_policy`；策略写入不会读取、携带或覆盖凭据。Bot Token、Webhook URL 与签名密钥以 AES-256-GCM 密文保存，任何读取响应、日志和审计都不含明文；空敏感字段表示沿用已保存值。配置随数据库备份，恢复环境需保留原 `WEB_OAUTH_ENCRYPTION_KEY`。
+
+自动事件消息统一带有当前系统名称、通知类型和严重级别。Telegram 文本头部格式为“系统名称 · 通知类型 · 级别”；Webhook/适配器应使用受控结构化字段，不依赖解析中文正文。标题、正文和动态字段不包含 Token、Webhook URL、Secret、消息原文或底层错误。
 
 ### GET /api/v1/notification/config
 
@@ -1116,6 +1118,7 @@ cloud-drive.json.enc
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `version` | int | 配置文档版本，当前为 1 |
+| `automatic_events` | bool | 真实系统事件自动通知总开关；旧文档缺失时为 `false` |
 | `bot` | object | `enabled`、`chat_id`、`has_token`、`credential {available,message?}` |
 | `webhook` | object | `enabled`、`format`、`has_url`、`has_secret`、`credential` 及格式专属非敏感字段 |
 
@@ -1123,10 +1126,11 @@ cloud-drive.json.enc
 
 ### PUT /api/v1/notification/config
 
-原子保存 Bot 与 Webhook 配置（认证 + CSRF）。任一通道校验失败时不写入任何配置。
+原子保存总开关、Bot 与 Webhook 配置（认证 + CSRF）。任一通道校验失败时不写入任何配置。
 
 ```json
 {
+  "automatic_events": false,
   "bot": {"enabled": true, "token": "123456:...", "chat_id": "-1001234567890"},
   "webhook": {
     "enabled": true,
@@ -1142,8 +1146,57 @@ cloud-drive.json.enc
 - `format` 可选 `generic` / `feishu` / `dingtalk` / `discord`；URL 仅允许 HTTPS 且不得包含 userinfo。
 - 飞书字段：`feishu_open_ids[]`、`feishu_at_all`；钉钉字段：`dingtalk_mobiles[]`、`dingtalk_at_all`；Discord 字段：`discord_user_ids[]`、`discord_role_ids[]`、`discord_everyone`。
 - 缺少有效 `WEB_OAUTH_ENCRYPTION_KEY` 时，新凭据拒绝保存。
+- `automatic_events` 控制系统事件是否交给通知设置中的已启用通道投递；关闭时保留现有 owner Bot 兼容通知，策略仍可在管理端保存。
 
-响应 `{"ok":true,"message":"通知配置已保存。","config":{...脱敏视图}}`；写审计 `settings.notification`，审计只含变更字段名。
+响应 `{"ok":true,"message":"通知配置已保存。","config":{...脱敏视图}}`；写审计 `settings.notification`，审计只含变更字段名与受控生效说明。
+
+### GET /api/v1/notification/event-catalog
+
+返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery`，严重级别为 `info` / `warn` / `error`。
+
+### GET /api/v1/notification/policy
+
+读取通知策略（认证）。响应字段：
+
+```json
+{
+  "version": 1,
+  "minimum_severity": "warn",
+  "categories": {
+    "system_alert": {"admin_badge": true, "bot": true, "webhook": true},
+    "system_recovery": {"admin_badge": true, "bot": true, "webhook": true}
+  },
+  "events": {}
+}
+```
+
+缺少 `notification_policy` 文档时返回代码内默认策略。`minimum_severity` 只约束外部 `bot` / `webhook`；事件渠道显式 `enabled` 可覆盖最低级别。
+
+### PUT /api/v1/notification/policy
+
+全量校验并替换策略（认证 + CSRF）。请求字段与 GET 相同；类别、事件类型、严重级别和覆盖值均拒绝未知枚举。单事件的 `admin_badge` / `bot` / `webhook` / `recovery` 仅允许 `inherit` / `enabled` / `disabled`。成功响应 `{"ok":true,"message":"通知策略已保存。","policy":{...}}`，写审计 `settings.notification_policy`，不包含凭据。
+
+### GET /api/v1/notification/mutes
+
+读取静音计划数组（认证）。每项字段：`id`、`name`、`match_mode`、`category`、`event_types`、`channels`、`starts_at`、`ends_at`、`permanent`、`enabled`。
+
+- `match_mode`：`all` / `category` / `events`。
+- `channels`：`admin_badge` / `bot` / `webhook`，至少一个。
+- `starts_at=0` 表示立即开始；时间为 Unix 毫秒。
+- `permanent=true` 时 `ends_at` 必须为 0；否则结束时间必须晚于开始时间和当前时间。
+- 最多 100 个计划；名称最多 100 个字符；指定事件最多 50 个且必须来自事件目录。
+
+### POST /api/v1/notification/mutes
+
+创建静音计划（认证 + CSRF）。请求体使用上述字段但不需要 `id`；服务端忽略客户端 `id` 并生成稳定 ID。成功返回创建后的静音对象，HTTP `201`，写审计 `notification.mute.create`。
+
+### PUT /api/v1/notification/mutes/\{id\}
+
+全量更新静音计划（认证 + CSRF）。路径 `id` 为准，请求体中的 `id` 不参与选择；成功返回更新后的静音对象并写审计 `notification.mute.update`。不存在返回 `404 NOT_FOUND`。
+
+### DELETE /api/v1/notification/mutes/\{id\}
+
+删除静音计划（认证 + CSRF）。成功响应 `{"ok":true,"message":"静音计划已删除。"}` 并写审计 `notification.mute.delete`；不存在返回 `404 NOT_FOUND`。
 
 ### POST /api/v1/notification/test
 
@@ -1295,7 +1348,7 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 
 ---
 
-## 12a. 机器人管理（多机器人池）
+## 12a. 机器人池管理（多机器人池）
 
 机器人池的列表与增删（认证；增删另需 CSRF）。列表合并环境变量来源（只读）与 `data/bots.json` 文件来源（可增删），并合并运行时身份（getMe 快照、长轮询在线状态、MTProto 直传会话）。修改后**重启进程生效**。数据范围红线：token 只进不出——任何响应、日志与审计不回显 token。
 

@@ -12,6 +12,8 @@ import type {
   BackupView,
   CloudDriveBackupCandidate,
   CloudDriveView,
+  NotificationMute,
+  NotificationPolicy,
   NotificationWebhookFormat,
   OAuthSettingsView,
   SettingsView,
@@ -72,7 +74,7 @@ export const approveApplication = (id: number): Promise<ApplicationReviewResult>
 export const rejectApplication = (id: number): Promise<ApplicationReviewResult> =>
   postJSON<ApplicationReviewResult>(`/api/v1/applications/${id}/reject`);
 
-// ---- 机器人管理（多机器人池） ----
+// ---- 机器人池管理（多机器人池） ----
 
 export interface BotMutationResult extends WriteOK {
   /** 变更后的列表快照（合并运行时身份）。 */
@@ -320,6 +322,7 @@ export interface NotificationWebhookInput {
 }
 
 export interface NotificationConfigSaveInput {
+  automatic_events: boolean;
   bot: {
     enabled: boolean;
     /** 空字符串表示沿用已保存 Token。 */
@@ -351,6 +354,27 @@ export const testNotification = (
 /** 通过已保存 Bot Token 的 getUpdates 获取最近会话，不提交表单 Token。 */
 export const fetchNotificationBotChatID = (): Promise<NotificationChatIDResult> =>
   postJSON<NotificationChatIDResult>("/api/v1/notification/bot/chat-id");
+
+export const saveNotificationPolicy = (
+  input: NotificationPolicy,
+): Promise<NotificationOperationResult> =>
+  putJSON<NotificationOperationResult>("/api/v1/notification/policy", input);
+
+export type NotificationMuteInput = Omit<NotificationMute, "id">;
+
+export const createNotificationMute = (
+  input: NotificationMuteInput,
+): Promise<NotificationMute> =>
+  postJSON<NotificationMute>("/api/v1/notification/mutes", input);
+
+export const updateNotificationMute = (
+  id: string,
+  input: NotificationMuteInput,
+): Promise<NotificationMute> =>
+  putJSON<NotificationMute>(`/api/v1/notification/mutes/${encodeURIComponent(id)}`, input);
+
+export const deleteNotificationMute = (id: string): Promise<WriteOK> =>
+  deleteJSON<WriteOK>(`/api/v1/notification/mutes/${encodeURIComponent(id)}`);
 
 // ---- 会话 ----
 

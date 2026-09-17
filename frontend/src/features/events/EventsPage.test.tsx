@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 import { fetchEvents, type EventRow, type ListEnvelope } from "../../api/admin";
 import { resolveEvent } from "../../api/mutations";
@@ -44,12 +45,20 @@ function eventRow(overrides: Partial<EventRow> = {}): EventRow {
   };
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <AntApp component={false}>
-        <EventsPage />
+        <MemoryRouter initialEntries={["/events"]}>
+          <EventsPage />
+          <LocationProbe />
+        </MemoryRouter>
       </AntApp>
     </QueryClientProvider>,
   );
@@ -117,6 +126,17 @@ describe("事件中心页", () => {
       expect(fetchEventsMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: undefined, page: 1, page_size: 20 }),
       ),
+    );
+  });
+
+  it("配置此类通知跳转规则 Tab 并携带事件 key", async () => {
+    fetchEventsMock.mockResolvedValue(envelope([eventRow()]));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "配置此类通知" }));
+
+    expect(screen.getByTestId("location")).toHaveTextContent(
+      "/settings/notification?tab=rules&event=mtproto.upload_failed",
     );
   });
 

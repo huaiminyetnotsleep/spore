@@ -7,7 +7,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Form, Select, Space, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { fetchEvents, type EventRow } from "../../api/admin";
 import { resolveEvent } from "../../api/mutations";
@@ -21,7 +22,6 @@ import { DataTable } from "../shared/DataTable";
 import { FilterBar } from "../shared/FilterBar";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { LoadError } from "../shared/PageStates";
-import { applyListFilters } from "../shared/listFilters";
 import { RowActions, type RowActionItem } from "../shared/RowActions";
 import { StatusTag, type StatusTone } from "../shared/StatusTag";
 
@@ -45,18 +45,29 @@ interface EventsQuery {
   status: string;
 }
 
+function validStatus(value: string | null): string {
+  return value === "open" || value === "resolved" ? value : "";
+}
+
 export function EventsPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [form] = Form.useForm<EventsQuery>();
-  const [filters, setFilters] = useState<EventsQuery>({ status: "" });
+  const urlStatus = validStatus(searchParams.get("status"));
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   /** 行级目标 key：解决 pending 只让当前行按钮进入 loading。 */
   const [busyEventId, setBusyEventId] = useState<number | null>(null);
 
+  useEffect(() => {
+    form.setFieldsValue({ status: urlStatus });
+    setPage(1);
+  }, [form, urlStatus]);
+
   const { data, isPending, isError, refetch } = useQuery({
-    queryKey: ["events", "list", { ...filters, page, pageSize }],
+    queryKey: ["events", "list", { status: urlStatus, page, pageSize }],
     queryFn: () =>
-      fetchEvents({ status: filters.status || undefined, page, page_size: pageSize }),
+      fetchEvents({ status: urlStatus || undefined, page, page_size: pageSize }),
   });
 
   const resolve = useAdminAction({
@@ -67,6 +78,21 @@ export function EventsPage() {
     invalidate: [["events"], ["overview"]],
     successText: "已标记为已解决。",
   });
+
+  const setStatus = (status: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (status) next.set("status", status);
+    else next.delete("status");
+    setSearchParams(next, { replace: true });
+  };
+
+  const applyStatus = (status: string) => {
+    const nextStatus = validStatus(status);
+    const unchanged = nextStatus === urlStatus;
+    setPage(1);
+    setStatus(nextStatus);
+    if (unchanged && page === 1) void refetch();
+  };
 
   const columns: ColumnsType<EventRow> = [
     {
@@ -115,22 +141,27 @@ export function EventsPage() {
     {
       title: "操作",
       key: "actions",
-      // 统一行操作（RowActions）：解决为即时执行（无确认），仅未解决行提供
-      width: 100,
-      render: (_, row) =>
-        row.status === "open" ? (
-          <RowActions
-            actions={[
-              {
-                key: "resolve",
-                label: "标记解决",
-                loading: busyEventId === row.id && resolve.pending,
-                disabled: resolve.pending,
-                onClick: () => void resolve.run(row.id),
-              } satisfies RowActionItem,
-            ]}
-          />
-        ) : null,
+      width: 180,
+      render: (_, row) => {
+        const actions: RowActionItem[] = [
+          {
+            key: "configure",
+            label: "配置此类通知",
+            onClick: () =>
+              navigate(`/settings/notification?tab=rules&event=${encodeURIComponent(row.key)}`),
+          },
+        ];
+        if (row.status === "open") {
+          actions.push({
+            key: "resolve",
+            label: "标记解决",
+            loading: busyEventId === row.id && resolve.pending,
+            disabled: resolve.pending,
+            onClick: () => void resolve.run(row.id),
+          });
+        }
+        return <RowActions actions={actions} />;
+      },
     },
   ];
 
@@ -144,19 +175,12 @@ export function EventsPage() {
           <FilterBar<EventsQuery>
             mode="submit"
             form={form}
-            initialValues={filters}
+            initialValues={{ status: urlStatus }}
             onFinish={(values) => {
-              applyListFilters(
-                { status: values.status ?? "" },
-                filters,
-                page,
-                setPage,
-                setFilters,
-                refetch,
-              );
+              applyStatus(values.status ?? "");
             }}
             onReset={() => {
-              applyListFilters({ status: "" }, filters, page, setPage, setFilters, refetch);
+              applyStatus("");
             }}
           >
             <Form.Item name="status">

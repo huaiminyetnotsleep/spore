@@ -312,6 +312,10 @@ func main() {
 	// 通知通道配置存 settings；敏感字段使用 OAuth 主密钥经 HKDF 域分离后
 	// 加密。主密钥缺失不阻断启动，但管理端不能保存新凭据。
 	notificationCfg := notifycfg.NewManager(st, cfg.OAuthEncryptionKey, notifycfg.Options{})
+	// 事件 Hub 通过最小运行时接口使用通知设置中的自动事件开关、策略和通道。
+	// 注入后会补发启动前已经落库但尚未成功通知的事件；旧 owner 私聊在
+	// automatic_events 关闭或配置异常时继续作为兼容回退。
+	hub.SetRuntimeNotifier(notificationCfg)
 	webSrv, err := web.New(web.Options{
 		Store:             st,
 		Cfg:               cfg,

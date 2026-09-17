@@ -129,6 +129,13 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// Chat ID 获取只使用已保存凭据，避免未保存 Secret 在多个端点流转。
 	mux.Handle("GET /api/v1/notification/config", s.apiAuth(s.handleAPINotificationConfigGet))
 	mux.Handle("PUT /api/v1/notification/config", s.apiAuth(s.apiCSRF(s.handleAPINotificationConfigPut)))
+	mux.Handle("GET /api/v1/notification/event-catalog", s.apiAuth(s.handleAPINotificationEventCatalog))
+	mux.Handle("GET /api/v1/notification/policy", s.apiAuth(s.handleAPINotificationPolicyGet))
+	mux.Handle("PUT /api/v1/notification/policy", s.apiAuth(s.apiCSRF(s.handleAPINotificationPolicyPut)))
+	mux.Handle("GET /api/v1/notification/mutes", s.apiAuth(s.handleAPINotificationMutesGet))
+	mux.Handle("POST /api/v1/notification/mutes", s.apiAuth(s.apiCSRF(s.handleAPINotificationMuteCreate)))
+	mux.Handle("PUT /api/v1/notification/mutes/{id}", s.apiAuth(s.apiCSRF(s.handleAPINotificationMuteUpdate)))
+	mux.Handle("DELETE /api/v1/notification/mutes/{id}", s.apiAuth(s.apiCSRF(s.handleAPINotificationMuteDelete)))
 	s.mountAPIWrite(mux, "/api/v1/notification/test", s.handleAPINotificationTest)
 	s.mountAPIWrite(mux, "/api/v1/notification/bot/chat-id", s.handleAPINotificationBotChatID)
 	// 高风险页面迁移：OAuth、备份、受控

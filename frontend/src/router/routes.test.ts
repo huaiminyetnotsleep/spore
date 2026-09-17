@@ -13,10 +13,10 @@ describe("SPA 导航信息架构", () => {
     expect(navigationGroups.map((group) => group.label)).toEqual([
       "工作台",
       "请求与频道",
-      "BotUser受邀频道",
+      "MTProto受邀管理",
       "用户运营",
       "事件与审计",
-      "机器人",
+      "机器人池",
       "系统运维",
     ]);
     expect(navRoutes).toHaveLength(21);

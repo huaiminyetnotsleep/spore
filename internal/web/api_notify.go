@@ -42,8 +42,9 @@ func (s *Server) handleAPINotificationConfigGet(w http.ResponseWriter, r *http.R
 }
 
 type notificationConfigInput struct {
-	Bot     notifycfg.BotInput     `json:"bot"`
-	Webhook notifycfg.WebhookInput `json:"webhook"`
+	AutomaticEvents bool                   `json:"automatic_events"`
+	Bot             notifycfg.BotInput     `json:"bot"`
+	Webhook         notifycfg.WebhookInput `json:"webhook"`
 }
 
 func (s *Server) handleAPINotificationConfigPut(w http.ResponseWriter, r *http.Request, _ session) {
@@ -56,7 +57,7 @@ func (s *Server) handleAPINotificationConfigPut(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := s.notification.Save(r.Context(), notifycfg.ConfigInput{
-		Bot: in.Bot, Webhook: in.Webhook,
+		AutomaticEvents: in.AutomaticEvents, Bot: in.Bot, Webhook: in.Webhook,
 	}); err != nil {
 		var appErr *apperr.AppError
 		if errors.As(err, &appErr) {
@@ -73,7 +74,8 @@ func (s *Server) handleAPINotificationConfigPut(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.audit(r.Context(), "settings.notification", "settings", map[string]any{
-		"fields": []string{"bot", "webhook"}, "effect": "即时生效",
+		"fields": []string{"automatic_events", "bot", "webhook"},
+		"effect": "通道配置与自动事件通知设置已保存",
 	})
 	writeAPIJSON(w, http.StatusOK, struct {
 		apiWriteOK
