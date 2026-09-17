@@ -82,7 +82,15 @@ Spore 的配置有三个来源：
 | `WEB_ADDR` | 默认 `127.0.0.1:8080`；必须为 `host:port` | 启动 | 仅源码/裸机直跑生效；Compose 部署固定覆盖为 `0.0.0.0:8080`（端口映射要求容器内监听所有接口），宿主端口用 `WEB_HOST_PORT` 配置 |
 | `WEB_TRUSTED_PROXY` | 默认 `false`；接受 `1/true/yes`、`0/false/no` | 启动 | 仅影响审计来源 IP 与 OAuth 回调地址推导；不作为鉴权依据 |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | 默认空；必须成对配置 | 启动 | 数据库 OAuth 配置不存在时的回退；管理端保存过配置后数据库优先；修改需重启；Secret 不进日志，入库为 AES-GCM 密文 |
-| `WEB_OAUTH_ENCRYPTION_KEY` | 默认空；接受 32 字节原文、64 位 hex，或解码后为 32 字节的 base64 | 启动 | 加密数据库中的 OAuth Secret 与云盘配置备份候选；更换后旧密文可能无法解密；缺失时云盘配置备份相关端点不可用（受控 503），其余功能不受影响；GitHub OAuth 配置见 [GitHub 登录](../guide/github-oauth.md) |
+| `WEB_OAUTH_ENCRYPTION_KEY` | 默认空；接受 32 字节原文、64 位 hex，或解码后为 32 字节的 base64 | 启动 | 作为 OAuth Secret、通知通道凭据与云盘备份候选的加密根密钥，各用途经 HKDF 域分离；更换后旧密文无法解密，OAuth/通知凭据需重填；数据库备份迁移时应同时保留该环境变量；GitHub OAuth 配置见 [GitHub 登录](../guide/github-oauth.md) |
+
+生成 `WEB_OAUTH_ENCRYPTION_KEY` 的推荐命令：
+
+```bash
+openssl rand -hex 32
+```
+
+把输出的 64 位十六进制字符串完整写入 `.env`。该密钥应**只生成一次并长期安全保管**：升级或重启不要重新生成；迁移数据库备份到新机器时，应通过密码管理器或其他独立安全通道同步原值。若原值丢失或被替换，已保存的 OAuth Secret 与通知通道凭据无法解密，只能在管理端重新填写；非敏感设置仍保留。
 
 以上变量均由应用进程读取。Compose 部署另有仅由 `docker-compose.yml` 消费的插值变量（应用不读取）：`WEB_HOST_PORT`（宿主侧管理端端口，默认 8080，宿主只绑回环）与 `BOT_API_PORT`（bigfile profile 的本地 Bot API 端口，默认 8081），同机多实例各自错开即可，详见 [部署指南](../guide/deployment.md)。
 
@@ -214,6 +222,7 @@ Spore 的配置有三个来源：
 | --- | --- |
 | Web 访问密钥 | `settings` 只存 SHA-256 哈希；明文只在首次启动（或 CLI 重置）时输出一次；重置会使全部 Web 会话失效 |
 | GitHub OAuth Secret | 以 AES-GCM 密文入库；根密钥 `WEB_OAUTH_ENCRYPTION_KEY` 只来自环境变量，不进数据库、不进备份 |
+| 通知通道凭据 | Bot Token、Webhook URL 与签名密钥逐字段 AES-256-GCM 加密后存入 `settings.notification_channels`；API 只返回 `has_*`/可用状态；配置随数据库备份，恢复时必须使用原 `WEB_OAUTH_ENCRYPTION_KEY` 才能解密 |
 | 网盘凭据（rclone options） | 保存在 `cloud-drive.json`（非整体加密）；API 返回与审计中敏感键掩码；调用 rclone 时仅以 `RCLONE_CONFIG_*` 子进程环境变量传递 |
 | 用户号 / Bot 号 MTProto Session | `data/session.json`、`data/bot-session.json`，不进数据库、不进数据库备份 |
 | Peer 缓存 | `data/peers.json`，同上；丢失后按需重建 |
@@ -223,6 +232,7 @@ Spore 的配置有三个来源：
 
 - 错误文本中的凭据替换逻辑只处理**长度至少 4 字符**的 option 值；短于 4 字符的值不会被替换。
 - `cloud-drive.json` 本身不是加密存储；API 掩码不等于磁盘加密，文件安全依赖目录权限与宿主安全。
+- 数据库备份包含加密后的 OAuth Secret 与通知通道凭据，但不包含解密所需的 `WEB_OAUTH_ENCRYPTION_KEY`；迁移时须独立保管并恢复该环境变量。
 - 数据库备份不含云盘凭据、Session、Peer 缓存与 `.env`；反之，云盘配置备份也不包含数据库内容。
 
 ---

@@ -43,9 +43,10 @@ https://<你的管理端域名>/auth/github/callback
 
 例如域名为 `admin.example.com` 时，回调地址是
 `https://admin.example.com/auth/github/callback`。OAuth 凭据只放在服务器的 `.env`，
-不要放进 Compose 文件、截图、日志或工单。若需要在 Web 中修改 GitHub Client Secret，
-还需配置独立的 `WEB_OAUTH_ENCRYPTION_KEY`（32 字节原文、hex 或 base64）；该主密钥不进入
-数据库备份。未配置主密钥时，旧环境变量登录仍可用，但 Web 不允许持久化新的 Secret。
+不要放进 Compose 文件、截图、日志或工单。若需要在 Web 中修改 GitHub Client Secret 或保存通知通道凭据，
+还需配置 `WEB_OAUTH_ENCRYPTION_KEY`（32 字节原文、hex 或 base64）。推荐执行
+`openssl rand -hex 32` 生成一次并把完整输出写入 `.env`；此后长期保留原值，升级时不要重新生成。
+该主密钥不进入数据库备份，迁移数据库时须通过独立安全通道一起迁移；丢失后只能重新填写加密凭据。
 
 本文只列最小启动凭据与部署相关变量；全部环境变量的默认值、取值范围、与数据库设置的
 覆盖关系及生效方式（即时/重启）见 [configuration.md](../reference/configuration.md)。

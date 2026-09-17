@@ -21,6 +21,7 @@
 - [8. 审计日志](#_8-审计日志)
 - [9. 运行设置](#_9-运行设置)
 - [9a. 系统设置（系统身份）](#_9a-系统设置-系统身份)
+- [9b. 通知设置](#_9b-通知设置)
 - [10. GitHub OAuth 配置](#_10-github-oauth-配置)
 - [11. 数据备份](#_11-数据备份)
 - [12. 系统（重启 / MTProto）](#_12-系统-重启-mtproto)
@@ -1101,6 +1102,68 @@ cloud-drive.json.enc
 | `system_name` | string | 去首尾空白后 1–32 个字符（按 rune 计），拒绝控制字符 |
 
 响应 `{"ok":true,"system_name":"<规范化后的名称>"}`。错误：`400`（名称非法，message 为受控中文文案）。
+
+---
+
+## 9b. 通知设置
+
+通知设置与事件中心现有 owner 私聊通道分离：本期只支持配置与手动测试发送，不会自动接收系统事件。敏感字段（Bot Token、Webhook URL、签名密钥）以 AES-256-GCM 密文存入 `settings.notification_channels`，任何读取响应、日志和审计都不含明文；空敏感字段表示沿用已保存值。配置随数据库备份，恢复环境需保留原 `WEB_OAUTH_ENCRYPTION_KEY`。
+
+### GET /api/v1/notification/config
+
+读取脱敏通知配置（认证）。响应顶层字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `version` | int | 配置文档版本，当前为 1 |
+| `bot` | object | `enabled`、`chat_id`、`has_token`、`credential {available,message?}` |
+| `webhook` | object | `enabled`、`format`、`has_url`、`has_secret`、`credential` 及格式专属非敏感字段 |
+
+`credential.available=false` 表示环境加密密钥缺失/变更或密文损坏；服务端保留非敏感配置和旧密文，管理员可重新填写凭据覆盖。
+
+### PUT /api/v1/notification/config
+
+原子保存 Bot 与 Webhook 配置（认证 + CSRF）。任一通道校验失败时不写入任何配置。
+
+```json
+{
+  "bot": {"enabled": true, "token": "123456:...", "chat_id": "-1001234567890"},
+  "webhook": {
+    "enabled": true,
+    "format": "generic",
+    "url": "https://example.com/hooks/xxx",
+    "secret": "可选签名密钥",
+    "generic_signature_header": "X-Spore-Signature"
+  }
+}
+```
+
+- `bot.token`、`webhook.url`、`webhook.secret` 为空字符串时沿用已保存密文。
+- `format` 可选 `generic` / `feishu` / `dingtalk` / `discord`；URL 仅允许 HTTPS 且不得包含 userinfo。
+- 飞书字段：`feishu_open_ids[]`、`feishu_at_all`；钉钉字段：`dingtalk_mobiles[]`、`dingtalk_at_all`；Discord 字段：`discord_user_ids[]`、`discord_role_ids[]`、`discord_everyone`。
+- 缺少有效 `WEB_OAUTH_ENCRYPTION_KEY` 时，新凭据拒绝保存。
+
+响应 `{"ok":true,"message":"通知配置已保存。","config":{...脱敏视图}}`；写审计 `settings.notification`，审计只含变更字段名。
+
+### POST /api/v1/notification/test
+
+使用**已保存**配置发送测试消息（认证 + CSRF），不接收或转发表单中的未保存凭据。
+
+```json
+{"channel":"bot"}
+```
+
+`channel` 为 `bot` 或 `webhook`。测试消息正文以系统设置中的系统名称开头（如 `Spore 通知测试成功`），在系统设置中修改名称后**即时生效**。成功响应 `{"ok":true,"message":"测试消息已发送。"}`，并写不含凭据的 `notification.test` 审计；配置不完整、凭据不可解密或远端拒绝时返回 `400` 受控中文错误。
+
+### POST /api/v1/notification/bot/chat-id
+
+通过已保存 Bot Token 调用 Telegram `getUpdates`，返回最近一条消息所属会话（认证 + CSRF）。请求体 `{}`；成功响应：
+
+```json
+{"ok":true,"message":"已获取最近会话 Chat ID。","chat_id":"-1001234567890"}
+```
+
+若无最近消息，先向 Bot 发送任意消息后重试。
 
 ---
 
