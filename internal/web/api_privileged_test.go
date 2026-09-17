@@ -94,7 +94,8 @@ func TestAPIPrivilegedEndpointsAuthAndCSRF(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/api/v1/oauth/settings", "/api/v1/oauth/bind", "/api/v1/oauth/unbind",
-		"/api/v1/backup/export", "/api/v1/backup/import/confirm",
+		"/api/v1/backup/export", "/api/v1/backup/export/json", "/api/v1/backup/export/all-json", "/api/v1/backup/export/full",
+		"/api/v1/backup/import/confirm", "/api/v1/backup/import/json", "/api/v1/backup/import/all-json",
 		"/api/v1/restart", "/api/v1/mtproto/relogin",
 	} {
 		resp := e.do(j, http.MethodPost, path, "application/json", "{}")
@@ -109,7 +110,8 @@ func TestAPIPrivilegedEndpointsAuthAndCSRF(t *testing.T) {
 	j = e.login(t)
 	for _, path := range []string{
 		"/api/v1/oauth/settings", "/api/v1/oauth/bind", "/api/v1/oauth/unbind",
-		"/api/v1/backup/export", "/api/v1/backup/import/confirm",
+		"/api/v1/backup/export", "/api/v1/backup/export/json", "/api/v1/backup/export/all-json", "/api/v1/backup/export/full",
+		"/api/v1/backup/import/confirm", "/api/v1/backup/import/json", "/api/v1/backup/import/all-json",
 		"/api/v1/restart", "/api/v1/mtproto/relogin",
 	} {
 		for name, csrf := range map[string]string{"缺失": "", "错误": "wrong-token"} {
@@ -125,6 +127,8 @@ func TestAPIPrivilegedEndpointsAuthAndCSRF(t *testing.T) {
 	// GET 打写端点：405 JSON（Allow: POST）
 	for _, path := range []string{
 		"/api/v1/oauth/bind", "/api/v1/backup/export",
+		"/api/v1/backup/export/json", "/api/v1/backup/export/all-json", "/api/v1/backup/export/full",
+		"/api/v1/backup/import/json", "/api/v1/backup/import/all-json",
 		"/api/v1/restart", "/api/v1/mtproto/relogin",
 	} {
 		resp := e.do(j, http.MethodGet, path, "", "")

@@ -3,6 +3,7 @@
  * 待确认状态渲染、确认导入弹窗（SSR data-confirm 同款文案、danger 意图）、
  * 导出确认不是 danger（读取型操作）、文件选择提供清除入口、确认成功后
  * 失效备份 query 并提示、失败展示服务端受控文案且不误报成功。
+ * 新增测试：支持全量备份导出、JSON 分项导出与打包导出。
  * API 层以模块 mock 注入，不发起真实网络请求。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -12,8 +13,28 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../../api/client";
-import { fetchBackupStatus, type BackupView } from "../../api/admin";
-import { confirmBackupImport, exportBackup } from "../../api/mutations";
+import {
+  fetchBackupStatus,
+  fetchCloudDriveBackupStatus,
+  type BackupView,
+  type CloudDriveBackupStatus,
+} from "../../api/admin";
+import {
+  cancelCloudDriveBackupPending,
+  confirmBackupImport,
+  confirmCloudDriveBackupImport,
+  exportBackup,
+  exportBackupAllJSON,
+  exportBackupFull,
+  exportBackupJSON,
+  exportCloudDriveBackup,
+  importCloudDriveBackup,
+  restartServer,
+  rollbackCloudDriveBackup,
+  uploadBackup,
+  uploadBackupAllJSON,
+  uploadBackupJSON,
+} from "../../api/mutations";
 import { BackupPage, CONFIRM_IMPORT_TEXT } from "./BackupPage";
 
 vi.mock("../../api/admin", async () => {
@@ -21,6 +42,7 @@ vi.mock("../../api/admin", async () => {
   return {
     ...actual,
     fetchBackupStatus: vi.fn(),
+    fetchCloudDriveBackupStatus: vi.fn(),
   };
 });
 
@@ -28,14 +50,30 @@ vi.mock("../../api/mutations", async () => {
   const actual = await vi.importActual<typeof import("../../api/mutations")>("../../api/mutations");
   return {
     ...actual,
+    cancelCloudDriveBackupPending: vi.fn(),
     confirmBackupImport: vi.fn(),
+    confirmCloudDriveBackupImport: vi.fn(),
     exportBackup: vi.fn(),
+    exportBackupAllJSON: vi.fn(),
+    exportBackupFull: vi.fn(),
+    exportBackupJSON: vi.fn(),
+    exportCloudDriveBackup: vi.fn(),
+    importCloudDriveBackup: vi.fn(),
+    restartServer: vi.fn(),
+    rollbackCloudDriveBackup: vi.fn(),
+    uploadBackup: vi.fn(),
+    uploadBackupAllJSON: vi.fn(),
+    uploadBackupJSON: vi.fn(),
   };
 });
 
 const fetchBackupStatusMock = vi.mocked(fetchBackupStatus);
+const fetchCloudDriveBackupStatusMock = vi.mocked(fetchCloudDriveBackupStatus);
 const confirmBackupImportMock = vi.mocked(confirmBackupImport);
 const exportBackupMock = vi.mocked(exportBackup);
+const exportAllJsonMock = vi.mocked(exportBackupAllJSON);
+const exportFullMock = vi.mocked(exportBackupFull);
+const exportSingleJsonMock = vi.mocked(exportBackupJSON);
 
 function backupView(overrides: Partial<BackupView> = {}): BackupView {
   return {
@@ -43,6 +81,30 @@ function backupView(overrides: Partial<BackupView> = {}): BackupView {
     db_size_bytes: 458752,
     last_backup_at: 1756598400000,
     pending: false,
+    json_files: [
+      {
+        name: "session.json",
+        description: "Telegram 用户会话凭据",
+        size_bytes: 4096,
+        mod_time: 1756598400000,
+      },
+      {
+        name: "peers.json",
+        description: "Telegram 实体缓存",
+        size_bytes: 512,
+        mod_time: 1756598400000,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function cloudBackupStatus(
+  overrides: Partial<CloudDriveBackupStatus> = {},
+): CloudDriveBackupStatus {
+  return {
+    pending: false,
+    rollback_available: false,
     ...overrides,
   };
 }
@@ -52,7 +114,6 @@ function renderPage() {
   const invalidateSpy = vi.spyOn(client, "invalidateQueries");
   render(
     <QueryClientProvider client={client}>
-      {/* antd App 上下文：message/modal 实例来自它（生产由 App.tsx 挂载） */}
       <AntApp component={false}>
         <MemoryRouter initialEntries={["/backup"]}>
           <BackupPage />
@@ -66,9 +127,15 @@ function renderPage() {
 describe("数据备份页", () => {
   beforeEach(() => {
     fetchBackupStatusMock.mockReset();
+    fetchCloudDriveBackupStatusMock.mockReset();
     confirmBackupImportMock.mockReset();
     exportBackupMock.mockReset();
+    exportAllJsonMock.mockReset();
+    exportFullMock.mockReset();
+    exportSingleJsonMock.mockReset();
+
     fetchBackupStatusMock.mockResolvedValue(backupView({}));
+    fetchCloudDriveBackupStatusMock.mockResolvedValue(cloudBackupStatus({}));
   });
 
   it("渲染唯一 H1「数据备份」、备份状态与导出入口；无待导入时不出现确认按钮", async () => {
@@ -76,18 +143,24 @@ describe("数据备份页", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "数据备份" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    // 等待状态数据渲染后断言：表格单元格内含模板拼接文本（时间展示随本地时区变化）
     expect(await screen.findByText(/\/data\/spore\.db/)).toBeInTheDocument();
-    expect(screen.getByText("最近备份")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /导出数据库备份/ })).toBeInTheDocument();
+    expect(screen.getByText(/最近备份/)).toBeInTheDocument();
+    // 卡片中的导出按钮
+    expect(screen.getByRole("button", { name: /一键导出全量包/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /导出所有 JSON/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /仅导出数据库/ })).toBeInTheDocument();
     expect(screen.queryByText(/待导入状态/)).not.toBeInTheDocument();
+
+    // JSON 列表渲染
+    expect(await screen.findByText("session.json")).toBeInTheDocument();
+    expect(screen.getByText("peers.json")).toBeInTheDocument();
   });
 
-  it("导出确认使用 default 意图（非 danger），确认后触发导出", async () => {
+  it("导出数据库备份确认使用 default 意图（非 danger），确认后触发导出", async () => {
     exportBackupMock.mockResolvedValue(undefined);
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /导出数据库备份/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /仅导出数据库/ }));
     expect(await screen.findByText(/确定导出数据库备份？/)).toBeInTheDocument();
     expect(exportBackupMock).not.toHaveBeenCalled();
 
@@ -96,6 +169,41 @@ describe("数据备份页", () => {
     fireEvent.click(confirmButton);
 
     await waitFor(() => expect(exportBackupMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("导出所有 JSON 直接触发", async () => {
+    exportAllJsonMock.mockResolvedValue(undefined);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /导出所有 JSON/ }));
+    await waitFor(() => expect(exportAllJsonMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("全量备份导出弹窗确认后触发", async () => {
+    exportFullMock.mockResolvedValue(undefined);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /一键导出全量包/ }));
+    expect(await screen.findByText(/确定导出完整备份？/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "确 认" }));
+    await waitFor(() => expect(exportFullMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("单个 JSON 导出支持 Select 选择与表格行导出按钮", async () => {
+    exportSingleJsonMock.mockResolvedValue(undefined);
+    renderPage();
+
+    expect(await screen.findByText("session.json")).toBeInTheDocument();
+    // Select 选择器和导出按钮
+    expect(screen.getByRole("button", { name: /导出选中配置/ })).toBeInTheDocument();
+
+    // 在数据资产表格中点击 session.json 的导出按钮（accessible name 含图标 "download 导出"）
+    const exportButtons = screen.getAllByRole("button", { name: /^download 导出$/ });
+    expect(exportButtons.length).toBeGreaterThan(0);
+    // 第二个导出按钮对应第一个 JSON 文件 (第一个是 spore.db)
+    fireEvent.click(exportButtons[1]);
+    await waitFor(() => expect(exportSingleJsonMock).toHaveBeenCalledWith("session.json"));
   });
 
   it("待确认状态展示摘要，确认弹窗文案与 SSR data-confirm 一致，确认后提交", async () => {
@@ -128,11 +236,13 @@ describe("数据备份页", () => {
 
   it("选择文件后展示文件信息并提供「清除选择」取消入口", async () => {
     renderPage();
-    // 等待状态数据渲染完成（gate 解除后再出现上传控件）
     await screen.findByText(/\/data\/spore\.db/);
 
+    // 切换到「业务数据库整库恢复」tab
+    fireEvent.click(screen.getByText("业务数据库整库恢复"));
+
     const backup = new File(["sqlite"], "spore-backup.db", { type: "application/octet-stream" });
-    const fileInput = document.querySelector('input[type="file"]');
+    const fileInput = document.querySelector('input[name="backup"]');
     expect(fileInput).not.toBeNull();
     fireEvent.change(fileInput as HTMLInputElement, { target: { files: [backup] } });
 

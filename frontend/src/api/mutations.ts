@@ -420,16 +420,8 @@ export async function uploadBackup(file: File): Promise<BackupOpResult> {
   });
 }
 
-/**
- * 导出数据库备份（流式 .db 文件响应；响应头与 SSR 导出一致）。
- * 下载经由临时 object URL 触发浏览器保存，敏感内容不落 localStorage。
- */
-export async function exportBackup(): Promise<void> {
-  const response = await fetch("/api/v1/backup/export", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "X-CSRF-Token": getCSRFToken() },
-  });
+/** 触发 Blob 文件下载 helper。 */
+async function triggerBlobDownload(response: Response, defaultFilename: string): Promise<void> {
   if (!response.ok) {
     throw await apiErrorFrom(response);
   }
@@ -439,11 +431,91 @@ export async function exportBackup(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = named?.[1] ?? `${PROJECT_IDENTITY.slug}-backup.db`;
+  anchor.download = named?.[1] ?? defaultFilename;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function exportBackup(): Promise<void> {
+  const response = await fetch("/api/v1/backup/export", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCSRFToken() },
+  });
+  await triggerBlobDownload(response, `${PROJECT_IDENTITY.slug}-backup.db`);
+}
+
+/** 导出单个指定的 JSON 配置文件。 */
+export async function exportBackupJSON(name: string): Promise<void> {
+  const response = await fetch("/api/v1/backup/export/json", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": getCSRFToken(),
+    },
+    body: JSON.stringify({ name }),
+  });
+  await triggerBlobDownload(response, name);
+}
+
+/** 一键打包导出所有 JSON 配置文件。 */
+export async function exportBackupAllJSON(): Promise<void> {
+  const response = await fetch("/api/v1/backup/export/all-json", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCSRFToken() },
+  });
+  await triggerBlobDownload(response, `${PROJECT_IDENTITY.slug}-json-backup.zip`);
+}
+
+/** 一键打包导出业务数据库与所有 JSON 配置文件（全量备份）。 */
+export async function exportBackupFull(): Promise<void> {
+  const response = await fetch("/api/v1/backup/export/full", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": getCSRFToken() },
+  });
+  await triggerBlobDownload(response, `${PROJECT_IDENTITY.slug}-full-backup.zip`);
+}
+
+export interface JSONImportResult extends WriteOK {
+  message: string;
+  filename?: string;
+  backup: BackupView;
+}
+
+export interface AllJSONImportResult extends WriteOK {
+  message: string;
+  count: number;
+  backup: BackupView;
+}
+
+/** 上传并覆盖单个 JSON 配置文件。 */
+export async function uploadBackupJSON(file: File, targetName?: string): Promise<JSONImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  if (targetName) {
+    form.append("target_name", targetName);
+  }
+  return apiRequest<JSONImportResult>("/api/v1/backup/import/json", {
+    method: "POST",
+    headers: { "X-CSRF-Token": getCSRFToken() },
+    body: form,
+  });
+}
+
+/** 上传 ZIP 压缩包批量导入所有 JSON 配置文件。 */
+export async function uploadBackupAllJSON(file: File): Promise<AllJSONImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiRequest<AllJSONImportResult>("/api/v1/backup/import/all-json", {
+    method: "POST",
+    headers: { "X-CSRF-Token": getCSRFToken() },
+    body: form,
+  });
 }
 
 // ---- 受控重启（高风险页面迁移） ----

@@ -28,9 +28,10 @@ type apiBackupView struct {
 	DBSizeBytes  int64  `json:"db_size_bytes"`  // 文件不可统计为 0
 	LastBackupAt int64  `json:"last_backup_at"` // Unix 毫秒；0 表示从未备份
 	// 待导入状态：Pending 为 false 时其余字段为零值。
-	Pending       bool   `json:"pending"`
-	PendingState  string `json:"pending_state,omitempty"` // 待确认 | confirmed | failed
-	PendingSHA256 string `json:"pending_sha256,omitempty"`
+	Pending       bool           `json:"pending"`
+	PendingState  string         `json:"pending_state,omitempty"` // 待确认 | confirmed | failed
+	PendingSHA256 string         `json:"pending_sha256,omitempty"`
+	JSONFiles     []JSONFileInfo `json:"json_files"`
 }
 
 // buildAPIBackupView 组装备份页读取响应（备份状态唯一读取口径）。
@@ -38,6 +39,7 @@ func (s *Server) buildAPIBackupView(ctx context.Context) apiBackupView {
 	view := apiBackupView{
 		DBPath:       s.dbPath,
 		LastBackupAt: s.lastBackupAt(ctx),
+		JSONFiles:    s.scanDataJSONFiles(),
 	}
 	if fi, err := os.Stat(s.dbPath); err == nil {
 		view.DBSizeBytes = fi.Size()

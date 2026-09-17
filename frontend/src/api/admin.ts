@@ -758,6 +758,14 @@ export function fetchOAuthSettings(): Promise<OAuthSettingsView> {
 
 // ---- 备份（高风险页面迁移） ----
 
+/** data/ 目录下单个 JSON 配置文件的元数据。 */
+export interface JSONFileInfo {
+  name: string;
+  description: string;
+  size_bytes: number;
+  mod_time: number;
+}
+
 /** 备份页状态（GET /api/v1/backup），口径与 SSR /backup 页面一致。 */
 export interface BackupView {
   db_path: string;
@@ -769,6 +777,7 @@ export interface BackupView {
   /** 待确认 | confirmed | failed。 */
   pending_state?: string;
   pending_sha256?: string;
+  json_files?: JSONFileInfo[];
 }
 
 export function fetchBackupStatus(): Promise<BackupView> {
