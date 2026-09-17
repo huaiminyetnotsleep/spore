@@ -2,6 +2,22 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.10.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.9.0...v1.10.0) (2026-09-17)
+
+
+### Features
+
+* **backup:** 重构数据备份页 — JSON/DB 导出导入全功能实现 ([aae39c5](https://github.com/huaiminyetnotsleep/spore/commit/aae39c55e5b5cb1b575c8417c797f5ef100d3993))
+* **frontend:** 新增通知设置页、路由与 API 封装 ([1966968](https://github.com/huaiminyetnotsleep/spore/commit/196696899fa41bdc6af95b0aa78c1238e9da0cb8))
+* **notification:** 增加通知策略与静音配置 ([4f82069](https://github.com/huaiminyetnotsleep/spore/commit/4f82069222718f8a1c848547497e6dba43e78e75))
+* **notifycfg:** 通知通道配置、凭据加密与四格式适配器 ([13a5c49](https://github.com/huaiminyetnotsleep/spore/commit/13a5c493b73fbfcb479fe90ce5322f9d22d298e7))
+* **web:** 通知设置 API、路由与启动装配 ([b93e59a](https://github.com/huaiminyetnotsleep/spore/commit/b93e59ac7aa4711c104bd704e3846f22337af7bb))
+
+
+### Bug Fixes
+
+* **docs:** 转义通知接口路径占位符 ([8981758](https://github.com/huaiminyetnotsleep/spore/commit/8981758c4f8070e9a86c8f3a3d9b75faa02e58d8))
+
 ## [1.9.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.8.0...v1.9.0) (2026-09-17)
 
 
