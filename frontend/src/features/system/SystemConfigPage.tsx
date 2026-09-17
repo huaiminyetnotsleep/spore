@@ -95,7 +95,7 @@ export function SystemConfigPage() {
             <Text type="secondary">
               系统设置只承载系统身份（本期仅系统名称）；队列容量、媒体传输参数等运行调优在
               <Link to="/settings">运行设置</Link>
-              页，频道同步与频道加入配置分别在
+              页，通知通道在<Link to="/settings/notification">通知设置</Link>页，频道同步与频道加入配置分别在
               <Link to="/channel-settings">频道设置</Link>、
               <Link to="/join-settings">受邀设置</Link>
               页维护。

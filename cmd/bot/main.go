@@ -32,6 +32,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/notify"
+	"github.com/huaiminyetnotsleep/spore/internal/notifycfg"
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	queuepkg "github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
@@ -308,6 +309,9 @@ func main() {
 	// 检查更新（总览页服务版本旁刷新按钮）：查询上游 GitHub 最新 Release，
 	// 结果缓存 1 小时；查询失败时端点受控降级，不影响其他功能。
 	releaseCheck := web.NewGitHubReleaseChecker()
+	// 通知通道配置存 settings；敏感字段使用 OAuth 主密钥经 HKDF 域分离后
+	// 加密。主密钥缺失不阻断启动，但管理端不能保存新凭据。
+	notificationCfg := notifycfg.NewManager(st, cfg.OAuthEncryptionKey, notifycfg.Options{})
 	webSrv, err := web.New(web.Options{
 		Store:             st,
 		Cfg:               cfg,
@@ -323,6 +327,7 @@ func main() {
 		Profile:           profileLookup,                                    // 已就绪且有上下文时刷新用户资料
 		RestartFunc:       func() error { return syscall.Kill(os.Getpid(), syscall.SIGTERM) },
 		Hub:               hub,              // 事件中心（resolve 统一经它执行并留审计）
+		Notification:      notificationCfg,  // 通知通道配置与测试发送
 		Progress:          progressRegistry, // 请求记录页实时进度（与 worker 共享）
 		Monitor:           metrics,          // 系统资源与传输监控
 		Bindings:          bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）

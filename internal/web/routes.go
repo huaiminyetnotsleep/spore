@@ -125,6 +125,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// 挂载（会注册同路径 GET 405 兜底，与 GET 端点冲突），直接组合中间件。
 	mux.Handle("GET /api/v1/system/config", s.apiAuth(s.handleAPISystemConfigGet))
 	mux.Handle("POST /api/v1/system/config", s.apiAuth(s.apiCSRF(s.handleAPISystemConfigPost)))
+	// 通知设置：GET 返回脱敏视图，PUT 原子保存 Bot + Webhook；测试与
+	// Chat ID 获取只使用已保存凭据，避免未保存 Secret 在多个端点流转。
+	mux.Handle("GET /api/v1/notification/config", s.apiAuth(s.handleAPINotificationConfigGet))
+	mux.Handle("PUT /api/v1/notification/config", s.apiAuth(s.apiCSRF(s.handleAPINotificationConfigPut)))
+	s.mountAPIWrite(mux, "/api/v1/notification/test", s.handleAPINotificationTest)
+	s.mountAPIWrite(mux, "/api/v1/notification/bot/chat-id", s.handleAPINotificationBotChatID)
 	// 高风险页面迁移：OAuth、备份、受控
 	// 重启与 MTProto 状态/重连；业务规则与 SSR 表单共用同一核心，
 	// 敏感值（Secret、扫码 URL）不下发、不落日志。

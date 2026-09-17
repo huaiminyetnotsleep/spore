@@ -22,6 +22,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/notify"
+	"github.com/huaiminyetnotsleep/spore/internal/notifycfg"
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
@@ -162,6 +163,8 @@ type Options struct {
 	Profile           UserProfileLookup // 可选：Telegram 用户资料刷新上下文
 	RestartFunc       func() error      // 可选：受控优雅重启；生产实现只发送 SIGTERM
 	Hub               *notify.Hub       // 可选：事件中心（resolve 经它统一执行并留审计）；缺失时直写 store
+	// Notification 管理加密通知通道配置与测试发送；缺失时相关 API 返回受控不可用。
+	Notification *notifycfg.Manager
 	// Progress 是处理中请求的实时传输进度注册表，与 worker 共享同一实例
 	// （internal/progress）；nil 时请求记录不携带进度字段。
 	Progress *progress.Registry
@@ -217,6 +220,7 @@ type Server struct {
 	restartScheduled bool
 	nonceFunc        func(int) (string, error)
 	hub              *notify.Hub
+	notification     *notifycfg.Manager
 	progress         *progress.Registry
 	monitor          *monitor.Service
 	bindings         ChannelBinder
@@ -285,6 +289,7 @@ func New(opt Options) (*Server, error) {
 		restartFunc:  opt.RestartFunc,
 		nonceFunc:    randomToken,
 		hub:          opt.Hub,
+		notification: opt.Notification,
 		progress:     opt.Progress,
 		monitor:      opt.Monitor,
 		bindings:     opt.Bindings,

@@ -105,6 +105,7 @@ spore/
 │   ├── cloudarchive/            # 云盘下载：cloud-drive.json 配置、rclone 封装、远端布局
 │   ├── monitor/                 # 进程资源与传输速率采样（RSS/临时目录/CPU，48h 历史）
 │   ├── notify/                  # 系统事件：按 key 合并、冷却通知、owner 私聊
+│   ├── notifycfg/               # 通知通道配置、凭据加密与测试发送适配器
 │   └── web/                     # 管理端：SPA 壳、/api/v1 JSON、登录会话、CSV/QR 端点
 ├── data/                        # spore.db / session.json / bot-session.json / peers.json /
 │                                #   tmp/ / cloud-drive.json 等（gitignore）
@@ -125,7 +126,7 @@ spore/
 | `store` | SQLite 连接/迁移与各聚合 DAO（用户、请求、用量、审计、事件、设置、会话、加入留痕等） | 业务准入规则、Telegram 协议 |
 | `web` | SPA 壳与 `/api/v1` JSON API、登录会话/CSRF、CSV/QR 功能端点 | 业务准入决策（经 access/joinmgr 等服务） |
 | `config` / `apperr` / `syscfg` / `transfercfg` | 横切：环境配置、错误模型、运行设置与传输覆盖 | — |
-| `cloudarchive` / `monitor` / `notify` / `progress` | 云盘 rclone 封装、资源监控、事件通知、进度注册表 | — |
+| `cloudarchive` / `monitor` / `notify` / `notifycfg` / `progress` | 云盘 rclone 封装、资源监控、事件通知、通知通道配置/测试发送、进度注册表 | — |
 
 ## 3. 关键技术决策
 
