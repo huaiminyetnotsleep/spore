@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
  * 全路由响应式 smoke（实施计划 8.2）：
- * - 400px 覆盖 23 个受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
+ * - 400px 覆盖 24 个受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
  *   页面操作区 / 筛选 / 表单主按钮可见且落在视口宽度内；
  * - 宽表断言滚动发生在表格容器（.ant-table-content）内部；
  * - 1440 / 1024 / 768 覆盖代表性列表、详情、图表与设置页；
@@ -396,6 +396,25 @@ const settingsFixture = {
 
 const systemConfigFixture = { system_name: "Spore" };
 
+const notificationConfigFixture = {
+  version: 1,
+  bot: {
+    enabled: true,
+    chat_id: "-1001234567890",
+    has_token: true,
+    credential: { available: true },
+  },
+  webhook: {
+    enabled: true,
+    format: "feishu",
+    has_url: true,
+    has_secret: true,
+    credential: { available: true },
+    feishu_open_ids: ["ou_fixture"],
+    feishu_at_all: false,
+  },
+};
+
 const oauthFixture = {
   github_configured: false,
   configured: false,
@@ -549,6 +568,9 @@ async function mockAdminAPI(page: Page) {
       case "/api/v1/system/config":
         await fulfillJSON(route, 200, systemConfigFixture);
         return;
+      case "/api/v1/notification/config":
+        await fulfillJSON(route, 200, notificationConfigFixture);
+        return;
       case "/api/v1/oauth/settings":
         await fulfillJSON(route, 200, oauthFixture);
         return;
@@ -575,7 +597,7 @@ async function mockAdminAPI(page: Page) {
   });
 }
 
-/** 23 个受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
+/** 24 个受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
 const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin", heading: "总览" },
   { path: "/admin/stats", heading: "业务统计" },
@@ -596,6 +618,7 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/audit", heading: "审计日志" },
   { path: "/admin/settings", heading: "运行设置" },
   { path: "/admin/settings/system", heading: "系统设置" },
+  { path: "/admin/settings/notification", heading: "通知设置" },
   { path: "/admin/settings/oauth", heading: "GitHub 登录" },
   { path: "/admin/backup", heading: "数据备份" },
   { path: "/admin/bots", heading: "机器人管理" },
@@ -655,7 +678,7 @@ async function expectActionsWithinViewport(page: Page, label: string) {
 }
 
 test.describe("全路由响应式 smoke", () => {
-  test("400px：23 个受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
+  test("400px：24 个受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
     await page.setViewportSize(PHONE_VIEWPORT);
     await mockAdminAPI(page);
 

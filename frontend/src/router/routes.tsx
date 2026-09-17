@@ -8,6 +8,7 @@ import {
   AuditOutlined,
   CheckCircleOutlined,
   BarChartOutlined,
+  BellOutlined,
   CloudDownloadOutlined,
   CloudServerOutlined,
   ControlOutlined,
@@ -41,6 +42,7 @@ import { ChannelDetailPage } from "../features/channels/ChannelDetailPage";
 import { ChannelsListPage } from "../features/channels/ChannelsListPage";
 import { EventsPage } from "../features/events/EventsPage";
 import { MTProtoPage } from "../features/mtproto/MTProtoPage";
+import { NotificationSettingsPage } from "../features/notification/NotificationSettingsPage";
 import { OAuthSettingsPage } from "../features/oauth/OAuthSettingsPage";
 import { OverviewPage } from "../features/overview/OverviewPage";
 import { RequestDetailPage } from "../features/requests/RequestDetailPage";
@@ -243,6 +245,15 @@ export const routeMeta = [
     menuVisible: true,
   },
   {
+    key: "notification",
+    path: "/settings/notification",
+    label: "通知设置",
+    title: "通知设置",
+    groupKey: "system-operations",
+    icon: <BellOutlined />,
+    menuVisible: true,
+  },
+  {
     key: "mtproto",
     path: "/mtproto",
     label: "Telegram 连接",
@@ -320,7 +331,7 @@ export const navigationGroups = [
   {
     key: "system-operations",
     label: "系统运维",
-    routeKeys: ["settings", "system-config", "mtproto", "oauth", "backup"],
+    routeKeys: ["settings", "system-config", "notification", "mtproto", "oauth", "backup"],
   },
 ] as const satisfies readonly NavigationGroup[];
 
@@ -413,6 +424,7 @@ export function AppRoutes() {
         {/* 系统运维页面：写操作仍统一走 /api/v1 */}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/system" element={<SystemConfigPage />} />
+        <Route path="/settings/notification" element={<NotificationSettingsPage />} />
         <Route path="/settings/oauth" element={<OAuthSettingsPage />} />
         <Route path="/backup" element={<BackupPage />} />
         <Route path="/bots" element={<BotsPage />} />

@@ -12,6 +12,7 @@ import type {
   BackupView,
   CloudDriveBackupCandidate,
   CloudDriveView,
+  NotificationWebhookFormat,
   OAuthSettingsView,
   SettingsView,
 } from "./admin";
@@ -298,6 +299,58 @@ export interface SystemConfigSaveResult extends WriteOK {
 
 export const saveSystemConfig = (systemName: string): Promise<SystemConfigSaveResult> =>
   postJSON<SystemConfigSaveResult>("/api/v1/system/config", { system_name: systemName });
+
+// ---- 通知设置 ----
+
+export interface NotificationWebhookInput {
+  enabled: boolean;
+  format: NotificationWebhookFormat;
+  /** 敏感字段：空字符串表示沿用已保存值。 */
+  url: string;
+  /** generic/feishu/dingtalk 可用；空字符串表示沿用已保存值。 */
+  secret: string;
+  generic_signature_header?: string;
+  feishu_open_ids?: string[];
+  feishu_at_all?: boolean;
+  dingtalk_mobiles?: string[];
+  dingtalk_at_all?: boolean;
+  discord_user_ids?: string[];
+  discord_role_ids?: string[];
+  discord_everyone?: boolean;
+}
+
+export interface NotificationConfigSaveInput {
+  bot: {
+    enabled: boolean;
+    /** 空字符串表示沿用已保存 Token。 */
+    token: string;
+    chat_id: string;
+  };
+  webhook: NotificationWebhookInput;
+}
+
+export interface NotificationOperationResult extends WriteOK {
+  message: string;
+}
+
+export interface NotificationChatIDResult extends NotificationOperationResult {
+  chat_id: string;
+}
+
+export const saveNotificationConfig = (
+  input: NotificationConfigSaveInput,
+): Promise<NotificationOperationResult> =>
+  putJSON<NotificationOperationResult>("/api/v1/notification/config", input);
+
+/** 仅使用服务端已保存配置发送测试，不携带表单中的未保存凭据。 */
+export const testNotification = (
+  channel: "bot" | "webhook",
+): Promise<NotificationOperationResult> =>
+  postJSON<NotificationOperationResult>("/api/v1/notification/test", { channel });
+
+/** 通过已保存 Bot Token 的 getUpdates 获取最近会话，不提交表单 Token。 */
+export const fetchNotificationBotChatID = (): Promise<NotificationChatIDResult> =>
+  postJSON<NotificationChatIDResult>("/api/v1/notification/bot/chat-id");
 
 // ---- 会话 ----
 

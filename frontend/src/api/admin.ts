@@ -688,6 +688,47 @@ export function fetchSystemConfig(): Promise<SystemConfigView> {
   return apiRequest<SystemConfigView>("/api/v1/system/config");
 }
 
+// ---- 通知设置 ----
+
+export type NotificationWebhookFormat = "generic" | "feishu" | "dingtalk" | "discord";
+export type NotificationMentionMode = "none" | "all" | "users" | "roles";
+
+export interface NotificationCredentialState {
+  available: boolean;
+  /** 凭据不可用时的服务端受控中文说明；正常时缺省。 */
+  message?: string;
+}
+
+/** 与 notifycfg.View 对齐的脱敏配置；敏感 URL、Token、Secret 永不出现。 */
+export interface NotificationConfigView {
+  version: number;
+  bot: {
+    enabled: boolean;
+    chat_id: string;
+    has_token: boolean;
+    credential: NotificationCredentialState;
+  };
+  webhook: {
+    enabled: boolean;
+    format: NotificationWebhookFormat;
+    has_url: boolean;
+    has_secret: boolean;
+    credential: NotificationCredentialState;
+    generic_signature_header?: string;
+    feishu_open_ids?: string[];
+    feishu_at_all?: boolean;
+    dingtalk_mobiles?: string[];
+    dingtalk_at_all?: boolean;
+    discord_user_ids?: string[];
+    discord_role_ids?: string[];
+    discord_everyone?: boolean;
+  };
+}
+
+export function fetchNotificationConfig(): Promise<NotificationConfigView> {
+  return apiRequest<NotificationConfigView>("/api/v1/notification/config");
+}
+
 // ---- GitHub OAuth（高风险页面迁移） ----
 
 /**
