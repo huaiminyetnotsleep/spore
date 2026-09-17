@@ -1,5 +1,5 @@
 import { Line, type LineConfig } from "@ant-design/plots";
-import { Alert, Segmented, Spin, Typography } from "antd";
+import { Segmented } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
@@ -9,8 +9,10 @@ import {
   type SystemMetricsRange,
 } from "../../api/admin";
 import { fmtBytes } from "../../shared/format";
+import { chartPalette } from "../../theme";
 import { ChartPanel } from "../shared/ChartPanel";
-import { PageCard } from "../shared/PageStates";
+import { PageSection } from "../shared/PageLayout";
+import { SectionQueryState } from "../shared/QueryStates";
 
 const rangeOptions: { label: string; value: SystemMetricsRange }[] = [
   { label: "实时", value: "realtime" },
@@ -181,7 +183,7 @@ function TransferLine({ points, range }: { points: SystemMetricPoint[]; range: S
       empty={data.length === 0}
       emptyMessage="暂无可用的传输速率数据。"
     >
-      <PersistentLine config={lineConfig(data, range, "速率", fmtRate, ["#1677ff", "#52c41a"], false)} />
+      <PersistentLine config={lineConfig(data, range, "速率", fmtRate, [chartPalette.primary, chartPalette.success], false)} />
     </ChartPanel>
   );
 }
@@ -202,22 +204,27 @@ export function SystemMetricsSection() {
   });
 
   return (
-    <PageCard
+    <PageSection
       title="资源与传输监控"
       extra={<Segmented options={rangeOptions} value={range} onChange={(value) => changeRange(value as SystemMetricsRange)} />}
     >
-      {query.isPending && !query.data ? <Spin className="page-loading" tip="监控数据加载中…" /> : null}
-      {query.isError && !query.data ? (
-        <Alert type="error" showIcon message="监控数据加载失败" description="请稍后重试。" action={<Typography.Link onClick={() => void query.refetch()}>重试</Typography.Link>} />
-      ) : null}
-      {query.data ? (
-        <div className="system-metrics-grid">
-          <MetricLine title="进程 CPU" description="当前进程 CPU 占用（占全部核心）。" points={query.data.points} range={range} field="cpu_percent" formatter={fmtPercent} emptyMessage="暂无可用的 CPU 数据。" />
-          <MetricLine title="进程内存" description="当前进程 RSS。" points={query.data.points} range={range} field="rss_bytes" formatter={fmtBytes} emptyMessage="暂无可用的 RSS 数据。" />
-          <MetricLine title="临时目录大小" description="临时目录占用。" points={query.data.points} range={range} field="temp_dir_bytes" formatter={fmtBytes} emptyMessage="暂无可用的临时目录数据。" />
-          <TransferLine points={query.data.points} range={range} />
-        </div>
-      ) : null}
-    </PageCard>
+      {/* 独立查询区块：首次加载/失败只影响本区块；轮询刷新保留已缓存内容
+          （placeholderData），不整块替换，也不因后台刷新遮挡图表。 */}
+      <SectionQueryState
+        initialLoading={query.isPending}
+        error={query.error}
+        hasData={query.data !== undefined}
+        onRetry={() => void query.refetch()}
+      >
+        {query.data ? (
+          <div className="system-metrics-grid">
+            <MetricLine title="进程 CPU" description="当前进程 CPU 占用（占全部核心）。" points={query.data.points} range={range} field="cpu_percent" formatter={fmtPercent} emptyMessage="暂无可用的 CPU 数据。" />
+            <MetricLine title="进程内存" description="当前进程 RSS。" points={query.data.points} range={range} field="rss_bytes" formatter={fmtBytes} emptyMessage="暂无可用的 RSS 数据。" />
+            <MetricLine title="临时目录大小" description="临时目录占用。" points={query.data.points} range={range} field="temp_dir_bytes" formatter={fmtBytes} emptyMessage="暂无可用的临时目录数据。" />
+            <TransferLine points={query.data.points} range={range} />
+          </div>
+        ) : null}
+      </SectionQueryState>
+    </PageSection>
   );
 }

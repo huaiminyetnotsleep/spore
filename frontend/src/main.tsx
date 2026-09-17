@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import { queryClient } from "./api/query";
 import { App } from "./App";
 import { cspConfig, readCSPNonce } from "./csp";
+import { appTheme } from "./theme";
 import "./styles.css";
 
 const cspNonce = readCSPNonce();
@@ -21,7 +22,7 @@ createRoot(document.getElementById("root")!).render(
         <ConfigProvider
           locale={zhCN}
           csp={cspConfig(cspNonce)}
-          theme={{ token: { colorPrimary: "#1677ff" } }}
+          theme={appTheme}
         >
           <App />
         </ConfigProvider>

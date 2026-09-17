@@ -1,6 +1,6 @@
 /**
  * 图表块外壳：小节标题 + 副描述 + 空态文案 + 内容区。
- * 卡片底板由页面层 PageCard 承担，这里只负责区块内单个图表的版式；
+ * 卡片底板由页面层 PageSection/PageCard 承担，这里只负责区块内单个图表的版式；
  * 空态判定由调用方给出（empty=true 时渲染 emptyMessage，不渲染图表）。
  */
 import { Typography } from "antd";

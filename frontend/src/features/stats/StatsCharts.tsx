@@ -20,15 +20,16 @@ import type {
   StatsUser,
 } from "../../api/admin";
 import { botLabel, distKeyText, fmtTime } from "../../shared/format";
+import { chartPalette } from "../../theme";
 import { ChartPanel } from "../shared/ChartPanel";
 import { RankBarChart, type RankBarDatum } from "../shared/RankBarChart";
 import { SectionCard } from "../shared/PageStates";
 
 const CHART_HEIGHT = 280;
 const ERROR_RATE_THRESHOLD = 0.2;
-const ERROR_RATE_OK_COLOR = "#52c41a";
-const ERROR_RATE_ALERT_COLOR = "#ff4d4f";
-const EMPTY_POINT_STROKE = "#8c8c8c";
+const ERROR_RATE_OK_COLOR = chartPalette.success;
+const ERROR_RATE_ALERT_COLOR = chartPalette.error;
+const EMPTY_POINT_STROKE = chartPalette.neutral;
 const OTHER_ERROR_KEY = "__other__";
 
 interface ErrorRateDatum {
@@ -164,7 +165,7 @@ function ErrorRateChart({ trend, navigate }: { trend: StatsTrendPoint[]; navigat
       {
         type: "lineY",
         data: [ERROR_RATE_THRESHOLD],
-        style: { stroke: "#fa8c16", lineDash: [4, 4], lineWidth: 2 },
+        style: { stroke: chartPalette.warning, lineDash: [4, 4], lineWidth: 2 },
         label: { text: "阈值 20%", position: "right" },
       },
     ],
@@ -249,7 +250,7 @@ function ChannelRankChart({ channels }: { channels: StatsChannel[] }) {
     >
       <RankBarChart
         data={data}
-        color="#1677ff"
+        color={chartPalette.primary}
         xAxisTitle="频道"
         yAxisTitle="请求数"
         rowHeight={42}
@@ -288,7 +289,7 @@ function UserRankChart({ users }: { users: StatsUser[] }) {
     >
       <RankBarChart
         data={data}
-        color="#722ed1"
+        color={chartPalette.purple}
         xAxisTitle="用户"
         yAxisTitle="请求数"
         tooltip={{
@@ -486,7 +487,7 @@ function BotDistributionChart({ rows, total }: { rows: StatsBot[]; total: number
     >
       <RankBarChart
         data={data}
-        color="#13c2c2"
+        color={chartPalette.cyan}
         xAxisTitle="机器人"
         yAxisTitle="请求数"
         tooltip={{

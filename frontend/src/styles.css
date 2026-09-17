@@ -1,6 +1,27 @@
 :root {
-  color: #1f1f1f;
-  background: #f5f7fa;
+  --color-primary: #1677ff;
+  --color-success: #52c41a;
+  --color-warning: #fa8c16;
+  --color-warning-text: #d46b08;
+  --color-error: #ff4d4f;
+  --color-text: #1f1f1f;
+  --color-text-strong: rgb(0 0 0 / 88%);
+  --color-text-secondary: rgb(0 0 0 / 55%);
+  --color-text-tertiary: rgb(0 0 0 / 45%);
+  --color-bg-page: #f5f7fa;
+  --color-bg-surface: #fff;
+  --color-bg-subtle: #fafafa;
+  --color-border: #d9d9d9;
+  --color-border-secondary: #f0f0f0;
+  --surface-radius: 10px;
+  --control-radius: 8px;
+  --surface-shadow: 0 6px 16px rgb(0 0 0 / 8%);
+  --status-success-bg: #f6ffed;
+  --status-warning-bg: #fff7e6;
+  --status-error-bg: #fff2f0;
+  --status-processing-bg: #e6f4ff;
+  color: var(--color-text);
+  background: var(--color-bg-page);
   font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -29,7 +50,7 @@ body {
 .app-sider {
   height: 100vh;
   overflow-y: auto;
-  border-inline-end: 1px solid #f0f0f0;
+  border-inline-end: 1px solid var(--color-border-secondary);
 }
 
 .app-sider.ant-layout-sider-collapsed {
@@ -57,7 +78,7 @@ body {
   align-items: center;
   height: 64px;
   padding: 0 20px;
-  color: #1677ff;
+  color: var(--color-primary);
   font-size: 16px;
   font-weight: 700;
   text-decoration: none;
@@ -81,7 +102,7 @@ body {
   min-width: 0;
   padding: 0 24px;
   background: #fff;
-  border-block-end: 1px solid #f0f0f0;
+  border-block-end: 1px solid var(--color-border-secondary);
 }
 
 .app-header-title {
@@ -116,7 +137,7 @@ body {
   padding: 0;
   color: #1f1f1f;
   background: transparent;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   cursor: pointer;
 }
@@ -144,11 +165,6 @@ body {
   margin-inline-start: auto;
 }
 
-.account-avatar-trigger {
-  display: inline-flex;
-  cursor: pointer;
-}
-
 .nav-link {
   display: block;
   color: inherit;
@@ -168,20 +184,93 @@ body {
   padding: 24px 16px;
 }
 
-.page-card {
+.page-scaffold {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-scaffold__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px 24px;
+}
+
+.page-scaffold__heading {
+  min-width: 0;
+}
+
+.page-scaffold__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.page-scaffold__title.ant-typography {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 30px);
+  line-height: 1.25;
+}
+
+.page-scaffold__description.ant-typography {
   max-width: 760px;
+  margin: 6px 0 0;
+}
+
+.page-scaffold__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.responsive-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.responsive-action-bar--start {
+  justify-content: flex-start;
+}
+
+.responsive-action-bar--end {
+  justify-content: flex-end;
+}
+
+.responsive-action-bar--between {
+  justify-content: space-between;
+}
+
+.page-section,
+.page-card,
+.section-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.page-section__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.page-section__description {
+  font-size: 13px;
+  font-weight: 400;
+  white-space: normal;
 }
 
 .settings-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-/* 页面分区卡（shared/SectionCard）：铺满内容区域的分组底板 */
-.section-card {
-  width: 100%;
-  max-width: none;
 }
 
 /* 运行设置页：外层 Space 包装项占满宽度 */
@@ -195,10 +284,6 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 0 24px;
   width: 100%;
-}
-
-.settings-margin-top-12 {
-  margin-top: 12px;
 }
 
 /* 传输并发调试的生效说明：信息保留，字号缩小 */
@@ -225,12 +310,6 @@ body {
   padding-inline: 5px;
 }
 
-/* 保存操作行：桌面右对齐，窄屏按钮全宽 */
-.settings-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
 /* 底部状态区：生效状态 + 受控重启 双列，窄屏单列 */
 .settings-status-grid {
   display: grid;
@@ -244,44 +323,17 @@ body {
   padding-inline-start: 18px;
 }
 
-@media (max-width: 575px) {
-  .settings-actions .ant-btn {
-    width: 100%;
-  }
-
-  .settings-field-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.layout-full-width {
-  width: 100%;
-}
-
+/* 通用布局工具类（保留有引用的）：与组件分区解耦的间距/宽度辅助 */
 .layout-margin-0 {
   margin: 0;
-}
-
-/* 总览三块标题统一采用紧凑字号，减少首屏垂直占用。 */
-.overview-page .page-card .ant-card-head {
-  min-height: 48px;
-  padding: 0 16px;
-}
-
-.overview-page .page-card .ant-card-head-title h3 {
-  font-size: 18px;
-  line-height: 1.3;
 }
 
 .layout-margin-top-0 {
   margin-top: 0;
 }
 
-.layout-margin-top-8 {
-  margin-top: 8px;
-}
-
-.layout-margin-top-12 {
+.layout-margin-top-12,
+.settings-margin-top-12 {
   margin-top: 12px;
 }
 
@@ -321,6 +373,9 @@ body {
   max-width: 520px;
 }
 
+/* 表单/筛选字段语义宽度：90=单位后缀、110–140=短筛选、160=数值输入、
+   200=文本输入、240=长文本；≤575px 由 FilterBar/设置网格收敛为全宽。
+   不再新增任意值宽度类。 */
 .field-width-90 {
   width: 90px;
 }
@@ -379,21 +434,106 @@ body {
   font-size: 12px;
   line-height: 1.6;
   white-space: pre;
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-}
-
-.page-card .ant-typography h2,
-.page-card h2 {
-  margin-top: 16px;
-  margin-bottom: 12px;
 }
 
 .page-loading {
   display: block;
   margin-top: 20vh;
   text-align: center;
+}
+
+/* 查询态容器自身作为纵向堆叠层：page-scaffold__content 的 16px 间距在
+   DetailGate/PageQueryState 包裹分区时由这里延续（分区直接子元素同样适用）。
+   刷新错误的 Alert 与内容之间的间距也由这里的 gap 承担，不再用 margin 叠加。 */
+.query-state {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Spin 包装层（nested-loading > container）不吞掉间距：
+   让分区在 Spin 容器内继续以相同 gap 纵向堆叠，不产生双倍间隔。 */
+.query-state .ant-spin-nested-loading,
+.query-state .ant-spin-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.query-state__loading-placeholder {
+  min-height: 80px;
+}
+
+/* 表格行操作列：统一链接按钮组（shared/RowActions），超出折叠进「更多」菜单 */
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.row-actions__item {
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* 链接按钮收紧内边距：操作列保持紧凑（默认 7px 太宽） */
+.row-actions__action.ant-btn-sm {
+  padding-inline: 4px;
+}
+
+.row-actions__more.ant-btn-sm {
+  padding-inline: 2px;
+}
+
+.empty-state--compact.ant-empty {
+  margin-block: 20px;
+}
+
+.inline-query-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  width: 100%;
+}
+
+.filter-bar__fields {
+  display: flex;
+  flex: 1 1 480px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  min-width: 0;
+}
+
+.filter-bar .ant-form-item {
+  min-width: min(180px, 100%);
+  margin: 0;
+}
+
+.filter-bar__actions {
+  flex: 0 1 auto;
+  margin-inline-start: auto;
+}
+
+.form-actions {
+  margin-top: 20px;
+}
+
+.status-tag {
+  margin-inline-end: 0;
 }
 
 /* 页内区块（如全时段快照）加载态：局部居中，不占整屏 */
@@ -473,9 +613,9 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--control-radius);
 }
 
 /* 卡片头：默认 Radio + 名称输入 + 操作按钮一行排布 */
@@ -570,11 +710,6 @@ body {
   padding-inline-start: 18px;
 }
 
-/* 请求详情：云盘上传记录区块（Descriptions 下方的附表） */
-.cloud-uploads-table {
-  margin-top: 16px;
-}
-
 /* 远端完整路径可能很长：等宽展示且允许任意断行 */
 .cloud-path-cell {
   overflow-wrap: anywhere;
@@ -582,17 +717,6 @@ body {
 
 .cloud-time-cell {
   white-space: nowrap;
-}
-
-@media (max-width: 575px) {
-  .cloud-option-row {
-    flex-direction: column;
-  }
-
-  .cloud-option-row__key {
-    flex: none;
-    width: 100%;
-  }
 }
 
 .chart-panel__current-value-row {
@@ -631,7 +755,7 @@ body {
   padding: 14px 16px 12px;
   overflow: hidden;
   background: #fff;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--color-border-secondary);
   border-radius: 10px;
 }
 
@@ -651,19 +775,19 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .metric-card--success .metric-card__label::before {
-  background: #52c41a;
+  background: var(--color-success);
 }
 
 .metric-card--danger .metric-card__label::before {
-  background: #ff4d4f;
+  background: var(--color-error);
 }
 
 .metric-card--warning .metric-card__label::before {
-  background: #fa8c16;
+  background: var(--color-warning);
 }
 
 .metric-card__value {
@@ -676,15 +800,15 @@ body {
 }
 
 .metric-card--success .metric-card__value {
-  color: #52c41a;
+  color: var(--color-success);
 }
 
 .metric-card--danger .metric-card__value {
-  color: #ff4d4f;
+  color: var(--color-error);
 }
 
 .metric-card--warning .metric-card__value {
-  color: #d46b08;
+  color: var(--color-warning-text);
 }
 
 .metric-card__suffix {
@@ -705,23 +829,23 @@ body {
   flex: 1;
   height: 4px;
   border-radius: 2px;
-  background: #f0f0f0;
+  background: var(--color-border-secondary);
 }
 
 .metric-card__bar-cell--on {
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .metric-card--success .metric-card__bar-cell--on {
-  background: #52c41a;
+  background: var(--color-success);
 }
 
 .metric-card--danger .metric-card__bar-cell--on {
-  background: #ff4d4f;
+  background: var(--color-error);
 }
 
 .metric-card--warning .metric-card__bar-cell--on {
-  background: #fa8c16;
+  background: var(--color-warning);
 }
 
 /* 多值行（如 成功/失败/未完成 合并卡）：等分铺满，标签弱化 + 语义色数值 */
@@ -758,15 +882,15 @@ body {
 }
 
 .metric-card__stat--success .metric-card__stat-value {
-  color: #52c41a;
+  color: var(--color-success);
 }
 
 .metric-card__stat--danger .metric-card__stat-value {
-  color: #ff4d4f;
+  color: var(--color-error);
 }
 
 .metric-card__stat--warning .metric-card__stat-value {
-  color: #d46b08;
+  color: var(--color-warning-text);
 }
 
 .metric-card__hint {
@@ -789,8 +913,8 @@ body {
   gap: 14px;
   min-width: 0;
   padding: 16px;
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 10px;
 }
 
@@ -808,11 +932,11 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .snapshot-panel__dot--green {
-  background: #52c41a;
+  background: var(--color-success);
 }
 
 .snapshot-panel__meta {
@@ -821,46 +945,6 @@ body {
   font-weight: 400;
   color: rgb(0 0 0 / 45%);
   white-space: nowrap;
-}
-
-@media (max-width: 991px) {
-  .system-metrics-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .chart-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* 指标卡窄屏降为 2 列（≥2 项时），单指标保持单列 */
-  .metric-grid--2,
-  .metric-grid--3,
-  .metric-grid--4,
-  .metric-grid--5,
-  .metric-grid--6,
-  .metric-grid--7,
-  .metric-grid--8,
-  .metric-grid--max-2,
-  .metric-grid--max-3,
-  .metric-grid--max-4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .snapshot-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 575px) {
-  .metric-grid--2,
-  .metric-grid--3,
-  .metric-grid--4,
-  .metric-grid--5,
-  .metric-grid--6,
-  .metric-grid--7,
-  .metric-grid--8 {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* 总览状态一览：彩色状态卡，宽屏 4 列、窄屏 2 列；状态色走左侧色条 */
@@ -880,15 +964,15 @@ body {
 }
 
 .status-tile--ok {
-  border-left: 3px solid #52c41a;
+  border-left: 3px solid var(--color-success);
 }
 
 .status-tile--warn {
-  border-left: 3px solid #fa8c16;
+  border-left: 3px solid var(--color-warning);
 }
 
 .status-tile--error {
-  border-left: 3px solid #ff4d4f;
+  border-left: 3px solid var(--color-error);
 }
 
 .status-tile__body {
@@ -912,16 +996,6 @@ body {
 
 .status-tile__meta {
   font-size: 12px;
-}
-
-.status-tile__meta--warn {
-  color: #d46b08;
-}
-
-@media (max-width: 991px) {
-  .status-tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 /* 登录页（/admin/login）：独立于主布局的居中卡片，不渲染侧边栏/头部 */
@@ -953,9 +1027,9 @@ body {
   width: min(380px, 100%);
 }
 
+/* 登录页错误：统一 Alert 错误态，与页面级 QueryError 同一视觉语言 */
 .login-error {
-  display: block;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .login-hint {
@@ -964,44 +1038,9 @@ body {
   font-size: 12px;
 }
 
-.login-github-link {
-  display: inline-block;
+/* GitHub 登录次操作：整宽按钮排在密钥登录之下 */
+.login-github-action {
   margin-top: 8px;
-}
-
-@media (max-width: 991px) {
-  .app-sider {
-    position: fixed;
-    inset-block: 0;
-    inset-inline-start: 0;
-    z-index: 1001;
-    height: 100vh;
-    box-shadow: 4px 0 16px rgb(0 0 0 / 12%);
-  }
-
-  .mobile-nav-toggle {
-    display: inline-flex;
-  }
-
-  .app-header {
-    position: relative;
-    z-index: 1002;
-  }
-
-  .app-header,
-  .page-content {
-    margin-inline-start: 0;
-  }
-}
-
-@media (max-width: 575px) {
-  .page-content {
-    padding: 16px;
-  }
-
-  .app-header {
-    padding: 0 16px;
-  }
 }
 
 .stats-error-rate-tooltip {
@@ -1036,11 +1075,11 @@ body {
 }
 
 .stats-error-rate-tooltip__item--ok {
-  color: #52c41a;
+  color: var(--color-success);
 }
 
 .stats-error-rate-tooltip__item--alert {
-  color: #ff4d4f;
+  color: var(--color-error);
 }
 
 /* KPI 指标卡栅格（shared/MetricGrid）：单行等宽（列数修饰类），窄屏才降列 */
@@ -1048,4 +1087,134 @@ body {
   display: grid;
   gap: 16px;
   width: 100%;
+}
+
+/* ===== 响应式断点（同一断点的规则统一收敛在此，按分区注释组织） ===== */
+/* 说明：断点内的覆盖规则必须位于被覆盖的基础规则之后（文件末尾），相对顺序
+   保持与原分散写法一致；窄屏判定不变（平板 991px / 手机 575px）。 */
+@media (max-width: 991px) {
+  /* 应用壳：侧栏抽屉化悬浮，头部保持在遮罩之上可点 */
+  .app-sider {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 1001;
+    height: 100vh;
+    box-shadow: 4px 0 16px rgb(0 0 0 / 12%);
+  }
+
+  .app-header {
+    position: relative;
+    z-index: 1002;
+  }
+
+  .app-header,
+  .page-content {
+    margin-inline-start: 0;
+  }
+
+  /* 总览与统计网格：双列 → 单列 */
+  .system-metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .snapshot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .status-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 指标卡平板降为 2 列（≥2 项时），单指标保持单列 */
+  .metric-grid--2,
+  .metric-grid--3,
+  .metric-grid--4,
+  .metric-grid--5,
+  .metric-grid--6,
+  .metric-grid--7,
+  .metric-grid--8,
+  .metric-grid--max-2,
+  .metric-grid--max-3,
+  .metric-grid--max-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 575px) {
+  /* 页面骨架：标题与操作区纵向堆叠，操作按钮铺满 */
+  .page-content {
+    padding: 16px;
+  }
+
+  .app-header {
+    padding: 0 16px;
+  }
+
+  .page-scaffold__header {
+    flex-direction: column;
+  }
+
+  .page-scaffold__actions,
+  .filter-bar__actions,
+  .form-actions {
+    width: 100%;
+  }
+
+  .page-scaffold__actions > *,
+  .filter-bar__actions > *,
+  .form-actions > * {
+    flex: 1 1 auto;
+  }
+
+  /* 筛选区：字段纵向铺满（收敛 .field-width-* 桌面宽度） */
+  .filter-bar,
+  .filter-bar__fields {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* 列方向下 480px flex-basis 会变成高度，把字段容器撑出一大片空白 */
+  .filter-bar__fields {
+    flex: 0 0 auto;
+  }
+
+  .filter-bar__fields,
+  .filter-bar .ant-form-item,
+  .filter-bar .ant-picker,
+  .filter-bar .ant-select,
+  .filter-bar .ant-input-affix-wrapper,
+  .filter-bar .ant-input-number {
+    width: 100%;
+  }
+
+  /* 运行设置表单网格 → 单列 */
+  .settings-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* 云盘目的地键值编辑器 → 纵向 */
+  .cloud-option-row {
+    flex-direction: column;
+  }
+
+  .cloud-option-row__key {
+    flex: none;
+    width: 100%;
+  }
+
+  /* 指标卡手机宽度单列 */
+  .metric-grid--2,
+  .metric-grid--3,
+  .metric-grid--4,
+  .metric-grid--5,
+  .metric-grid--6,
+  .metric-grid--7,
+  .metric-grid--8 {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
