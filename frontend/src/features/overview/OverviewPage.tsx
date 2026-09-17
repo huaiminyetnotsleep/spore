@@ -247,26 +247,6 @@ export function OverviewPage() {
                 <Descriptions.Item label="启动时间">{fmtTime(data.started_at)}</Descriptions.Item>
                 <Descriptions.Item label="监听地址">{data.addr}</Descriptions.Item>
                 <Descriptions.Item label="Worker 数">{data.workers}</Descriptions.Item>
-                <Descriptions.Item label="机器人">
-                  {data.bots && data.bots.length > 0 ? (
-                    <Space direction="vertical" size={2} data-testid="bot-pool-list">
-                      {data.bots.map((b) => (
-                        <Space key={b.id} size={6} wrap>
-                          {b.primary ? <Tag color="blue">主</Tag> : null}
-                          {b.paused ? (
-                            <Tag color="gold">已暂停</Tag>
-                          ) : (
-                            <Tag color={b.online ? "green" : "default"}>{b.online ? "在线" : "离线"}</Tag>
-                          )}
-                          {b.conflict ? <Tag color="red">收不到消息</Tag> : null}
-                          <span>{botIdentityText(b)}</span>
-                        </Space>
-                      ))}
-                    </Space>
-                  ) : (
-                    botIdentityText(data.bot)
-                  )}
-                </Descriptions.Item>
                 <Descriptions.Item label="Bot API 长轮询">
                   {botAPIStateText(health.mtproto_state)}
                   <Text type="secondary">（随 MTProto 会话启停）</Text>
@@ -285,6 +265,29 @@ export function OverviewPage() {
                   <Text type="secondary">（{health.temp_dir}）</Text>
                 </Descriptions.Item>
               </Descriptions>
+            </PageSection>
+
+            {/* 机器人池单独成区：多 bot 列表塞进紧凑服务信息的 Descriptions
+                会把标签列撑变形（池内每个 bot 一行标签+身份）。 */}
+            <PageSection title="机器人">
+              {data.bots && data.bots.length > 0 ? (
+                <Space direction="vertical" size={6} data-testid="bot-pool-list">
+                  {data.bots.map((b) => (
+                    <Space key={b.id} size={6} wrap>
+                      {b.primary ? <Tag color="blue">主</Tag> : null}
+                      {b.paused ? (
+                        <Tag color="gold">已暂停</Tag>
+                      ) : (
+                        <Tag color={b.online ? "green" : "default"}>{b.online ? "在线" : "离线"}</Tag>
+                      )}
+                      {b.conflict ? <Tag color="red">收不到消息</Tag> : null}
+                      <span>{botIdentityText(b)}</span>
+                    </Space>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary">{botIdentityText(data.bot)}</Text>
+              )}
             </PageSection>
 
             <Suspense fallback={<PageSection loading />}>
