@@ -7,9 +7,10 @@
  * 一致的二次确认；提交中防重复点击，失败展示服务端受控文案。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, Descriptions, Form, InputNumber, Select, Space, Spin, Tag, Typography } from "antd";
+import { Button, Descriptions, Form, InputNumber, Select, Spin, Tag, Typography } from "antd";
 import type { InputNumberProps } from "antd";
-import { Link, useParams } from "react-router-dom";
+import type { ReactNode } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { fetchUserDetail } from "../../api/admin";
 import {
@@ -30,7 +31,9 @@ import {
   labelOf,
 } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
-import { DetailGate, PageCard, SectionCard } from "../shared/PageStates";
+import { FormActions } from "../shared/FormActions";
+import { PageScaffold, PageSection, ResponsiveActionBar } from "../shared/PageLayout";
+import { DetailGate } from "../shared/PageStates";
 
 const { Text } = Typography;
 
@@ -53,6 +56,7 @@ export function UserDetailPage() {
   const { id } = useParams();
   const userId = id ?? "";
   const userIdNum = Number(userId);
+  const navigate = useNavigate();
   const query = useQuery({
     queryKey: ["users", "detail", userId],
     queryFn: () => fetchUserDetail(userId),
@@ -104,27 +108,49 @@ export function UserDetailPage() {
         : "云盘下载权限已更新：该用户使用 /download 将被拒绝。",
   });
 
-  const statusButton = (action: UserStatusAction, label: string, confirmText?: string) => (
-    <Button
-      size="small"
-      danger={action === "disable" || action === "archive"}
-      loading={status.pending}
-      disabled={status.pending}
-      onClick={() => {
-        const run = () => void status.run({ userId: userIdNum, action });
-        if (confirmText) {
-          confirm(confirmText, run);
-        } else {
-          run();
-        }
-      }}
-    >
-      {label}
-    </Button>
-  );
+  /**
+   * 状态动作（启用/禁用、归档/恢复）：详情操作区平铺展示、正常尺寸按钮，
+   * 禁用/归档是可恢复的状态变更，按 warning 意图确认（与列表页一致），
+   * 按钮按语义标 danger（不改变确认弹层的 warning 意图）。
+   */
+  function statusButton(
+    action: UserStatusAction,
+    label: string,
+    confirmOptions?: { title: string; content: string },
+  ): ReactNode {
+    return (
+      <Button
+        key={action}
+        danger={action === "disable" || action === "archive"}
+        loading={status.pending}
+        disabled={status.pending}
+        onClick={() => {
+          if (confirmOptions) {
+            confirm({
+              intent: "warning",
+              title: confirmOptions.title,
+              content: confirmOptions.content,
+              action: () => status.run({ userId: userIdNum, action }),
+            });
+          } else {
+            void status.run({ userId: userIdNum, action });
+          }
+        }}
+      >
+        {label}
+      </Button>
+    );
+  }
 
   return (
-    <Space direction="vertical" size="middle" className="field-width-full">
+    <PageScaffold
+      title="用户详情"
+      description="查看资料、用量与限额，执行状态、owner、云盘下载权限与资料刷新等管理操作。"
+      status={query.isFetching ? <Spin size="small" aria-label="刷新中" /> : undefined}
+      actions={<Button onClick={() => void navigate("/users")}>返回列表</Button>}
+    >
+      {/* 详情 Gate 覆盖整页内容：数据口径等说明仅在详情加载成功后出现，
+          404/错误态不泄漏业务口径说明。 */}
       <DetailGate
         loading={query.isPending}
         error={query.error}
@@ -135,15 +161,7 @@ export function UserDetailPage() {
       >
         {detail && (
           <>
-            <PageCard
-              title={`用户 ${detail.id}`}
-              extra={
-                <Link to="/users">
-                  <Button>返回列表</Button>
-                </Link>
-              }
-            >
-              {query.isFetching ? <Spin size="small" /> : null}
+            <PageSection title={`用户 ${detail.id}`}>
               <Descriptions column={1} size="small" bordered>
                 <Descriptions.Item label="状态">
                   <Tag color={USER_STATUS_TAG_COLORS[detail.status]}>
@@ -198,14 +216,12 @@ export function UserDetailPage() {
                   <Text type="secondary">（首次 /start 的受理机器人）</Text>
                 </Descriptions.Item>
                 <Descriptions.Item label="累计请求数">
-                  {detail.total_requests}{" "}
-                  <Link to={`/requests?user_id=${detail.id}`}>查看请求记录</Link>{" "}
-                  <Link to={`/channel-bindings?user_id=${detail.id}`}>查看频道绑定</Link>
+                  {detail.total_requests}
                 </Descriptions.Item>
               </Descriptions>
-            </PageCard>
+            </PageSection>
 
-            <SectionCard title="限额（即时生效；留空保持不变）">
+            <PageSection title="限额（即时生效；留空保持不变）">
               <Form<LimitsFormValues>
                 layout="vertical"
                 className="layout-max-width-480"
@@ -256,13 +272,15 @@ export function UserDetailPage() {
                 >
                   <InputNumber min={0} max={20} className="field-width-160" />
                 </Form.Item>
-                <Button type="primary" htmlType="submit" loading={limits.pending}>
-                  保存限额
-                </Button>
+                <FormActions>
+                  <Button type="primary" htmlType="submit" loading={limits.pending}>
+                    保存限额
+                  </Button>
+                </FormActions>
               </Form>
-            </SectionCard>
+            </PageSection>
 
-            <SectionCard title="云盘下载权限">
+            <PageSection title="云盘下载权限">
               <Form<CloudDownloadFormValues>
                 layout="vertical"
                 className="layout-max-width-480"
@@ -289,78 +307,101 @@ export function UserDetailPage() {
                     ]}
                   />
                 </Form.Item>
-                <Button type="primary" htmlType="submit" loading={cloudDownload.pending}>
-                  保存权限
-                </Button>
+                <FormActions>
+                  <Button type="primary" htmlType="submit" loading={cloudDownload.pending}>
+                    保存权限
+                  </Button>
+                </FormActions>
               </Form>
-            </SectionCard>
+            </PageSection>
 
-            <SectionCard title="操作">
-              <Space wrap>
+            <PageSection title="操作">
+              {/* 详情页空间充足：操作全部平铺为正常尺寸按钮（不用「更多」菜单、
+                  不用文字按钮）。查看入口原在资料行「累计请求数」内，现与状态、
+                  限额、owner、云盘权限、资料刷新聚合在同一操作区；窄屏由
+                  ResponsiveActionBar 换行。确认意图与 pending 语义不变。 */}
+              <ResponsiveActionBar align="start">
+                <Button onClick={() => void navigate(`/requests?user_id=${detail.id}`)}>
+                  查看请求记录
+                </Button>
+                <Button onClick={() => void navigate(`/channel-bindings?user_id=${detail.id}`)}>
+                  查看频道绑定
+                </Button>
                 {detail.status !== "enabled"
                   ? statusButton("enable", "启用")
-                  : statusButton("disable", "禁用", "确定禁用该用户？其新请求将被立即拒绝。")}
+                  : statusButton("disable", "禁用", {
+                      title: "确认禁用用户",
+                      content: "确定禁用该用户？其新请求将被立即拒绝。",
+                    })}
                 {detail.status !== "archived"
-                  ? statusButton("archive", "归档", "确定归档该用户？立即失去权限，历史记录与统计保留，可恢复。")
+                  ? statusButton("archive", "归档", {
+                      title: "确认归档用户",
+                      content: "确定归档该用户？立即失去权限，历史记录与统计保留，可恢复。",
+                    })
                   : statusButton("restore", "恢复（重新启用）")}
                 <Button
-                  size="small"
                   loading={resetQuota.pending}
                   disabled={resetQuota.pending}
                   onClick={() =>
-                    confirm("确定重置该用户今日已用额度为 0？", () => {
-                      void resetQuota.run(userIdNum);
+                    confirm({
+                      intent: "default",
+                      title: "确认重置今日用量",
+                      content: "确定重置该用户今日已用额度为 0？",
+                      action: () => resetQuota.run(userIdNum),
                     })
                   }
                 >
                   重置今日用量
                 </Button>
                 {detail.is_owner
-                  ? ownerButton("取消 owner", "确定取消该用户的 owner 身份？取消后其请求将受频率与额度限制。", false)
-                  : ownerButton("设为 owner", "确定将该用户设为 owner？原 owner（如有）身份将被取消。", true)}
+                  ? ownerButton("取消 owner", "确认取消 owner", "确定取消该用户的 owner 身份？取消后其请求将受频率与额度限制。", false)
+                  : ownerButton("设为 owner", "确认设置 owner", "确定将该用户设为 owner？原 owner（如有）身份将被取消。", true)}
                 <Button
-                  size="small"
                   loading={refreshProfile.pending}
                   disabled={refreshProfile.pending}
                   onClick={() =>
-                    confirm(
-                      "确定从当前 Telegram 上下文刷新该用户资料？查询失败不会覆盖现有资料。",
-                      () => {
-                        void refreshProfile.run(userIdNum);
-                      },
-                    )
+                    confirm({
+                      intent: "default",
+                      title: "确认刷新 Telegram 资料",
+                      content: "确定从当前 Telegram 上下文刷新该用户资料？查询失败不会覆盖现有资料。",
+                      action: () => refreshProfile.run(userIdNum),
+                    })
                   }
                 >
                   刷新 Telegram 资料
                 </Button>
-              </Space>
+              </ResponsiveActionBar>
               <div className="layout-margin-block-start-12">
                 <Text type="secondary">
                   owner 不受频率与每日额度限制，请求仍完整记录；全部操作写入审计。
                 </Text>
               </div>
-            </SectionCard>
+            </PageSection>
+
+            <PageSection title="数据口径">
+              <Text type="secondary">
+                今日已用按运营时区当日统计；owner 请求不受频率与每日额度限制，仍完整记录。
+              </Text>
+            </PageSection>
           </>
         )}
       </DetailGate>
-      <SectionCard title="数据口径">
-        <Text type="secondary">
-          今日已用按运营时区当日统计；owner 请求不受频率与每日额度限制，仍完整记录。
-        </Text>
-      </SectionCard>
-    </Space>
+    </PageScaffold>
   );
 
-  /** owner 操作按钮：设为/取消均需二次确认。 */
-  function ownerButton(label: string, confirmText: string, owner: boolean) {
+  /** owner 动作：设为/取消均为可恢复的权限变更，按 warning 意图二次确认。 */
+  function ownerButton(label: string, confirmTitle: string, confirmContent: string, owner: boolean): ReactNode {
     return (
       <Button
-        size="small"
+        key={owner ? "set-owner" : "unset-owner"}
         loading={setOwner.pending}
         disabled={setOwner.pending}
         onClick={() =>
-          confirm(confirmText, () => {
-            void setOwner.run({ userId: userIdNum, owner });
+          confirm({
+            intent: "warning",
+            title: confirmTitle,
+            content: confirmContent,
+            action: () => setOwner.run({ userId: userIdNum, owner }),
           })
         }
       >

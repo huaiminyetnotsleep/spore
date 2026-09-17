@@ -4,8 +4,9 @@ import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "../../api/client";
 import { fetchRequestDetail, fetchSettings, type RequestDetail } from "../../api/admin";
-import { dumpBackfillRequest } from "../../api/mutations";
+import { cancelRequest, dumpBackfillRequest, retryRequest } from "../../api/mutations";
 import { RequestDetailPage } from "./RequestDetailPage";
 
 vi.mock("../../api/admin", async () => {
@@ -22,12 +23,16 @@ vi.mock("../../api/mutations", async () => {
   return {
     ...actual,
     dumpBackfillRequest: vi.fn(),
+    retryRequest: vi.fn(),
+    cancelRequest: vi.fn(),
   };
 });
 
 const fetchRequestDetailMock = vi.mocked(fetchRequestDetail);
 const fetchSettingsMock = vi.mocked(fetchSettings);
 const dumpBackfillRequestMock = vi.mocked(dumpBackfillRequest);
+const retryRequestMock = vi.mocked(retryRequest);
+const cancelRequestMock = vi.mocked(cancelRequest);
 
 function detail(overrides: Partial<RequestDetail> = {}): RequestDetail {
   return {
@@ -86,6 +91,62 @@ describe("请求记录详情页", () => {
       .mockReset()
       .mockResolvedValue({ dump_channel_id: -1001234567890 } as never);
     dumpBackfillRequestMock.mockReset();
+    retryRequestMock.mockReset();
+    cancelRequestMock.mockReset();
+  });
+
+  it("渲染唯一 H1「请求详情」，返回入口为按钮且取消/转存/重试集中在详情操作区", async () => {
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "failed" }));
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "请求详情" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // 返回请求记录保持原可访问名，但不再是 <Link><Button/></Link> 嵌套
+    const backButton = screen.getByRole("button", { name: "返回请求记录" });
+    expect(backButton.closest("a")).toBeNull();
+    // 详情操作分区存在，失败请求的重试入口在其中
+    expect(await screen.findByText("详情操作")).toBeInTheDocument();
+    expect(screen.getByText("该请求失败，可受控重试")).toBeInTheDocument();
+  });
+
+  it("404 时展示详情未找到", async () => {
+    fetchRequestDetailMock.mockRejectedValue(new ApiError("请求不存在", 404, "NOT_FOUND"));
+
+    renderPage();
+
+    expect(await screen.findByText("请求不存在")).toBeInTheDocument();
+    expect(screen.queryByText("详情操作")).not.toBeInTheDocument();
+  });
+
+  it("失败请求重试：确认后提交（不扣额度文案保留）并提示成功", async () => {
+    retryRequestMock.mockResolvedValue({ ok: true } as never);
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "failed" }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "重 试" }));
+    expect(await screen.findByText("确定重试该请求？不扣减额度，累计尝试 +1。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(retryRequestMock).toHaveBeenCalledWith(1));
+    expect(await screen.findByText("已重新入队（不扣减额度）")).toBeInTheDocument();
+  });
+
+  it("处理中请求取消：warning 意图确认后提交", async () => {
+    cancelRequestMock.mockResolvedValue({ ok: true } as never);
+    fetchRequestDetailMock.mockResolvedValue(detail({ status: "processing" }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
+    const confirmButton = await screen.findByRole("button", { name: "确 认" });
+    // 取消是可恢复的状态变更：确认按钮非 danger（warning 意图）
+    expect(confirmButton).not.toHaveClass("ant-btn-dangerous");
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(cancelRequestMock).toHaveBeenCalledWith(1));
+    expect(await screen.findByText("请求已取消。")).toBeInTheDocument();
   });
 
   it("展示相册成员类型和独立的源媒体 DC", async () => {

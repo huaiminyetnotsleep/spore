@@ -17,9 +17,7 @@ import {
   Segmented,
   Select,
   Space,
-  Table,
   Tag,
-  Tooltip,
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -63,8 +61,13 @@ import {
   requestMediaTypeText,
 } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
+import { DataTable } from "../shared/DataTable";
+import { FilterBar } from "../shared/FilterBar";
+import { FormModal } from "../shared/FormModal";
+import { PageScaffold, PageSection, ResponsiveActionBar } from "../shared/PageLayout";
+import { LoadError } from "../shared/PageStates";
 import { applyListFilters } from "../shared/listFilters";
-import { LoadError, PageCard } from "../shared/PageStates";
+import { RowActions, type RowActionItem } from "../shared/RowActions";
 import { RequestProgress, RequestProgressEmpty } from "./RequestProgress";
 
 const { Text } = Typography;
@@ -134,6 +137,11 @@ interface RequestQuery {
   until?: string;
 }
 
+/** 补存目的地弹层表单：单条与批量共用，留空表示使用云盘默认目的地。 */
+interface ArchiveFormValues {
+  destination?: string;
+}
+
 /** 表单值 → 查询参数（日期转 YYYY-MM-DD，空值剔除）。 */
 function toQueryValues(values: RequestFormValues): RequestQuery {
   const day = (d: Dayjs | null | undefined) => (d ? d.format("YYYY-MM-DD") : undefined);
@@ -175,6 +183,7 @@ function dateValue(value?: string): Dayjs | null {
 
 export function RequestsListPage() {
   const [form] = Form.useForm<RequestFormValues>();
+  const [archiveForm] = Form.useForm<ArchiveFormValues>();
   const [searchParams] = useSearchParams();
   const searchFilters = useMemo(() => filtersFromSearchParams(searchParams), [searchParams]);
   const [filters, setFilters] = useState<RequestQuery>(searchFilters);
@@ -182,6 +191,8 @@ export function RequestsListPage() {
   const [pageSize, setPageSize] = useState(20);
   const [batchMode, setBatchMode] = useState<BatchMode>("cancel");
   const [selectedIDs, setSelectedIDs] = useState<number[]>([]);
+  /** 行级目标 key：单条操作 pending 只让当前行按钮进入 loading。 */
+  const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
   const confirm = useConfirmAction();
 
   // 云盘配置只用于补存入口的可用性判断与目的地选择；查询失败不阻塞列表。
@@ -196,9 +207,9 @@ export function RequestsListPage() {
     label: botLabel(bot.bot_id, bot.username),
   }));
 
-  // 补存目的地弹层（单条/批量共用）：目标 ID 集合 + 当前选中的目的地。
+  // 补存目的地弹层（单条/批量共用）：目标 ID 集合由页面持有，
+  // 目的地选择经 FormModal 表单承载，缺省值在打开时写入。
   const [archiveTarget, setArchiveTarget] = useState<number[] | null>(null);
-  const [archiveDestination, setArchiveDestination] = useState("");
   const [batchSummary, setBatchSummary] = useState<BatchSummaryState | null>(null);
 
   const destinationOptions = (cloudDrive.data?.destinations ?? [])
@@ -209,9 +220,9 @@ export function RequestsListPage() {
   const openArchiveModal = (ids: number[]) => {
     const enabledNames = destinationOptions.map((option) => option.value);
     const preferred = cloudDrive.data?.default_destination ?? "";
-    setArchiveDestination(
-      enabledNames.includes(preferred) ? preferred : (enabledNames[0] ?? ""),
-    );
+    archiveForm.setFieldsValue({
+      destination: enabledNames.includes(preferred) ? preferred : (enabledNames[0] ?? ""),
+    });
     setArchiveTarget(ids);
   };
 
@@ -246,12 +257,18 @@ export function RequestsListPage() {
 
   const invalidateRequestQueries = [["requests"], ["channels"], ["users"], ["overview"]];
   const remove = useAdminAction({
-    action: (id: number) => deleteRequest(id),
+    action: (id: number) => {
+      setBusyRequestId(id);
+      return deleteRequest(id);
+    },
     invalidate: invalidateRequestQueries,
     successText: "记录已删除。",
   });
   const cancel = useAdminAction({
-    action: (id: number) => cancelRequest(id),
+    action: (id: number) => {
+      setBusyRequestId(id);
+      return cancelRequest(id);
+    },
     invalidate: invalidateRequestQueries,
     successText: "请求已取消。",
     onDone: () => setSelectedIDs([]),
@@ -259,8 +276,10 @@ export function RequestsListPage() {
   // 云盘补存：管理端动作绕过用户配额与去重窗口；在途补存等服务端校验
   // （409 受控文案），列表行数据不含补存在途信息，前端不禁用该情形。
   const archive = useAdminAction({
-    action: (input: { id: number; destination?: string }) =>
-      cloudArchiveRequest(input.id, input.destination),
+    action: (input: { id: number; destination?: string }) => {
+      setBusyRequestId(input.id);
+      return cloudArchiveRequest(input.id, input.destination);
+    },
     invalidate: invalidateRequestQueries,
     successText: "已创建云盘补存任务，新请求行将以「网盘」投递方式出现在列表中。",
   });
@@ -285,7 +304,10 @@ export function RequestsListPage() {
   // 缓存补写：管理端动作绕过用户配额与去重窗口；已有副本/未配置等服务端
   // 校验（409/503 受控文案），列表行数据不含副本信息，前端不禁用该情形。
   const dumpBackfill = useAdminAction({
-    action: (id: number) => dumpBackfillRequest(id),
+    action: (id: number) => {
+      setBusyRequestId(id);
+      return dumpBackfillRequest(id);
+    },
     invalidate: invalidateRequestQueries,
     successText: "已创建缓存补写任务，新请求行将以「缓存补写」投递方式出现在列表中。",
   });
@@ -337,6 +359,10 @@ export function RequestsListPage() {
     },
     onDone: () => setSelectedIDs([]),
   });
+
+  // 批量提交期间冻结 selection、批量模式与批量按钮，防止并发批量请求
+  const batchPending =
+    cancelMany.pending || removeMany.pending || archiveMany.pending || dumpBackfillMany.pending;
 
   useEffect(() => {
     setPage(1);
@@ -462,318 +488,312 @@ export function RequestsListPage() {
     {
       title: "操作",
       key: "actions",
+      // 统一行操作（RowActions）：补存/转存内联（带禁用原因 Tooltip），
+      // 取消/删除折叠进「更多」菜单；右固定 + 表格 max-content
       fixed: "right",
-      width: 240,
+      width: 160,
       render: (_, row) => {
         const canCancel = row.status === "queued" || row.status === "processing";
         const archiveReason = archiveDisabledReason(row);
         const dumpReason = dumpDisabledReason(row);
         const actionsPending =
-          cancel.pending || remove.pending || cancelMany.pending || removeMany.pending;
-        return (
-          <Space size={4} wrap={false}>
-            {/* 禁用按钮不触发鼠标事件，包一层 span 让 Tooltip 能展示禁用原因 */}
-            <Tooltip title={archiveReason}>
-              <span>
-                <Button
-                  size="small"
-                  loading={archive.pending}
-                  disabled={archiveReason !== undefined || actionsPending}
-                  onClick={() => openArchiveModal([row.id])}
-                >
-                  存到网盘
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title={dumpReason}>
-              <span>
-                <Button
-                  size="small"
-                  loading={dumpBackfill.pending}
-                  disabled={dumpReason !== undefined || actionsPending}
-                  onClick={() =>
-                    confirm(
-                      `确定将记录 #${row.id} 转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息。`,
-                      () => {
-                        void dumpBackfill.run(row.id);
-                      },
-                    )
-                  }
-                >
-                  转存
-                </Button>
-              </span>
-            </Tooltip>
-            {canCancel ? (
-              <Button
-                size="small"
-                danger
-                loading={cancel.pending}
-                disabled={cancel.pending || cancelMany.pending || removeMany.pending}
-                onClick={() =>
-                  confirm(
-                    `确定取消请求 #${row.id}？取消后不可恢复，但不会删除记录。`,
-                    () => {
-                      void cancel.run(row.id);
-                    },
-                  )
-                }
-              >
-                取消
-              </Button>
-            ) : (
-              <Button
-                size="small"
-                danger
-                loading={remove.pending}
-                disabled={remove.pending || cancelMany.pending || removeMany.pending}
-                onClick={() =>
-                  confirm(
-                    `确定删除记录 #${row.id}？删除后不可恢复，且该记录不再参与统计。未结束（排队/处理中）的记录不可删除。`,
-                    () => {
-                      void remove.run(row.id);
-                    },
-                  )
-                }
-              >
-                删除
-              </Button>
-            )}
-          </Space>
-        );
+          cancel.pending ||
+          remove.pending ||
+          archive.pending ||
+          dumpBackfill.pending ||
+          batchPending;
+        const actions: RowActionItem[] = [
+          {
+            key: "archive",
+            label: "存到网盘",
+            title: archiveReason,
+            loading: busyRequestId === row.id && archive.pending,
+            disabled: archiveReason !== undefined || actionsPending,
+            onClick: () => openArchiveModal([row.id]),
+          },
+          {
+            key: "dump",
+            label: "转存",
+            title: dumpReason,
+            loading: busyRequestId === row.id && dumpBackfill.pending,
+            disabled: dumpReason !== undefined || actionsPending,
+            onClick: () =>
+              confirm({
+                intent: "default",
+                title: "确认转存缓存频道",
+                content: `确定将记录 #${row.id} 转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息。`,
+                action: () => dumpBackfill.run(row.id),
+              }),
+          },
+          canCancel
+            ? {
+                key: "cancel",
+                label: "取消",
+                danger: true,
+                loading: busyRequestId === row.id && cancel.pending,
+                disabled: cancel.pending || cancelMany.pending || removeMany.pending,
+                onClick: () =>
+                  confirm({
+                    intent: "warning",
+                    title: "确认取消请求",
+                    content: `确定取消请求 #${row.id}？取消后不可恢复，但不会删除记录。`,
+                    action: () => cancel.run(row.id),
+                  }),
+              }
+            : {
+                key: "delete",
+                label: "删除",
+                danger: true,
+                loading: busyRequestId === row.id && remove.pending,
+                disabled: remove.pending || cancelMany.pending || removeMany.pending,
+                onClick: () =>
+                  confirm({
+                    intent: "danger",
+                    title: "确认删除记录",
+                    content: `确定删除记录 #${row.id}？删除后不可恢复，且该记录不再参与统计。未结束（排队/处理中）的记录不可删除。`,
+                    action: () => remove.run(row.id),
+                  }),
+              },
+        ];
+        return <RowActions actions={actions} />;
       },
     },
   ];
 
   return (
-    <PageCard
+    <PageScaffold
       title="请求记录"
-      extra={
+      description="仅记录提取请求的执行事实，不含消息正文与媒体本体。"
+      actions={
         <Button href={buildExportURL("/requests/export.csv", { ...filters })}>
           按当前条件导出 CSV
         </Button>
       }
     >
-      <Space direction="vertical" size="middle" className="field-width-full">
-        <Form
-          form={form}
-          layout="inline"
-          onFinish={(values) => {
-            applyListFilters(toQueryValues(values), filters, page, setPage, setFilters, refetch);
-          }}
-        >
-          <Form.Item name="user_id">
-            <Input placeholder="用户 ID" allowClear className="field-width-120" />
-          </Form.Item>
-          <Form.Item name="bot_id">
-            <Select
-              placeholder="机器人"
-              allowClear
-              className="field-width-140"
-              virtual={false}
-              loading={bots.isPending}
-              options={[{ value: "", label: "全部" }, ...botOptions]}
-            />
-          </Form.Item>
-          <Form.Item name="channel">
-            <Input placeholder="频道" allowClear className="field-width-140" />
-          </Form.Item>
-          <Form.Item name="status">
-            <Select
-              placeholder="状态"
-              allowClear
-              className="field-width-110"
-              options={[{ value: "", label: "全部" }, ...STATUS_OPTIONS]}
-            />
-          </Form.Item>
-          <Form.Item name="media_type">
-            <Select
-              placeholder="媒体类型"
-              allowClear
-              className="field-width-120"
-              options={[{ value: "", label: "全部" }, ...MEDIA_TYPE_OPTIONS]}
-            />
-          </Form.Item>
-          <Form.Item name="delivery_mode">
-            {/* virtual={false}：选项少（6 项），全量渲染便于键盘/无障碍访问 */}
-            <Select
-              placeholder="投递方式"
-              allowClear
-              className="field-width-110"
-              virtual={false}
-              options={[{ value: "", label: "全部" }, ...DELIVERY_MODE_OPTIONS]}
-            />
-          </Form.Item>
-          <Form.Item name="error_code">
-            <Input placeholder="错误码" allowClear className="field-width-160" />
-          </Form.Item>
-          <Form.Item name="since">
-            <DatePicker placeholder="开始日期" maxDate={dayjs()} />
-          </Form.Item>
-          <Form.Item name="until">
-            <DatePicker placeholder="结束日期" maxDate={dayjs()} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              筛选
-            </Button>
-          </Form.Item>
-        </Form>
+      <PageSection>
+        <Space direction="vertical" size="middle" className="field-width-full">
+          {/* 九项筛选与 SSR 字段一一对应：提交式筛选，URL 参数同步仍由本页持有 */}
+          <FilterBar<RequestFormValues>
+            mode="submit"
+            form={form}
+            onFinish={(values) => {
+              applyListFilters(toQueryValues(values), filters, page, setPage, setFilters, refetch);
+            }}
+            onReset={() => {
+              applyListFilters({}, filters, page, setPage, setFilters, refetch);
+            }}
+          >
+            <Form.Item name="user_id">
+              <Input placeholder="用户 ID" allowClear className="field-width-120" />
+            </Form.Item>
+            <Form.Item name="bot_id">
+              <Select
+                placeholder="机器人"
+                allowClear
+                className="field-width-140"
+                virtual={false}
+                loading={bots.isPending}
+                options={[{ value: "", label: "全部" }, ...botOptions]}
+              />
+            </Form.Item>
+            <Form.Item name="channel">
+              <Input placeholder="频道" allowClear className="field-width-140" />
+            </Form.Item>
+            <Form.Item name="status">
+              <Select
+                placeholder="状态"
+                allowClear
+                className="field-width-110"
+                options={[{ value: "", label: "全部" }, ...STATUS_OPTIONS]}
+              />
+            </Form.Item>
+            <Form.Item name="media_type">
+              <Select
+                placeholder="媒体类型"
+                allowClear
+                className="field-width-120"
+                options={[{ value: "", label: "全部" }, ...MEDIA_TYPE_OPTIONS]}
+              />
+            </Form.Item>
+            <Form.Item name="delivery_mode">
+              {/* virtual={false}：选项少（6 项），全量渲染便于键盘/无障碍访问 */}
+              <Select
+                placeholder="投递方式"
+                allowClear
+                className="field-width-110"
+                virtual={false}
+                options={[{ value: "", label: "全部" }, ...DELIVERY_MODE_OPTIONS]}
+              />
+            </Form.Item>
+            <Form.Item name="error_code">
+              <Input placeholder="错误码" allowClear className="field-width-160" />
+            </Form.Item>
+            <Form.Item name="since">
+              <DatePicker placeholder="开始日期" maxDate={dayjs()} />
+            </Form.Item>
+            <Form.Item name="until">
+              <DatePicker placeholder="结束日期" maxDate={dayjs()} />
+            </Form.Item>
+          </FilterBar>
 
-        <Space wrap>
-          <Text>批量操作</Text>
-          <Segmented
-            value={batchMode}
-            options={[
-              { label: "取消请求", value: "cancel" },
-              { label: "删除记录", value: "delete" },
-              { label: "存到网盘", value: "archive" },
-              { label: "转存缓存频道", value: "dump" },
-            ]}
-            onChange={(value) => {
-              setBatchMode(value as BatchMode);
-              setSelectedIDs([]);
-            }}
-          />
-          {selectedIDs.length > 0 ? (
-            batchMode === "cancel" ? (
-              <Button
-                danger
-                loading={cancelMany.pending}
-                disabled={cancel.pending || removeMany.pending}
-                onClick={() =>
-                  confirm(
-                    `确定取消已选的 ${selectedIDs.length} 条请求？取消后不可恢复，但不会删除记录。`,
-                    () => {
-                      void cancelMany.run(selectedIDs);
-                    },
-                  )
-                }
-              >
-                批量取消（{selectedIDs.length}）
-              </Button>
-            ) : batchMode === "delete" ? (
-              <Button
-                danger
-                loading={removeMany.pending}
-                disabled={remove.pending || cancelMany.pending}
-                onClick={() =>
-                  confirm(
-                    `确定删除已选的 ${selectedIDs.length} 条记录？删除后不可恢复，且这些记录不再参与请求、频道、用户和总览统计。`,
-                    () => {
-                      void removeMany.run(selectedIDs);
-                    },
-                  )
-                }
-              >
-                批量删除（{selectedIDs.length}）
-              </Button>
-            ) : batchMode === "dump" ? (
-              <Button
-                loading={dumpBackfillMany.pending}
-                disabled={dumpBackfill.pending || cancel.pending || remove.pending}
-                onClick={() =>
-                  confirm(
-                    `确定对已选的 ${selectedIDs.length} 条记录转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息；已有副本的记录会自动跳过。`,
-                    () => {
-                      void dumpBackfillMany.run(selectedIDs);
-                    },
-                  )
-                }
-              >
-                批量转存（{selectedIDs.length}）
-              </Button>
-            ) : (
-              <Button
-                loading={archiveMany.pending}
-                disabled={archive.pending || cancel.pending || remove.pending}
-                onClick={() => openArchiveModal(selectedIDs)}
-              >
-                批量存到网盘（{selectedIDs.length}）
-              </Button>
-            )
-          ) : null}
-          <Text type="secondary">
-            {batchMode === "cancel"
-              ? "仅可选择当前页仍在排队或处理中的记录。"
-              : batchMode === "delete"
-                ? "仅可选择当前页已成功、失败或取消的终态记录。"
-                : batchMode === "dump"
-                  ? dumpChannelReady
-                    ? "仅可选择当前页已结束的记录；副本写入缓存频道，不向用户发送消息。"
-                    : "缓存频道未配置，可在「运行设置」页配置后使用。"
-                  : "仅可选择当前页已结束且非纯文本的记录；云盘下载需在「云盘下载」页开启。"}
-          </Text>
-        </Space>
-        {isError ? (
-          <LoadError onRetry={() => void refetch()} />
-        ) : (
-          <Table<RequestRow>
-            rowKey="id"
-            rowSelection={{
-              selectedRowKeys: selectedIDs,
-              onChange: (keys) => setSelectedIDs(keys.map((key) => Number(key))),
-              getCheckboxProps: (row) => {
-                const active = row.status === "queued" || row.status === "processing";
-                const terminal = TERMINAL_STATUSES.includes(row.status);
-                if (batchMode === "cancel") {
-                  return { disabled: !active };
-                }
-                if (batchMode === "delete") {
-                  return { disabled: !terminal };
-                }
-                if (batchMode === "dump") {
-                  // 转存缓存频道：终态即可（纯文本同样可写副本）；缓存频道
-                  // 未配置时禁用（在途补写由服务端复核）。
-                  return { disabled: dumpDisabledReason(row) !== undefined };
-                }
-                // 存到网盘：终态 ∧ 非纯文本 ∧ 云盘已开启（在途补存由服务端复核）。
-                return { disabled: archiveDisabledReason(row) !== undefined };
-              },
-            }}
-            size="middle"
-            loading={isPending}
-            columns={columns}
-            dataSource={data?.items}
-            locale={{ emptyText: "没有符合条件的记录。" }}
-            scroll={{ x: "max-content" }}
-            pagination={{
-              current: data?.page ?? page,
-              pageSize: data?.page_size ?? pageSize,
-              total: data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (nextPage, nextSize) => {
+          <ResponsiveActionBar align="start" className="batch-action-bar">
+            <Text>批量操作</Text>
+            <Segmented
+              value={batchMode}
+              disabled={batchPending}
+              options={[
+                { label: "取消请求", value: "cancel" },
+                { label: "删除记录", value: "delete" },
+                { label: "存到网盘", value: "archive" },
+                { label: "转存缓存频道", value: "dump" },
+              ]}
+              onChange={(value) => {
+                setBatchMode(value as BatchMode);
                 setSelectedIDs([]);
-                setPage(nextPage);
-                setPageSize(nextSize);
-              },
-            }}
-          />
-        )}
-        <Text type="secondary">仅记录提取请求的执行事实，不含消息正文与媒体本体。</Text>
-      </Space>
+              }}
+            />
+            {selectedIDs.length > 0 ? (
+              batchMode === "cancel" ? (
+                <Button
+                  danger
+                  loading={cancelMany.pending}
+                  disabled={batchPending}
+                  onClick={() =>
+                    confirm({
+                      intent: "warning",
+                      title: "确认批量取消请求",
+                      content: `确定取消已选的 ${selectedIDs.length} 条请求？取消后不可恢复，但不会删除记录。`,
+                      action: () => cancelMany.run(selectedIDs),
+                    })
+                  }
+                >
+                  批量取消（{selectedIDs.length}）
+                </Button>
+              ) : batchMode === "delete" ? (
+                <Button
+                  danger
+                  loading={removeMany.pending}
+                  disabled={batchPending}
+                  onClick={() =>
+                    confirm({
+                      intent: "danger",
+                      title: "确认批量删除记录",
+                      content: `确定删除已选的 ${selectedIDs.length} 条记录？删除后不可恢复，且这些记录不再参与请求、频道、用户和总览统计。`,
+                      action: () => removeMany.run(selectedIDs),
+                    })
+                  }
+                >
+                  批量删除（{selectedIDs.length}）
+                </Button>
+              ) : batchMode === "dump" ? (
+                <Button
+                  loading={dumpBackfillMany.pending}
+                  disabled={batchPending}
+                  onClick={() =>
+                    confirm({
+                      intent: "default",
+                      title: "确认批量转存缓存频道",
+                      content: `确定对已选的 ${selectedIDs.length} 条记录转存缓存频道？将按原链接重新获取源消息并写入干净副本，全程不向用户发送任何消息；已有副本的记录会自动跳过。`,
+                      action: () => dumpBackfillMany.run(selectedIDs),
+                    })
+                  }
+                >
+                  批量转存（{selectedIDs.length}）
+                </Button>
+              ) : (
+                <Button
+                  loading={archiveMany.pending}
+                  disabled={batchPending}
+                  onClick={() => openArchiveModal(selectedIDs)}
+                >
+                  批量存到网盘（{selectedIDs.length}）
+                </Button>
+              )
+            ) : null}
+            <Text type="secondary">
+              {batchMode === "cancel"
+                ? "仅可选择当前页仍在排队或处理中的记录。"
+                : batchMode === "delete"
+                  ? "仅可选择当前页已成功、失败或取消的终态记录。"
+                  : batchMode === "dump"
+                    ? dumpChannelReady
+                      ? "仅可选择当前页已结束的记录；副本写入缓存频道，不向用户发送消息。"
+                      : "缓存频道未配置，可在「运行设置」页配置后使用。"
+                    : "仅可选择当前页已结束且非纯文本的记录；云盘下载需在「云盘下载」页开启。"}
+            </Text>
+          </ResponsiveActionBar>
 
-      {/* 补存目的地弹层：单条与批量共用；缺省选中默认目的地。 */}
-      <Modal
+          {isError ? (
+            <LoadError onRetry={() => void refetch()} />
+          ) : (
+            <DataTable<RequestRow>
+              rowKey="id"
+              loading={isPending}
+              columns={columns}
+              dataSource={data?.items}
+              emptyText="没有符合条件的记录。"
+              rowSelection={{
+                selectedRowKeys: selectedIDs,
+                onChange: (keys) => {
+                  if (!batchPending) setSelectedIDs(keys.map((key) => Number(key)));
+                },
+                getCheckboxProps: (row) => {
+                  const active = row.status === "queued" || row.status === "processing";
+                  const terminal = TERMINAL_STATUSES.includes(row.status);
+                  if (batchPending) {
+                    return { disabled: true };
+                  }
+                  if (batchMode === "cancel") {
+                    return { disabled: !active };
+                  }
+                  if (batchMode === "delete") {
+                    return { disabled: !terminal };
+                  }
+                  if (batchMode === "dump") {
+                    // 转存缓存频道：终态即可（纯文本同样可写副本）；缓存频道
+                    // 未配置时禁用（在途补写由服务端复核）。
+                    return { disabled: dumpDisabledReason(row) !== undefined };
+                  }
+                  // 存到网盘：终态 ∧ 非纯文本 ∧ 云盘已开启（在途补存由服务端复核）。
+                  return { disabled: archiveDisabledReason(row) !== undefined };
+                },
+              }}
+              pagination={{
+                current: data?.page ?? page,
+                pageSize: data?.page_size ?? pageSize,
+                total: data?.total ?? 0,
+                onChange: (nextPage, nextSize) => {
+                  setSelectedIDs([]);
+                  setPage(nextPage);
+                  setPageSize(nextSize);
+                },
+              }}
+            />
+          )}
+        </Space>
+      </PageSection>
+
+      {/* 补存目的地弹层（表单）：单条与批量共用；缺省选中默认目的地，
+          pending 期间防重复提交，失败时保留弹层。 */}
+      <FormModal<ArchiveFormValues>
         open={archiveTarget !== null}
         title={
           archiveTarget && archiveTarget.length > 1
             ? `批量存到网盘（${archiveTarget.length} 条）`
             : "存到网盘"
         }
-        okText={archiveTarget && archiveTarget.length > 1 ? "批量存入" : "存到网盘"}
-        cancelText="取消"
-        confirmLoading={archive.pending || archiveMany.pending}
-        onCancel={() => setArchiveTarget(null)}
-        onOk={() => {
-          if (!archiveTarget) return;
-          const destination = archiveDestination || undefined;
-          setArchiveTarget(null);
+        form={archiveForm}
+        onOpenChange={(open) => {
+          if (!open) setArchiveTarget(null);
+        }}
+        submitText={archiveTarget && archiveTarget.length > 1 ? "批量存入" : "存到网盘"}
+        onSubmit={async (values) => {
+          if (!archiveTarget) return false;
+          const destination = values.destination || undefined;
           if (archiveTarget.length === 1) {
-            void archive.run({ id: archiveTarget[0], destination });
-          } else {
-            void archiveMany.run({ ids: archiveTarget, destination });
+            return (await archive.run({ id: archiveTarget[0], destination })) !== undefined;
           }
+          return (await archiveMany.run({ ids: archiveTarget, destination })) !== undefined;
         }}
       >
         <Space direction="vertical" size="small" className="field-width-full">
@@ -781,18 +801,20 @@ export function RequestsListPage() {
             将按原链接重新抓取媒体并上传到所选目的地，不重发回
             Telegram；管理端补存不占用用户配额，新建的请求行以「网盘」投递方式出现在列表中。
           </Text>
-          <Select
-            aria-label="补存目的地"
-            value={archiveDestination || undefined}
-            placeholder="选择目的地"
-            options={destinationOptions}
-            onChange={setArchiveDestination}
-            className="field-width-240"
-          />
+          <Form.Item name="destination" noStyle>
+            <Select
+              aria-label="补存目的地"
+              placeholder="选择目的地"
+              options={destinationOptions}
+              allowClear
+              className="field-width-240"
+            />
+          </Form.Item>
         </Space>
-      </Modal>
+      </FormModal>
 
-      {/* 批量操作逐条结果摘要（网盘补存/缓存补写共用）：成功创建数 + 跳过原因。 */}
+      {/* 批量操作逐条结果摘要（网盘补存/缓存补写共用）：非表单结果弹层，
+          不使用 FormModal。 */}
       <Modal
         open={batchSummary !== null}
         title={batchSummary?.title ?? ""}
@@ -836,6 +858,6 @@ export function RequestsListPage() {
           </Space>
         ) : null}
       </Modal>
-    </PageCard>
+    </PageScaffold>
   );
 }

@@ -139,6 +139,25 @@ function renderPage() {
   return invalidateSpy;
 }
 
+/**
+ * 打开第 index 行操作列的「更多」菜单，返回最新打开的菜单元素。
+ * 操作列第三项及以后（取消/删除）折叠进菜单，须先展开再触发。
+ * 若该行菜单已处于打开状态，第一次点击会切换为关闭，此处再点一次确保展开。
+ */
+async function openRowMenu(index = 0) {
+  const moreButtons = await screen.findAllByRole("button", { name: "更多操作" });
+  fireEvent.click(moreButtons[index]);
+  const opened = await screen
+    .findAllByRole("menu", {}, { timeout: 1500 })
+    .catch(() => null);
+  if (opened) {
+    return opened[opened.length - 1];
+  }
+  fireEvent.click(moreButtons[index]);
+  const menus = await screen.findAllByRole("menu");
+  return menus[menus.length - 1];
+}
+
 describe("请求记录列表页", () => {
   beforeEach(() => {
     fetchRequestsMock.mockReset();
@@ -153,6 +172,72 @@ describe("请求记录列表页", () => {
     cloudArchiveBatchMock.mockReset();
     dumpBackfillRequestMock.mockReset();
     dumpBackfillRequestsMock.mockReset();
+  });
+
+  it("渲染唯一 H1 页面标题「请求记录」", async () => {
+    fetchRequestsMock.mockResolvedValue(envelope([requestRow({})]));
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "请求记录" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("重置按钮恢复无条件查询并清空筛选输入", async () => {
+    fetchRequestsMock.mockResolvedValue(envelope([requestRow({})]));
+
+    renderPage();
+    await screen.findByText("example");
+
+    fireEvent.change(screen.getByPlaceholderText("用户 ID"), { target: { value: "301" } });
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+    await waitFor(() =>
+      expect(fetchRequestsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: "301" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "重 置" }));
+
+    await waitFor(() =>
+      expect(fetchRequestsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, page_size: 20, user_id: undefined }),
+      ),
+    );
+    expect(screen.getByPlaceholderText("用户 ID")).toHaveValue("");
+  });
+
+  // 多阶段交互（勾选→确认→等待整列冻结）串行等待较多，
+  // 并行测试负载下可能超出默认 5s，显式放宽该用例超时（同 UsersListPage 先例）。
+  it(
+    "批量提交期间冻结 selection 与批量模式切换",
+    async () => {
+    cancelRequestsMock.mockReturnValue(new Promise(() => undefined) as never);
+    fetchRequestsMock.mockResolvedValue(
+      envelope([
+        requestRow({ id: 11, status: "processing" }),
+        requestRow({ id: 12, status: "succeeded" }),
+      ]),
+    );
+
+    renderPage();
+    await screen.findAllByText("example");
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: /批量取消/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    // 提交未完成：checkbox 与批量模式切换均被冻结
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).disabled),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("radio", { name: "删除记录" }).closest(".ant-segmented-item")).toHaveClass(
+      "ant-segmented-item-disabled",
+    );
+    expect(screen.getByRole("button", { name: /批量取消/ })).toHaveClass("ant-btn-loading");
   });
 
   it("processing 记录渲染实时下载/上传进度，终态记录显示占位", async () => {
@@ -277,12 +362,13 @@ describe("请求记录列表页", () => {
     expect(fetchRequestsMock).toHaveBeenCalledTimes(2);
   });
 
-  it("删除记录：二次确认后提交，成功失效派生统计 query 并提示", async () => {
+  it("删除记录：「更多」菜单动作二次确认后提交，成功失效派生统计 query 并提示", async () => {
     deleteRequestMock.mockResolvedValue({ ok: true });
     fetchRequestsMock.mockResolvedValue(envelope([requestRow({})]));
     const invalidateSpy = renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "删 除" }));
+    const menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "删除" }));
 
     // 删除是不可恢复操作，先弹二次确认
     expect(
@@ -309,7 +395,8 @@ describe("请求记录列表页", () => {
     fetchRequestsMock.mockResolvedValue(envelope([requestRow({})]));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "删 除" }));
+    const menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
 
     expect(
@@ -318,12 +405,13 @@ describe("请求记录列表页", () => {
     expect(screen.queryByText("记录已删除。")).not.toBeInTheDocument();
   });
 
-  it("活动请求显示取消按钮，确认后提交并刷新派生查询", async () => {
+  it("活动请求显示取消动作，确认后提交并刷新派生查询", async () => {
     cancelRequestMock.mockResolvedValue({ ok: true });
     fetchRequestsMock.mockResolvedValue(envelope([requestRow({ status: "processing" })]));
     const invalidateSpy = renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "取 消" }));
+    const menu = await openRowMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "取消" }));
     expect(await screen.findByText(/确定取消请求 #1？取消后不可恢复/)).toBeInTheDocument();
     expect(cancelRequestMock).not.toHaveBeenCalled();
 
@@ -634,7 +722,7 @@ describe("请求记录列表页", () => {
     );
     const invalidateSpy = renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "转 存" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "转存" }))[0]);
     fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
 
     await waitFor(() => expect(dumpBackfillRequestMock).toHaveBeenCalledWith(11));
@@ -655,7 +743,7 @@ describe("请求记录列表页", () => {
     );
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "转 存" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "转存" }))[0]);
     fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
 
     expect(await screen.findByText("缓存频道已有该链接的副本，无需重复转存。")).toBeInTheDocument();

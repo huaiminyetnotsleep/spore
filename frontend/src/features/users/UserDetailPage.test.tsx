@@ -4,14 +4,14 @@
  * 且不误报成功。API 层以模块 mock 注入，不发起真实网络请求。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../../api/client";
 import { fetchUserDetail, type UserDetail } from "../../api/admin";
-import { setUserCloudDownload, setUserStatus } from "../../api/mutations";
+import { resetUserQuota, setUserCloudDownload, setUserStatus } from "../../api/mutations";
 import { UserDetailPage } from "./UserDetailPage";
 
 vi.mock("../../api/admin", async () => {
@@ -28,12 +28,14 @@ vi.mock("../../api/mutations", async () => {
     ...actual,
     setUserStatus: vi.fn(),
     setUserCloudDownload: vi.fn(),
+    resetUserQuota: vi.fn(),
   };
 });
 
 const fetchUserDetailMock = vi.mocked(fetchUserDetail);
 const setUserStatusMock = vi.mocked(setUserStatus);
 const setUserCloudDownloadMock = vi.mocked(setUserCloudDownload);
+const resetUserQuotaMock = vi.mocked(resetUserQuota);
 
 function detail(overrides: Partial<UserDetail>): UserDetail {
   return {
@@ -90,7 +92,89 @@ describe("用户详情页写操作", () => {
     fetchUserDetailMock.mockReset();
     setUserStatusMock.mockReset();
     setUserCloudDownloadMock.mockReset();
+    resetUserQuotaMock.mockReset();
     fetchUserDetailMock.mockResolvedValue(detail({}));
+  });
+
+  it("渲染唯一 H1「用户详情」，数据口径说明仅在加载成功后出现，返回入口为按钮", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "用户详情" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // 数据口径说明在 Gate 内：成功态可见
+    expect(await screen.findByText(/今日已用按运营时区当日统计/)).toBeInTheDocument();
+    // 返回列表保持原目的地/可访问名，但不再是 <Link><Button/></Link> 嵌套
+    const backButton = screen.getByRole("button", { name: "返回列表" });
+    expect(backButton.closest("a")).toBeNull();
+  });
+
+  it("404 时展示详情未找到，且不泄漏数据口径说明", async () => {
+    fetchUserDetailMock.mockRejectedValue(new ApiError("用户不存在", 404, "NOT_FOUND"));
+
+    renderPage();
+
+    expect(await screen.findByText("用户不存在")).toBeInTheDocument();
+    expect(screen.queryByText(/今日已用按运营时区当日统计/)).not.toBeInTheDocument();
+    expect(screen.queryByText("保存限额")).not.toBeInTheDocument();
+  });
+
+  it("查看请求记录/查看频道绑定聚合进「操作」分区（普通按钮，资料行不再嵌链接）", async () => {
+    renderPage();
+
+    // 资料表「累计请求数」行只保留数字，不再嵌入链接
+    expect(await screen.findByText("累计请求数")).toBeInTheDocument();
+    const descriptions = screen.getByText("累计请求数").closest(".ant-descriptions");
+    expect(descriptions).not.toBeNull();
+    expect(
+      within(descriptions as HTMLElement).queryByRole("link", { name: "查看请求记录" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(descriptions as HTMLElement).queryByRole("link", { name: "查看频道绑定" }),
+    ).not.toBeInTheDocument();
+
+    // 操作分区平铺聚合所有用户操作：查看入口为普通按钮（不再是 <Link>）
+    const actionsSection = screen.getByText("操作").closest(".page-section");
+    expect(actionsSection).not.toBeNull();
+    const viewRequests = within(actionsSection as HTMLElement).getByRole("button", {
+      name: "查看请求记录",
+    });
+    const viewBindings = within(actionsSection as HTMLElement).getByRole("button", {
+      name: "查看频道绑定",
+    });
+    expect(viewRequests.closest("a")).toBeNull();
+    expect(viewBindings.closest("a")).toBeNull();
+    // 原有管理动作与查看入口聚合在同一操作区
+    expect(within(actionsSection as HTMLElement).getByRole("button", { name: "禁 用" })).toBeInTheDocument();
+    expect(
+      within(actionsSection as HTMLElement).getByRole("button", { name: "重置今日用量" }),
+    ).toBeInTheDocument();
+    expect(
+      within(actionsSection as HTMLElement).getByRole("button", { name: "刷新 Telegram 资料" }),
+    ).toBeInTheDocument();
+  });
+
+  it("禁用确认按 warning 意图弹窗（确认按钮非 danger），文案与列表页一致", async () => {
+    setUserStatusMock.mockResolvedValue({ ok: true, status: "disabled" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "禁 用" }));
+
+    const confirmButton = await screen.findByRole("button", { name: "确 认" });
+    // warning 意图：确认按钮不再是旧版一律 danger 的红色
+    expect(confirmButton).not.toHaveClass("ant-btn-dangerous");
+    expect(await screen.findByText("确定禁用该用户？其新请求将被立即拒绝。")).toBeInTheDocument();
+  });
+
+  it("重置今日用量按 default 意图确认后提交", async () => {
+    resetUserQuotaMock.mockResolvedValue({ ok: true } as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "重置今日用量" }));
+    expect(await screen.findByText("确定重置该用户今日已用额度为 0？")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(resetUserQuotaMock).toHaveBeenCalledWith(7));
+    expect(await screen.findByText("当日已用额度已重置。")).toBeInTheDocument();
   });
 
   it("禁用用户：确认弹窗触发后提交，成功失效用户 query 并提示", async () => {

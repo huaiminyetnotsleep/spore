@@ -5,12 +5,13 @@
  * （不扣额度，累计尝试 +1；attempt 上限/用户启用由服务端复核）。
  * 云盘请求（delivery_mode=cloud 或有 cloud_uploads 记录）追加「云盘上传」
  * 区块，逐文件列出远端路径/目的地/状态/字节/错误；补存行展示「补存自 #id」
- * 并链接到原请求详情。
+ * 并链接到原请求详情。取消/转存/重试集中在「详情操作」分区，确认意图
+ * 按共享契约分级（取消=warning，转存/重试=default），pending 期间防重复提交。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Descriptions, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Descriptions, Space, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { fetchRequestDetail, fetchSettings, type CloudUploadRow } from "../../api/admin";
 import { cancelRequest, dumpBackfillRequest, retryRequest } from "../../api/mutations";
@@ -30,7 +31,9 @@ import {
   labelOf,
 } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
-import { DetailGate, PageCard } from "../shared/PageStates";
+import { DataTable } from "../shared/DataTable";
+import { PageScaffold, PageSection, ResponsiveActionBar } from "../shared/PageLayout";
+import { DetailGate } from "../shared/PageStates";
 import { RequestProgress } from "./RequestProgress";
 
 const { Text } = Typography;
@@ -99,6 +102,7 @@ export function RequestDetailPage() {
   const { id } = useParams();
   const requestId = id ?? "";
   const requestIdNum = Number(requestId);
+  const navigate = useNavigate();
   const query = useQuery({
     queryKey: ["requests", "detail", requestId],
     queryFn: () => fetchRequestDetail(requestId),
@@ -150,7 +154,11 @@ export function RequestDetailPage() {
     ["succeeded", "failed", "cancelled"].includes(detail.status);
 
   return (
-    <Space direction="vertical" size="middle" className="field-width-full">
+    <PageScaffold
+      title="请求详情"
+      description="展示来源、状态、尝试次数与各阶段时间；失败请求可受控重试。"
+      actions={<Button onClick={() => void navigate("/requests")}>返回请求记录</Button>}
+    >
       <DetailGate
         loading={query.isPending}
         error={query.error}
@@ -160,205 +168,218 @@ export function RequestDetailPage() {
         backText="返回请求记录"
       >
         {detail && (
-          <PageCard
-            title={`请求 ${detail.id}`}
-            extra={
-              <Link to="/requests">
-                <Button>返回请求记录</Button>
-              </Link>
-            }
-          >
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="来源链接">
-                {detail.message_url ? (
-                  <>
-                    <a href={detail.message_url} target="_blank" rel="noopener noreferrer">
-                      {detail.channel_link_text}
-                    </a>
-                    {detail.source_kind === "private" ? (
-                      <Tag color="gold" className="layout-margin-inline-start-8">
-                        私有，需权限
-                      </Tag>
-                    ) : null}
-                  </>
-                ) : (
-                  <Text type="secondary">链接不可用</Text>
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="所属用户">
-                <Link to={`/users/${detail.user_id}`}>{detail.user_id}</Link>
-                {detail.username ? `（@${detail.username}）` : ""}
-              </Descriptions.Item>
-              <Descriptions.Item label="所属频道">
-                <Link to={`/channels/${encodeURIComponent(detail.channel_key)}`}>
-                  {detail.channel_key}
-                </Link>
-              </Descriptions.Item>
-              <Descriptions.Item label="状态">
-                <Tag color={REQUEST_STATUS_TAG_COLORS[detail.status]}>
-                  {labelOf(REQUEST_STATUS_LABELS, detail.status)}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="尝试次数">
-                {detail.attempt} / {detail.attempt_max}（累计含首次）
-              </Descriptions.Item>
-              {detail.error_code ? (
-                <Descriptions.Item label="错误">
-                  {detail.error_code}
-                  <Text type="secondary">（{detail.error_text}）</Text>
+          <>
+            <PageSection title={`请求 ${detail.id}`}>
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="来源链接">
+                  {detail.message_url ? (
+                    <>
+                      <a href={detail.message_url} target="_blank" rel="noopener noreferrer">
+                        {detail.channel_link_text}
+                      </a>
+                      {detail.source_kind === "private" ? (
+                        <Tag color="gold" className="layout-margin-inline-start-8">
+                          私有，需权限
+                        </Tag>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Text type="secondary">链接不可用</Text>
+                  )}
                 </Descriptions.Item>
-              ) : null}
-              <Descriptions.Item label="媒体类型">
-                {distKeyText(detail.media_type)}
-              </Descriptions.Item>
-              {detail.media_type === "album" ? (
-                <Descriptions.Item label="相册内容">
-                  {detail.media_types?.length ? detail.media_types.join(" + ") : "—"}
+                <Descriptions.Item label="所属用户">
+                  <Link to={`/users/${detail.user_id}`}>{detail.user_id}</Link>
+                  {detail.username ? `（@${detail.username}）` : ""}
                 </Descriptions.Item>
-              ) : null}
-              <Descriptions.Item label="大小 / 文件名">
-                {fmtFileSize(detail.file_size)} / {detail.file_name || "—"}
-              </Descriptions.Item>
-              <Descriptions.Item label="源媒体数据中心">
-                <Text>{sourceMediaDCs(detail.source_media_dc_ids)}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="投递方式">
-                <Tag color={DELIVERY_MODE_TAG_COLORS[detail.delivery_mode]}>
-                  {labelOf(DELIVERY_MODE_LABELS, detail.delivery_mode)}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="受理机器人">
-                {botLabel(detail.bot_id, detail.bot_username)}
-              </Descriptions.Item>
-              {detail.parent_request_id ? (
-                <Descriptions.Item label="补存来源">
-                  <Link to={`/requests/${detail.parent_request_id}`}>
-                    补存自 #{detail.parent_request_id}
+                <Descriptions.Item label="所属频道">
+                  <Link to={`/channels/${encodeURIComponent(detail.channel_key)}`}>
+                    {detail.channel_key}
                   </Link>
-                  <Text type="secondary" className="layout-margin-inline-start-8">
-                    （管理端「存到网盘」按原链接重抓取创建的本请求）
-                  </Text>
                 </Descriptions.Item>
-              ) : null}
-              {detail.progress ? (
-                <Descriptions.Item label="实时进度">
-                  <RequestProgress progress={detail.progress} />
+                <Descriptions.Item label="状态">
+                  <Tag color={REQUEST_STATUS_TAG_COLORS[detail.status]}>
+                    {labelOf(REQUEST_STATUS_LABELS, detail.status)}
+                  </Tag>
                 </Descriptions.Item>
-              ) : null}
-              <Descriptions.Item label="请求 / 入队">
-                {fmtTime(detail.requested_at)} / {fmtTime(detail.queued_at)}
-              </Descriptions.Item>
-              <Descriptions.Item label="开始 / 完成">
-                {fmtTime(detail.started_at)} / {fmtTime(detail.finished_at)}
-              </Descriptions.Item>
-              <Descriptions.Item label="耗时">{fmtDuration(detail.duration_ms)}</Descriptions.Item>
-            </Descriptions>
+                <Descriptions.Item label="尝试次数">
+                  {detail.attempt} / {detail.attempt_max}（累计含首次）
+                </Descriptions.Item>
+                {detail.error_code ? (
+                  <Descriptions.Item label="错误">
+                    {detail.error_code}
+                    <Text type="secondary">（{detail.error_text}）</Text>
+                  </Descriptions.Item>
+                ) : null}
+                <Descriptions.Item label="媒体类型">
+                  {distKeyText(detail.media_type)}
+                </Descriptions.Item>
+                {detail.media_type === "album" ? (
+                  <Descriptions.Item label="相册内容">
+                    {detail.media_types?.length ? detail.media_types.join(" + ") : "—"}
+                  </Descriptions.Item>
+                ) : null}
+                <Descriptions.Item label="大小 / 文件名">
+                  {fmtFileSize(detail.file_size)} / {detail.file_name || "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="源媒体数据中心">
+                  <Text>{sourceMediaDCs(detail.source_media_dc_ids)}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="投递方式">
+                  <Tag color={DELIVERY_MODE_TAG_COLORS[detail.delivery_mode]}>
+                    {labelOf(DELIVERY_MODE_LABELS, detail.delivery_mode)}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="受理机器人">
+                  {botLabel(detail.bot_id, detail.bot_username)}
+                </Descriptions.Item>
+                {detail.parent_request_id ? (
+                  <Descriptions.Item label="补存来源">
+                    <Link to={`/requests/${detail.parent_request_id}`}>
+                      补存自 #{detail.parent_request_id}
+                    </Link>
+                    <Text type="secondary" className="layout-margin-inline-start-8">
+                      （管理端「存到网盘」按原链接重抓取创建的本请求）
+                    </Text>
+                  </Descriptions.Item>
+                ) : null}
+                {detail.progress ? (
+                  <Descriptions.Item label="实时进度">
+                    <RequestProgress progress={detail.progress} />
+                  </Descriptions.Item>
+                ) : null}
+                <Descriptions.Item label="请求 / 入队">
+                  {fmtTime(detail.requested_at)} / {fmtTime(detail.queued_at)}
+                </Descriptions.Item>
+                <Descriptions.Item label="开始 / 完成">
+                  {fmtTime(detail.started_at)} / {fmtTime(detail.finished_at)}
+                </Descriptions.Item>
+                <Descriptions.Item label="耗时">{fmtDuration(detail.duration_ms)}</Descriptions.Item>
+              </Descriptions>
+            </PageSection>
+
             {detail.delivery_mode === "cloud" || (detail.cloud_uploads?.length ?? 0) > 0 ? (
-              <Table<CloudUploadRow>
-                className="cloud-uploads-table"
-                title={() => (
-                  <Text strong>
-                    云盘上传（{detail.cloud_uploads?.length ?? 0} 个文件）
+              <PageSection title={`云盘上传（${detail.cloud_uploads?.length ?? 0} 个文件）`}>
+                <DataTable<CloudUploadRow>
+                  density="compact"
+                  rowKey={(row) => `${row.destination}:${row.remote_path}:${row.created_at}`}
+                  columns={cloudUploadColumns}
+                  dataSource={detail.cloud_uploads ?? []}
+                  pagination={false}
+                  emptyText="尚无上传记录（任务排队或未开始上传）。"
+                />
+              </PageSection>
+            ) : null}
+
+            <PageSection title="详情操作">
+              {/* 详情页空间充足：操作平铺为正常尺寸按钮（不用「更多」菜单、不用
+                  文字按钮）——重试为 primary 主操作，取消为 danger，转存为普通
+                  按钮；窄屏由 ResponsiveActionBar 换行。确认意图、pending 与
+                  禁用语义不变。 */}
+              <Space direction="vertical" size="middle" className="field-width-full">
+                {canCancel ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="该请求仍在执行，可以取消"
+                    description={
+                      <Text type="secondary">
+                        取消后不可恢复，但会保留请求记录，不会删除统计事实。
+                      </Text>
+                    }
+                  />
+                ) : null}
+                {canDumpBackfill ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="可将该记录转存缓存频道"
+                    description={
+                      <Text type="secondary">
+                        {dumpChannelReady
+                          ? "按原链接重新获取源消息并写入缓存频道干净副本（不带用户脚注），全程不向用户发送任何消息；缓存频道已有该链接副本时会被跳过。"
+                          : "缓存频道未配置，可先在「运行设置」页配置缓存频道。"}
+                      </Text>
+                    }
+                  />
+                ) : null}
+                {canRetry ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="该请求失败，可受控重试"
+                    description={
+                      <Text type="secondary">
+                        重试不扣减额度，累计尝试 +1；所属用户停用或队列饱和时会被拒绝。
+                      </Text>
+                    }
+                  />
+                ) : (
+                  <Text type="secondary">
+                    {detail.status === "failed" ? "已达最大尝试次数，无法重试。" : "仅失败请求可重试。"}
                   </Text>
                 )}
-                rowKey={(row) => `${row.destination}:${row.remote_path}:${row.created_at}`}
-                size="small"
-                columns={cloudUploadColumns}
-                dataSource={detail.cloud_uploads ?? []}
-                pagination={false}
-                locale={{ emptyText: "尚无上传记录（任务排队或未开始上传）。" }}
-              />
-            ) : null}
-            {canCancel ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="该请求仍在执行，可以取消"
-                description={
-                  <Space direction="vertical">
-                    <Text type="secondary">取消后不可恢复，但会保留请求记录，不会删除统计事实。</Text>
+                <ResponsiveActionBar align="start">
+                  {canRetry ? (
                     <Button
-                      size="small"
-                      danger
-                      loading={cancel.pending}
-                      disabled={cancel.pending}
-                      onClick={() =>
-                        confirm("确定取消该请求？取消后不可恢复，但不会删除记录。", () => {
-                          void cancel.run(requestIdNum);
-                        })
-                      }
-                    >
-                      取消请求
-                    </Button>
-                  </Space>
-                }
-              />
-            ) : null}
-            {canDumpBackfill ? (
-              <Alert
-                type="info"
-                showIcon
-                message="可将该记录转存缓存频道"
-                description={
-                  <Space direction="vertical">
-                    <Text type="secondary">
-                      {dumpChannelReady
-                        ? "按原链接重新获取源消息并写入缓存频道干净副本（不带用户脚注），全程不向用户发送任何消息；缓存频道已有该链接副本时会被跳过。"
-                        : "缓存频道未配置，可先在「运行设置」页配置缓存频道。"}
-                    </Text>
-                    <Button
-                      size="small"
-                      loading={dumpBackfill.pending}
-                      disabled={dumpBackfill.pending || !dumpChannelReady}
-                      onClick={() =>
-                        confirm(
-                          "确定转存缓存频道？将重新获取源消息，不向用户发送任何消息。",
-                          () => {
-                            void dumpBackfill.run(requestIdNum);
-                          },
-                        )
-                      }
-                    >
-                      转存缓存频道
-                    </Button>
-                  </Space>
-                }
-              />
-            ) : null}
-            {canRetry ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="该请求失败，可受控重试"
-                description={
-                  <Space direction="vertical">
-                    <Text type="secondary">
-                      重试不扣减额度，累计尝试 +1；所属用户停用或队列饱和时会被拒绝。
-                    </Text>
-                    <Button
-                      size="small"
                       type="primary"
                       loading={retry.pending}
                       disabled={retry.pending}
                       onClick={() =>
-                        confirm("确定重试该请求？不扣减额度，累计尝试 +1。", () => {
-                          void retry.run(requestIdNum);
+                        confirm({
+                          intent: "default",
+                          title: "确认重试请求",
+                          content: "确定重试该请求？不扣减额度，累计尝试 +1。",
+                          action: () => retry.run(requestIdNum),
                         })
                       }
                     >
                       重试
                     </Button>
-                  </Space>
-                }
-              />
-            ) : (
-              <Text type="secondary">
-                {detail.status === "failed" ? "已达最大尝试次数，无法重试。" : "仅失败请求可重试。"}
-              </Text>
-            )}
-          </PageCard>
+                  ) : null}
+                  {canCancel ? (
+                    <Button
+                      danger
+                      loading={cancel.pending}
+                      disabled={cancel.pending}
+                      onClick={() =>
+                        confirm({
+                          intent: "warning",
+                          title: "确认取消请求",
+                          content: "确定取消该请求？取消后不可恢复，但不会删除记录。",
+                          action: () => cancel.run(requestIdNum),
+                        })
+                      }
+                    >
+                      取消请求
+                    </Button>
+                  ) : null}
+                  {canDumpBackfill ? (
+                    // 禁用按钮不触发鼠标事件：禁用原因经外层 Tooltip + span 保留
+                    <Tooltip title={dumpChannelReady ? undefined : "缓存频道未配置，先在「运行设置」页配置后再转存。"}>
+                      <span>
+                        <Button
+                          loading={dumpBackfill.pending}
+                          disabled={dumpBackfill.pending || !dumpChannelReady}
+                          onClick={() =>
+                            confirm({
+                              intent: "default",
+                              title: "确认转存缓存频道",
+                              content: "确定转存缓存频道？将重新获取源消息，不向用户发送任何消息。",
+                              action: () => dumpBackfill.run(requestIdNum),
+                            })
+                          }
+                        >
+                          转存缓存频道
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  ) : null}
+                </ResponsiveActionBar>
+              </Space>
+            </PageSection>
+          </>
         )}
       </DetailGate>
-    </Space>
+    </PageScaffold>
   );
 }
