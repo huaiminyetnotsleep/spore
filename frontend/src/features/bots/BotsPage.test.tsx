@@ -1,5 +1,5 @@
 /**
- * 机器人管理页测试：列表渲染（身份/状态/来源）、暂停/恢复/移除操作携带
+ * 机器人池管理页测试：列表渲染（身份/状态/来源）、暂停/恢复/移除操作携带
  * bot id 并刷新列表、行级 pending 只影响目标行、添加机器人 FormModal
  * （取消重置草稿、成功后关闭）、token 不回显。API 全部 mock，不触网。
  */
@@ -84,7 +84,7 @@ function renderPage() {
   );
 }
 
-describe("机器人管理页", () => {
+describe("机器人池管理页", () => {
   beforeEach(() => {
     fetchBotsMock.mockReset().mockResolvedValue(botsView());
     addBotMock.mockReset().mockResolvedValue({
@@ -119,10 +119,10 @@ describe("机器人管理页", () => {
     });
   });
 
-  it("渲染唯一 H1 页面标题「机器人管理」与添加入口", async () => {
+  it("渲染唯一 H1 页面标题「机器人池管理」与添加入口", async () => {
     renderPage();
     expect(
-      await screen.findByRole("heading", { level: 1, name: "机器人管理" }),
+      await screen.findByRole("heading", { level: 1, name: "机器人池管理" }),
     ).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "添加机器人" })).toBeInTheDocument();

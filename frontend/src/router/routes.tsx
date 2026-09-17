@@ -283,8 +283,8 @@ export const routeMeta = [
   {
     key: "bots",
     path: "/bots",
-    label: "机器人管理",
-    title: "机器人管理",
+    label: "机器人池管理",
+    title: "机器人池管理",
     groupKey: "bot-management",
     icon: <RobotOutlined />,
     menuVisible: true,
@@ -310,7 +310,7 @@ export const navigationGroups = [
   },
   {
     key: "channel-invited",
-    label: "BotUser受邀频道",
+    label: "MTProto受邀管理",
     routeKeys: ["invite-approvals", "joined-channels", "join-settings"],
   },
   {
@@ -325,7 +325,7 @@ export const navigationGroups = [
   },
   {
     key: "bot-management",
-    label: "机器人",
+    label: "机器人池",
     routeKeys: ["bots"],
   },
   {

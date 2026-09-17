@@ -390,13 +390,13 @@ test.describe("管理端 SPA 本机安全验收", () => {
     await expect(page).toHaveURL(/\/admin\/settings$/);
     await expect(page.getByRole("heading", { name: "运行设置" })).toBeVisible();
 
-    // 从运行设置拆出的两个配置页：请求与频道 → 频道设置；BotUser受邀频道 → 受邀设置。
+    // 从运行设置拆出的两个配置页：请求与频道 → 频道设置；MTProto受邀管理 → 受邀设置。
     await page.getByRole("menuitem", { name: "请求与频道" }).click();
     await page.getByRole("link", { name: "频道设置" }).click();
     await expect(page).toHaveURL(/\/admin\/channel-settings$/);
     await expect(page.getByRole("heading", { name: "频道设置" })).toBeVisible();
 
-    await page.getByRole("menuitem", { name: "BotUser受邀频道" }).click();
+    await page.getByRole("menuitem", { name: "MTProto受邀管理" }).click();
     await page.getByRole("link", { name: "受邀设置" }).click();
     await expect(page).toHaveURL(/\/admin\/join-settings$/);
     await expect(page.getByRole("heading", { name: "受邀设置" })).toBeVisible();

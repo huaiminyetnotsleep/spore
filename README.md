@@ -72,7 +72,7 @@ make dev
 
 同一进程内还有一个 **Bot 身份的 MTProto 会话**（`data/bot-session.json`），用 `.env` 里的 `BOT_TOKEN` 首次启动自动登录、之后静默复用，专职大文件直传，无需任何人工操作。
 
-**多机器人池（可选）**：`BOT_TOKENS`（逗号分隔）或管理端「机器人管理」页可绑定多个 bot（上限 20，修改后重启生效）。所有 bot 平等服务同一套频道绑定——用户从任意 bot 提交，回复从受理 bot 返回，请求记录/用户来源/频道统计/业务统计均按 bot 维度留痕，摊薄单 bot 的限流与封禁风险。绑定频道与缓存频道要求**所有** bot 均为频道管理员；每个 bot 独立 MTProto 大文件直传会话（`data/bot-session-<botID>.json`，首启自动登录）。详见 [配置参考](docs/reference/configuration.md)。
+**多机器人池（可选）**：`BOT_TOKENS`（逗号分隔）或管理端「机器人池管理」页可绑定多个 bot（上限 20，修改后重启生效）。所有 bot 平等服务同一套频道绑定——用户从任意 bot 提交，回复从受理 bot 返回，请求记录/用户来源/频道统计/业务统计均按 bot 维度留痕，摊薄单 bot 的限流与封禁风险。绑定频道与缓存频道要求**所有** bot 均为频道管理员；每个 bot 独立 MTProto 大文件直传会话（`data/bot-session-<botID>.json`，首启自动登录）。详见 [配置参考](docs/reference/configuration.md)。
 
 ## 🐳 Docker Compose 部署
 

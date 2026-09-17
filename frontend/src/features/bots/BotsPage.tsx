@@ -1,5 +1,5 @@
 /**
- * 机器人管理页（多机器人池）：列表展示 env（只读）与 bots.json（可增删）
+ * 机器人池管理页（多机器人池）：列表展示 env（只读）与 bots.json（可增删）
  * 来源的机器人及其运行时状态；添加（token 写入 0600 文件）与删除为写操作，
  * 变更后重启进程生效（提示经系统运维页受控重启）。token 只进不出：页面
  * 任何位置不回显 token，添加后输入框即清空。
@@ -185,7 +185,7 @@ export function BotsPage() {
 
   return (
     <PageScaffold
-      title="机器人管理"
+      title="机器人池管理"
       description="多机器人池平等服务同一套频道绑定；token 只写入服务端，页面不回显。"
       actions={
         <Button type="primary" onClick={() => setAddOpen(true)}>

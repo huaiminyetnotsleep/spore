@@ -621,7 +621,7 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/settings/notification", heading: "通知设置" },
   { path: "/admin/settings/oauth", heading: "GitHub 登录" },
   { path: "/admin/backup", heading: "数据备份" },
-  { path: "/admin/bots", heading: "机器人管理" },
+  { path: "/admin/bots", heading: "机器人池管理" },
   { path: "/admin/mtproto", heading: "Telegram 连接" },
 ];
 

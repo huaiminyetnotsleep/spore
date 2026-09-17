@@ -184,7 +184,7 @@ SourceRef
 - Bot 命令 `/join <t.me/+邀请链接>`：经 `messages.importChatInvite` 让**读取账号**（非 Bot）加入频道；号主提交即时生效，普通用户默认落 `join_requests` 表待号主在管理端审批（同意时延时执行加入并 Bot 私聊通知结果）。**准入边界与普通链接不同**：`/join` 不经过普通链接的 enabled 用户状态准入链（不调用 `access` 校验、不扣额度），是否可用由 join 总开关（`join_enabled`，默认关）与审核/数量上限配置控制；而普通链接、`/download`、`/bind` 都要求 enabled 用户。
 - 加入后按配置执行 `account.updateNotifySettings`（静音）与 `folders.editPeerFolders`（归档到 folder 1）——归档不影响 WalkDialogs 收割（本来就遍历 folder 0/1）。
 - **外部拉入（被邀请）的频道同样按配置归档**：用户号会话轻量消费 update（`ChannelUpdateBridge`，只提取批次携带的频道对象，不建 updates 状态管理），经 peer 缓存过滤出的"新见"频道秒级补静音/归档；已加入频道页刷新、/join 提交（已是成员分支）与 30 分钟周期对账兜底（覆盖离线窗口漏收的 update，重连不补差异）。归档调用幂等（已在归档夹直接成功）。「自动退出外部拉入」开启时退出优先，归档让位给 Enforce 的惰性退出。
-- 管理端「BotUser受邀频道」菜单（加入审批 + 已加入频道 + 受邀设置三页）：审批记录表（服务端分页/筛选/单条与批量删除）+ 已加入频道实时列表（对话遍历、手动刷新加载）+ 单条/批量退出（`channels.leaveChannel`）；/join 配置（总开关 `join_enabled` 默认关、自动退出、审核、静音/归档、数量上限）在「受邀设置」页维护，总开关关闭时 /join 直接拒绝。「自动退出外部拉入」（`join_auto_leave_external`，默认关）开启后，列表刷新与 /join 提交会惰性退出"非本系统加入"的频道（留痕来源 external 或无留痕；Telegram 无"拒绝被拉入"的服务端开关，只能事后拦截）。
+- 管理端「MTProto受邀管理」菜单（加入审批 + 已加入频道 + 受邀设置三页）：审批记录表（服务端分页/筛选/单条与批量删除）+ 已加入频道实时列表（对话遍历、手动刷新加载）+ 单条/批量退出（`channels.leaveChannel`）；/join 配置（总开关 `join_enabled` 默认关、自动退出、审核、静音/归档、数量上限）在「受邀设置」页维护，总开关关闭时 /join 直接拒绝。「自动退出外部拉入」（`join_auto_leave_external`，默认关）开启后，列表刷新与 /join 提交会惰性退出"非本系统加入"的频道（留痕来源 external 或无留痕；Telegram 无"拒绝被拉入"的服务端开关，只能事后拦截）。
 - 数据边界：`join_requests.invite_hash` 为审批延时执行所必需，展示层一律脱敏；`joined_channels` 只留痕 ID/标题/来源/时间，**不存 access_hash**（数据范围红线）。
 
 ### 3.4 媒体传输策略（统一"下载 → 上传"，大文件经 Bot 号 MTProto 直传）

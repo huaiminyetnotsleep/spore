@@ -72,7 +72,7 @@ export const approveApplication = (id: number): Promise<ApplicationReviewResult>
 export const rejectApplication = (id: number): Promise<ApplicationReviewResult> =>
   postJSON<ApplicationReviewResult>(`/api/v1/applications/${id}/reject`);
 
-// ---- 机器人管理（多机器人池） ----
+// ---- 机器人池管理（多机器人池） ----
 
 export interface BotMutationResult extends WriteOK {
   /** 变更后的列表快照（合并运行时身份）。 */

@@ -914,7 +914,7 @@ export function fetchJoinedChannels(): Promise<{ items: JoinedChannelRow[] }> {
   return apiRequest<{ items: JoinedChannelRow[] }>("/api/v1/channel-join/channels");
 }
 
-// ---- 机器人管理（多机器人池） ----
+// ---- 机器人池管理（多机器人池） ----
 
 /**
  * 机器人列表条目（GET /api/v1/bots）。合并 env（只读）与 bots.json（可增删）
