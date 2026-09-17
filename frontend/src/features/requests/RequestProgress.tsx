@@ -1,5 +1,5 @@
 /**
- * 请求实时传输进度（列表与详情共用）：下载/上传两条独立进度条。
+ * 请求实时传输进度（列表与详情共用）：下载/上传两个独立圆形进度条。
  * 下载与上传是重叠进行的两条管线（边下边传），分别展示百分比与字节数。
  * 仅 processing 状态且服务端下发 progress 时渲染，其余场景显示 "—"。
  */
@@ -22,17 +22,27 @@ export function RequestProgress({ progress }: { progress: RequestProgressData })
   const dlPercent = percentOf(progress.downloaded_bytes, progress.total_bytes);
   const upPercent = percentOf(progress.uploaded_bytes, progress.total_bytes);
   return (
-    <Space direction="vertical" size={2}>
-      <Progress
-        size="small"
-        percent={dlPercent}
-        format={(p) => `下载 ${p ?? 0}%（${fmtBytes(progress.downloaded_bytes)}）`}
-      />
-      <Progress
-        size="small"
-        percent={upPercent}
-        format={(p) => `上传 ${p ?? 0}%（${fmtBytes(progress.uploaded_bytes)}）`}
-      />
+    <Space size={12}>
+      <div className="request-progress-item">
+        <Progress
+          type="circle"
+          size={44}
+          strokeWidth={8}
+          percent={dlPercent}
+          format={(p) => `${p ?? 0}%`}
+        />
+        <Text type="secondary">下载 {fmtBytes(progress.downloaded_bytes)}</Text>
+      </div>
+      <div className="request-progress-item">
+        <Progress
+          type="circle"
+          size={44}
+          strokeWidth={8}
+          percent={upPercent}
+          format={(p) => `${p ?? 0}%`}
+        />
+        <Text type="secondary">上传 {fmtBytes(progress.uploaded_bytes)}</Text>
+      </div>
     </Space>
   );
 }

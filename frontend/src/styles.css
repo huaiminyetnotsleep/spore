@@ -599,6 +599,14 @@ body {
   white-space: nowrap;
 }
 
+/* 请求记录：下载/上传圆形进度（圆环 + 下方字节数标签） */
+.request-progress-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
 /* 云盘下载页：目的地卡片列表（Radio.Group 容器转为纵向堆叠） */
 .cloud-dest-list {
   display: flex;

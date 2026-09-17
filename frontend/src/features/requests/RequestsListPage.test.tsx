@@ -254,9 +254,14 @@ describe("请求记录列表页", () => {
 
     renderPage();
 
-    // 进度条按字节数渲染百分比与文案（两条独立管线：下载/上传）
-    expect(await screen.findByText(/下载 50%（500 B）/)).toBeInTheDocument();
-    expect(screen.getByText(/上传 25%（250 B）/)).toBeInTheDocument();
+    // 圆形进度条按字节数渲染百分比与文案（两条独立管线：下载/上传）
+    expect(await screen.findByText("50%")).toBeInTheDocument();
+    expect(screen.getByText("25%")).toBeInTheDocument();
+    expect(screen.getByText("下载 500 B")).toBeInTheDocument();
+    expect(screen.getByText("上传 250 B")).toBeInTheDocument();
+    expect(
+      document.querySelectorAll(".request-progress-item > .ant-progress.ant-progress-circle"),
+    ).toHaveLength(2);
     // 终态记录无进度，占位显示
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
