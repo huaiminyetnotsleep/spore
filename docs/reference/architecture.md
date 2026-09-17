@@ -294,19 +294,9 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 **选型**：`modernc.org/sqlite`（纯 Go 驱动，无 CGO，保住 `make linux` 交叉编译）+ 标准库 `database/sql`。连接级 PRAGMA 挂在 DSN 上（WAL、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL`），连接数固定为 1——SQLite 单写者，容量目标（≤100 用户、约 5,000 请求/日，约 180 万行/年）远低于其上限，不需要外部数据库服务。
 
-**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：
+**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v15）共 **13 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
 
-| 表 | 内容 |
-| --- | --- |
-| `users` | Telegram 用户（主键即 User ID）、状态（pending/enabled/disabled/archived）、owner 标记、频率/额度/并发限额与最近拒绝记录 |
-| `requests` | 一次提取请求的全生命周期：queued → processing → succeeded/failed，含 attempt、error_code 与媒体诊断元数据 |
-| `usage_daily` | (user_id, 运营时区日 YYYY-MM-DD) 的当日用量与重置次数 |
-| `audit_log` | 管理员/系统变更审计（actor/action/target/before/after JSON） |
-| `events` | 系统异常事件，按 key 去重合并（count/last_at），open/resolved；通知成功时间用于 30 分钟冷却；屏蔽/静音不删除事件 |
-| `settings` | 运行时键值（时区、去重窗口、队列容量、访问密钥哈希、通知通道与通知策略等） |
-| `web_sessions` | 管理端会话（只存 ID 哈希）、CSRF token 与过期时间 |
-
-**数据红线**：消息正文、caption、媒体本体与任何凭据（Token/Session/手机号）不入库；`data/session.json`、`data/peers.json`、`data/tmp/` 维持原有文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
+**数据红线**：消息正文、caption、媒体本体与明文凭据（Token/Session/手机号）不入库；通知通道与 GitHub OAuth 的可轮换外部凭据以 AES-256-GCM 密文存于 `settings`，Web 访问密钥只存 SHA-256 哈希；云盘凭据在 `data/cloud-drive.json` 文件中，不进数据库。`data/session.json`、`data/peers.json`、`data/tmp/` 维持文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
 
 **与执行链路的关系**：任务执行仍是内存队列（channel + worker + 退出 drain）；`requests` 行是状态事实来源，worker 在阶段边界更新。数据库不在媒体传输热路径上。
 

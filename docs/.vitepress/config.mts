@@ -55,7 +55,8 @@ export default defineConfig({
           text: '配置与接口',
           items: [
             { text: '配置参考', link: '/reference/configuration' },
-            { text: '管理端 API', link: '/reference/api' }
+            { text: '管理端 API', link: '/reference/api' },
+            { text: '数据库设计', link: '/reference/database-schema' }
           ]
         },
         {

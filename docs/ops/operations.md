@@ -315,7 +315,8 @@ shasum -a 256 /受保护位置/spore-backup-YYYYMMDD-HHMMSS.db
 
 应用启动时会读取 SQLite 的 `PRAGMA user_version`，自动执行当前版本缺少的内嵌迁移。
 迁移按版本递增，每个版本在独立事务中提交；已发布的迁移脚本不得修改，新的表结构变化
-应随新版本应用一起发布。
+应随新版本应用一起发布。全部表结构、字段语义、迁移历史与备份校验边界的完整说明见
+[数据库设计参考](../reference/database-schema.md)。
 
 同机升级时，GHCR 镜像部署执行：
 
@@ -556,7 +557,8 @@ docker compose up -d bot
 在管理端打开 **备份**，点击导出。服务使用 SQLite `VACUUM INTO` 生成一致快照，
 流式下载完成后删除服务器临时文件；导出动作写入审计，并在页面记录最近备份时间。
 备份只包含业务数据库，不包含 Session、Peer 缓存、临时媒体、`.env` 或宿主机反向
-代理的证书、私钥与配置。`data/bot-session.json`（Bot 身份 MTProto 会话）同样不在
+代理的证书、私钥与配置（数据库内的表、字段与备份校验边界见
+[数据库设计参考](../reference/database-schema.md)）。`data/bot-session.json`（Bot 身份 MTProto 会话）同样不在
 备份内，但恢复后下次启动会用 `BOT_TOKEN` 自动重登，无需任何人工操作。
 
 管理端也支持从“备份”页面导入 Spore 导出的 `.db` 文件。上传后先执行 SQLite 完整性、

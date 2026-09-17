@@ -147,6 +147,7 @@ make linux   # 交叉编译 Linux 二进制
 | [下载功能](docs/guide/download.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/download) | 云盘下载的目的地配置与边界 |
 | [配置参考](docs/reference/configuration.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/configuration) | 环境变量、持久化设置、生效时机 |
 | [管理端 API](docs/reference/api.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/api) | `/api/v1` 接口契约 |
+| [数据库设计](docs/reference/database-schema.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/database-schema) | 表结构、字段、索引、迁移历史与接口持久化映射 |
 | [架构文档](docs/reference/architecture.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/architecture) | 架构、模块职责与技术决策 |
 | [运维手册](docs/ops/operations.md) | [↗](https://huaiminyetnotsleep.github.io/spore/ops/operations) | 升级、备份恢复、云盘运维 |
 | [本地开发](docs/guide/development.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/development) | 构建、测试与验收门禁 |
