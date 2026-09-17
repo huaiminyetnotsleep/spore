@@ -129,6 +129,17 @@ describe("总览页", () => {
     vi.unstubAllGlobals();
   });
 
+  it("渲染唯一 H1「总览」与页面骨架", async () => {
+    stubRoutes(overviewRoutes());
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "总览" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("渲染状态一览四卡、服务信息与系统监控区；业务统计图表不出现在本页", async () => {
     stubRoutes(overviewRoutes());
 

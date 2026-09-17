@@ -6,14 +6,15 @@
  * overview 接口，不受筛选影响）。数据经 GET /api/v1/stats 获取，缺省近 7 天。
  */
 import { useQuery } from "@tanstack/react-query";
-import { DatePicker, Segmented, Select, Space, Spin, Typography } from "antd";
+import { DatePicker, Segmented, Select, Space, Typography } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { lazy, Suspense, useState } from "react";
 
 import { fetchBots, fetchStats, type RangeParams } from "../../api/admin";
 import { botLabel, fmtRate } from "../../shared/format";
-import { LoadError, SectionCard } from "../shared/PageStates";
 import { MetricGrid } from "../shared/MetricGrid";
+import { PageScaffold, PageSection } from "../shared/PageLayout";
+import { PageQueryState } from "../shared/QueryStates";
 import { SnapshotSection } from "./SnapshotSection";
 
 const StatsCharts = lazy(() =>
@@ -70,19 +71,8 @@ export function StatsPage() {
     queryFn: () => fetchStats({ ...range, bot_id: botID }),
   });
 
-  if (isPending) {
-    return (
-      <SectionCard data-testid="spa-shell">
-        <Spin className="page-loading" tip="加载中…" />
-      </SectionCard>
-    );
-  }
-  if (isError || !data) {
-    return <LoadError onRetry={() => void refetch()} />;
-  }
-
-  const requests = data.requests;
-  const done = requests.succeeded + requests.failed;
+  const requests = data?.requests;
+  const done = requests ? requests.succeeded + requests.failed : 0;
   const isAll = preset === "all";
 
   const applyPreset = (key: PresetKey) => {
@@ -114,70 +104,85 @@ export function StatsPage() {
   };
 
   return (
-    <Space direction="vertical" size="middle" className="field-width-full" data-testid="spa-shell">
-      <SectionCard
-        title="时间范围"
-        extra={
-          <Text type="secondary">
-            {data.since_day ? `统计范围：${data.since_day} ~ ${data.until_day}` : "统计范围：全量"}
-          </Text>
-        }
+    <PageScaffold
+      title="业务统计"
+      description="请求核心指标、趋势、排行与分布；时间范围与机器人筛选选完即时生效。"
+      data-testid="spa-shell"
+    >
+      <PageQueryState
+        initialLoading={isPending}
+        error={isError}
+        hasData={data !== undefined}
+        onRetry={() => void refetch()}
       >
-        <Space wrap>
-          <Segmented
-            options={PRESET_OPTIONS}
-            value={preset === "custom" ? undefined : preset}
-            onChange={(value) => applyPreset(value as PresetKey)}
-          />
-          <DatePicker.RangePicker
-            value={pickerValue}
-            onChange={applyPickerRange}
-            placeholder={["开始日期", "结束日期"]}
-            maxDate={dayjs()}
-            allowClear
-            disabled={isAll}
-          />
-          <Select
-            placeholder="机器人"
-            allowClear
-            className="field-width-140"
-            virtual={false}
-            loading={bots.isPending}
-            value={botID}
-            onChange={(value) => setBotID(value || undefined)}
-            options={[{ value: "", label: "全部" }, ...botOptions]}
-          />
-        </Space>
-      </SectionCard>
+        {data && requests ? (
+          <>
+            <PageSection
+              title="时间范围"
+              extra={
+                <Text type="secondary">
+                  {data.since_day ? `统计范围：${data.since_day} ~ ${data.until_day}` : "统计范围：全量"}
+                </Text>
+              }
+            >
+              <Space wrap>
+                <Segmented
+                  options={PRESET_OPTIONS}
+                  value={preset === "custom" ? undefined : preset}
+                  onChange={(value) => applyPreset(value as PresetKey)}
+                />
+                <DatePicker.RangePicker
+                  value={pickerValue}
+                  onChange={applyPickerRange}
+                  placeholder={["开始日期", "结束日期"]}
+                  maxDate={dayjs()}
+                  allowClear
+                  disabled={isAll}
+                />
+                <Select
+                  placeholder="机器人"
+                  allowClear
+                  className="field-width-140"
+                  virtual={false}
+                  loading={bots.isPending}
+                  value={botID}
+                  onChange={(value) => setBotID(value || undefined)}
+                  options={[{ value: "", label: "全部" }, ...botOptions]}
+                />
+              </Space>
+            </PageSection>
 
-      <SectionCard title="核心指标" extra={<Text type="secondary">请求总数 {requests.total}</Text>}>
-        <MetricGrid
-          maxColumns={3}
-          items={[
-            {
-              label: "请求结果",
-              stats: [
-                { label: "成功", value: requests.succeeded, tone: "success" },
-                { label: "失败", value: requests.failed, tone: "danger" },
-                { label: "未完成", value: requests.unfinished, tone: "warning" },
-              ],
-            },
-            {
-              label: "成功率",
-              value: fmtRate(requests.success_rate, done),
-              tone: "success",
-              progress: done > 0 ? requests.success_rate : undefined,
-            },
-            { label: "活跃用户", value: requests.active_users },
-          ]}
-        />
-      </SectionCard>
+            <PageSection title="核心指标" extra={<Text type="secondary">请求总数 {requests.total}</Text>}>
+              <MetricGrid
+                maxColumns={3}
+                items={[
+                  {
+                    label: "请求结果",
+                    stats: [
+                      { label: "成功", value: requests.succeeded, tone: "success" },
+                      { label: "失败", value: requests.failed, tone: "danger" },
+                      { label: "未完成", value: requests.unfinished, tone: "warning" },
+                    ],
+                  },
+                  {
+                    label: "成功率",
+                    value: fmtRate(requests.success_rate, done),
+                    tone: "success",
+                    progress: done > 0 ? requests.success_rate : undefined,
+                  },
+                  { label: "活跃用户", value: requests.active_users },
+                ]}
+              />
+            </PageSection>
 
-      <Suspense fallback={<Spin />}>
-        <StatsCharts requests={requests} />
-      </Suspense>
+            <Suspense fallback={<PageSection loading />}>
+              <StatsCharts requests={requests} />
+            </Suspense>
 
-      <SnapshotSection />
-    </Space>
+            <SnapshotSection />
+          </>
+        ) : null}
+      </PageQueryState>
+    </PageScaffold>
   );
 }

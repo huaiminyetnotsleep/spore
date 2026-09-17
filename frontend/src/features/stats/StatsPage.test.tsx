@@ -142,6 +142,17 @@ describe("业务统计页", () => {
     fetchOverviewMock.mockResolvedValue(overviewResponse());
   });
 
+  it("渲染唯一 H1「业务统计」页面标题", async () => {
+    fetchStatsMock.mockResolvedValue(statsResponse());
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "业务统计" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("缺省近 7 天：渲染核心指标、懒加载图表与全时段快照", async () => {
     fetchStatsMock.mockResolvedValue(statsResponse());
 
