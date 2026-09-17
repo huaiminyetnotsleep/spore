@@ -2,6 +2,21 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.8.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.7.0...v1.8.0) (2026-09-17)
+
+
+### Features
+
+* **bot:** 机器人池支持手动暂停/恢复 + 冲突检测接管 + 独立菜单组 ([9dc8c67](https://github.com/huaiminyetnotsleep/spore/commit/9dc8c670a730048ff2f02f4d5f61e4c3b7df86b9))
+* **frontend:** 统一应用壳、登录与 404 ([8fd0973](https://github.com/huaiminyetnotsleep/spore/commit/8fd09735af487278f7c0ea0a7d771cbede7501bc))
+* **frontend:** 统一设计基础与共享组件库 ([b5f64b3](https://github.com/huaiminyetnotsleep/spore/commit/b5f64b31236c6ba6dc8b70aadd5dde87a1f0d6ee))
+* **frontend:** 迁移事件、审计与机器人页面 ([641e82d](https://github.com/huaiminyetnotsleep/spore/commit/641e82d22f4a9f9d4fb6a294b09e3b2900a56941))
+* **frontend:** 迁移总览与统计页面 ([ba0a788](https://github.com/huaiminyetnotsleep/spore/commit/ba0a788599b0362b8066806017450e908a363ae6))
+* **frontend:** 迁移用户、申请与请求页面到统一骨架 ([02aac75](https://github.com/huaiminyetnotsleep/spore/commit/02aac753ea9d0109a68b0708bf030847308d25a1))
+* **frontend:** 迁移设置与高风险页面 ([ce24daa](https://github.com/huaiminyetnotsleep/spore/commit/ce24daa4dfb7b07e953cf6faa4f1ff694250048e))
+* **frontend:** 迁移频道、绑定与 BotUser 频道页面 ([422ede0](https://github.com/huaiminyetnotsleep/spore/commit/422ede0500fa1ed8cb9f41c9608f7a783471149c))
+* **install:** 菜单分组加图标，升级后自动验证，新增完整重启 ([e09de99](https://github.com/huaiminyetnotsleep/spore/commit/e09de99cc30cd058bd628ebaebf8e4f49b56a643))
+
 ## [1.7.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.6.3...v1.7.0) (2026-09-16)
 
 
