@@ -385,7 +385,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; style-src 'self'; img-src 'self' data:; "+
+			"default-src 'self'; style-src 'self'; img-src 'self' data: https://api.dicebear.com; "+
 				"form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
 		next.ServeHTTP(w, r)
 	})

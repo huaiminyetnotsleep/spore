@@ -83,7 +83,7 @@ func (s *Server) serveSPAShell(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; style-src 'self' 'nonce-"+nonce+"'; style-src-elem 'self' 'nonce-"+nonce+"'; "+
-			"style-src-attr 'unsafe-inline'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
+			"style-src-attr 'unsafe-inline'; img-src 'self' data: https://api.dicebear.com; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
 	_, _ = w.Write(index)
 }
 
