@@ -2,6 +2,19 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.9.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.8.0...v1.9.0) (2026-09-17)
+
+
+### Features
+
+* **frontend:** 总览页机器人池信息独立成区 ([d0113ea](https://github.com/huaiminyetnotsleep/spore/commit/d0113eaae73b1c39896da1b46a67501f17b3974c))
+* **frontend:** 请求记录使用圆形进度条 ([00b028d](https://github.com/huaiminyetnotsleep/spore/commit/00b028def5efe2f5338bdb4d96c55128ef72714e))
+
+
+### Bug Fixes
+
+* **bot:** 管理端 Bot 会话状态挂到真实运行客户端，修复恒显离线 ([60ca2c7](https://github.com/huaiminyetnotsleep/spore/commit/60ca2c7f855a254194b4575eeb52b0dd8c85c6ca))
+
 ## [1.8.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.7.0...v1.8.0) (2026-09-17)
 
 
