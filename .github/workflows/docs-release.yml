@@ -1,0 +1,74 @@
+# 发版文档部署：文档站的全部 Pages 部署都在这里产出——
+# 与 docker-release.yml 同源同节奏，镜像与文档站始终指向同一个正式发布。
+# 两个触发来源，天然互斥不会重复部署：
+#   1. repository_dispatch：release.yml 在 release-please 创建 tag 后派发
+#      （GITHUB_TOKEN 创建的 tag 其 push 事件不会触发其他 workflow，见
+#      release.yml 内注释）；payload.tag 指定要部署的 tag。
+#   2. push tags v*：人工打/挪 tag 的兜底通道。
+# 历史教训（同 docker-release.yml）：发版部署触发不能带 paths 过滤——
+# paths 对 tag 推送同样生效，发版合并只改 CHANGELOG.md 时部署会被跳过。
+name: docs-release
+
+on:
+  push:
+    tags: ["v*"]
+  repository_dispatch:
+    types: [release-docs]
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # dispatch 事件的 github.ref 是默认分支而非 tag，版本号需从 payload 取；
+      # 两种事件统一归一到目标 tag 后续步骤使用
+      - name: 解析目标 tag
+        id: ver
+        env:
+          PAYLOAD_TAG: ${{ github.event.client_payload.tag }}
+        run: |
+          if [ -n "$PAYLOAD_TAG" ]; then tag="$PAYLOAD_TAG"; else tag="${{ github.ref_name }}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: 检出源码
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: 构建文档
+        working-directory: docs
+        run: |
+          npm ci
+          npm run build
+
+      - name: 上传 Pages 构建产物
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/.vitepress/dist
+
+      - name: 配置 GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: 发布文档站点
+        id: deployment
+        uses: actions/deploy-pages@v5

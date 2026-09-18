@@ -1,0 +1,42 @@
+# 文档构建检查：验证 VitePress 站点可正常构建。
+# 本 workflow 不部署——文档站只由发版部署（见 docs-release.yml），
+# 与镜像保持同一节奏，保证线上文档始终来自有版本号的正式发布。
+name: docs-build-check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "public/**"
+      - ".github/workflows/docs-build-check.yml"
+  # 不监听 CHANGELOG.md：它的变更只随发版产生，部署由 docs-release.yml
+  # 负责；release PR 本身的校验由 pull_request 触发的普通构建覆盖
+  pull_request:
+    paths:
+      - "docs/**"
+      - "public/**"
+      - ".github/workflows/docs-build-check.yml"
+  workflow_dispatch:
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v5
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: 构建文档（不部署）
+        working-directory: docs
+        run: |
+          npm ci
+          npm run build
