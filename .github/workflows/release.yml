@@ -1,7 +1,7 @@
 # 发版自动化（release-please）：分析 main 上的 Conventional Commits，自动
 # 维护版本号与 CHANGELOG，以一个 release PR 呈现；合并该 PR 即创建 tag 与
-# GitHub Release，随后派发 repository_dispatch 触发 docker-release.yml 发出
-# 对应版本镜像。
+# GitHub Release，随后派发 repository_dispatch 接续触发 docker-release.yml
+# 发出对应版本镜像、docs-release.yml 部署对应版本文档。
 #
 # 版本递增规则：fix → 修订号（v1.0.1）；feat → 次版本（v1.1.0）；
 # feat!/BREAKING CHANGE → 主版本（v2.0.0）；docs/style/chore 不触发发版。
@@ -37,9 +37,9 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   # GITHUB_TOKEN 创建的 tag 其 push 事件不会触发其他 workflow（GitHub 防循环
-  # 规则），镜像构建必须经 repository_dispatch 中转——这是官方豁免的两种
-  # 事件之一，由它接续触发 docker-release.yml。
-  release-image:
+  # 规则），镜像与文档的发版构建必须经 repository_dispatch 中转——这是官方
+  # 豁免的两种事件之一，由它接续触发 docker-release.yml 与 docs-release.yml。
+  release-dispatch:
     needs: release-please
     if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
@@ -51,4 +51,13 @@ jobs:
         run: |
           gh api "repos/${{ github.repository }}/dispatches" \
             -f event_type=release-image \
+            -F "client_payload[tag]=$TAG"
+
+      - name: 通知 docs-release 部署发版文档
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh api "repos/${{ github.repository }}/dispatches" \
+            -f event_type=release-docs \
             -F "client_payload[tag]=$TAG"
