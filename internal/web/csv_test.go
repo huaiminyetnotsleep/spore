@@ -57,7 +57,7 @@ func TestRequestsCSV(t *testing.T) {
 	if rows[0][0] != "ID" || rows[1][2] != "example_channel" || rows[1][3] != "10" {
 		t.Fatalf("行内容不符：%v", rows)
 	}
-	if rows[0][10] != "投递方式" || rows[1][10] != "上传" {
+	if rows[0][10] != "投递方式" || rows[1][10] != "媒体投递" {
 		t.Fatalf("投递方式列不符：%v", rows)
 	}
 	if rows[0][11] != "机器人" || rows[1][11] != "" {
@@ -100,7 +100,7 @@ func TestRequestsCSVDeliveryModeLabels(t *testing.T) {
 	for _, r := range rows[1:] {
 		got[r[10]] = true
 	}
-	for _, want := range []string{"引用", "混合", "文本", "网盘"} {
+	for _, want := range []string{"引用直发", "混合投递", "文本投递", "网盘转存"} {
 		if !got[want] {
 			t.Errorf("CSV 应包含投递方式 %q：%v", want, rows)
 		}

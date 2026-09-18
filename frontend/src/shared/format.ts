@@ -29,19 +29,21 @@ export const EVENT_STATUS_LABELS: Record<string, string> = {
 };
 
 /**
- * 投递方式中文标签（requests.delivery_mode，与 CSV deliveryModeText 同源语义）：
- * reference = 全部媒体经引用送达；upload = 全部经下载上传；mixed = 两者兼有；
- * text = 纯文本请求，无媒体；reuse = 重复链接复用（copyMessages 直拷历史
- * 已投递消息）；cloud = 云盘下载（/download 指令或管理端补存创建）；
- * dump = 缓存补写（管理端转存缓存频道，不向用户投递）。
+ * 投递方式中文标签（requests.delivery_mode，与 CSV deliveryModeText 同源语义）。
+ * 文案统一自述"这条请求最终怎么交付"：
+ * reference = 源媒体经引用直接送达（历史模式，新数据不产生）；
+ * upload = 媒体下载后重新投递（主路径）；mixed = 引用与上传兼有（历史模式）；
+ * text = 纯文本请求，无媒体；reuse = 命中缓存频道干净副本直发
+ * （copyMessages 复制历史已投递消息）；cloud = 网盘转存（/download 指令或
+ * 管理端补存创建）；dump = 缓存补写（管理端转存缓存频道，不向用户投递）。
  */
 export const DELIVERY_MODE_LABELS: Record<string, string> = {
-  reference: "引用",
-  upload: "上传",
-  mixed: "混合",
-  text: "文本",
-  reuse: "复用",
-  cloud: "网盘",
+  reference: "引用直发",
+  upload: "媒体投递",
+  mixed: "混合投递",
+  text: "文本投递",
+  reuse: "缓存直发",
+  cloud: "网盘转存",
   dump: "缓存补写",
 };
 

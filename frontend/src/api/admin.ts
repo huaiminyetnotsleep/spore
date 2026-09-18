@@ -394,7 +394,7 @@ export interface RequestRow {
   media_types?: string[];
   /** 源媒体所在的 Telegram DC ID 去重列表；纯文本/旧记录为空数组。 */
   source_media_dc_ids?: number[];
-	/** 投递方式：reference（引用）| upload（上传）| mixed（混合）| text（文本）。 */
+  /** 投递方式：reference | upload | mixed | text | reuse | cloud | dump。 */
   delivery_mode: string;
   /** 受理 bot 的 Telegram 账号 ID；0 = 存量行/非 Bot 通道创建（展示"—"）。 */
   bot_id: number;
@@ -417,7 +417,7 @@ export interface RequestListParams {
   channel?: string;
   media_type?: string;
   error_code?: string;
-  /** 投递方式（reference | upload | mixed | text | cloud）。 */
+  /** 投递方式（reference | upload | mixed | text | reuse | cloud | dump）。 */
   delivery_mode?: string;
   since?: string;
   until?: string;

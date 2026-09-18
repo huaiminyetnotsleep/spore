@@ -295,7 +295,7 @@ describe("请求记录列表页", () => {
     expect(screen.getByText("DC 2、DC 4")).toBeInTheDocument();
   });
 
-  it("渲染投递方式中文标签（引用/上传/混合/文本）", async () => {
+  it("渲染投递方式中文标签（引用直发/媒体投递/混合投递/文本投递）", async () => {
     fetchRequestsMock.mockResolvedValue(
       envelope([
         requestRow({ id: 1, delivery_mode: "reference" }),
@@ -307,10 +307,10 @@ describe("请求记录列表页", () => {
 
     renderPage();
 
-    expect(await screen.findByText("引用")).toBeInTheDocument();
-    expect(screen.getByText("上传")).toBeInTheDocument();
-    expect(screen.getByText("混合")).toBeInTheDocument();
-    expect(screen.getByText("文本")).toBeInTheDocument();
+    expect(await screen.findByText("引用直发")).toBeInTheDocument();
+    expect(screen.getByText("媒体投递")).toBeInTheDocument();
+    expect(screen.getByText("混合投递")).toBeInTheDocument();
+    expect(screen.getByText("文本投递")).toBeInTheDocument();
   });
 
   it("点击筛选会按表单条件查询，重复提交相同条件也会刷新", async () => {
@@ -478,17 +478,17 @@ describe("请求记录列表页", () => {
     expect(await screen.findByText(/#11 已删除/)).toBeInTheDocument();
   });
 
-  it("渲染网盘投递标签", async () => {
+  it("渲染网盘转存投递标签", async () => {
     fetchRequestsMock.mockResolvedValue(
       envelope([requestRow({ id: 21, delivery_mode: "cloud" })]),
     );
 
     renderPage();
 
-    expect(await screen.findByText("网盘")).toBeInTheDocument();
+    expect(await screen.findByText("网盘转存")).toBeInTheDocument();
   });
 
-  it("投递方式筛选=网盘会带入 delivery_mode 查询参数", async () => {
+  it("投递方式筛选=网盘转存会带入 delivery_mode 查询参数", async () => {
     fetchRequestsMock.mockResolvedValue(envelope([requestRow({})]));
 
     renderPage();
@@ -499,7 +499,7 @@ describe("请求记录列表页", () => {
       ?.querySelector(".ant-select-selector");
     expect(deliverySelect).not.toBeNull();
     fireEvent.mouseDown(deliverySelect as HTMLElement);
-    fireEvent.click(await screen.findByRole("option", { name: "网盘" }));
+    fireEvent.click(await screen.findByRole("option", { name: "网盘转存" }));
     fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
 
     await waitFor(() =>
@@ -569,7 +569,7 @@ describe("请求记录列表页", () => {
       expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["requests"] })),
     );
     expect(
-      await screen.findByText(/已创建云盘补存任务，新请求行将以「网盘」投递方式出现在列表中/),
+      await screen.findByText(/已创建云盘补存任务，新请求行将以「网盘转存」投递方式出现在列表中/),
     ).toBeInTheDocument();
   });
 

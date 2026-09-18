@@ -281,7 +281,7 @@ export function RequestsListPage() {
       return cloudArchiveRequest(input.id, input.destination);
     },
     invalidate: invalidateRequestQueries,
-    successText: "已创建云盘补存任务，新请求行将以「网盘」投递方式出现在列表中。",
+    successText: "已创建云盘补存任务，新请求行将以「网盘转存」投递方式出现在列表中。",
   });
   const archiveMany = useAdminAction<CloudArchiveBatchResult, { ids: number[]; destination?: string }>(
     {
@@ -799,7 +799,7 @@ export function RequestsListPage() {
         <Space direction="vertical" size="small" className="field-width-full">
           <Text type="secondary">
             将按原链接重新抓取媒体并上传到所选目的地，不重发回
-            Telegram；管理端补存不占用用户配额，新建的请求行以「网盘」投递方式出现在列表中。
+            Telegram；管理端补存不占用用户配额，新建的请求行以「网盘转存」投递方式出现在列表中。
           </Text>
           <Form.Item name="destination" noStyle>
             <Select
