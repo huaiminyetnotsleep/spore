@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.12.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.11.0...v1.12.0) (2026-09-18)
+
+
+### Features
+
+* **apperr:** 错误码细化，网络/服务端/引用/发送目标单列 ([4db4232](https://github.com/huaiminyetnotsleep/spore/commit/4db423211c109f996512ded4c220b7490101e6bd))
+* **stats:** 业务统计新增投递方式分布图 ([9df74fa](https://github.com/huaiminyetnotsleep/spore/commit/9df74fa967ff30181457df15a844faf241abbb34))
+* **web-console:** 错误码中文标签映射与展示细化 ([70bbb11](https://github.com/huaiminyetnotsleep/spore/commit/70bbb11ce3d9bf66656cb1e73f7122a104951d73))
+
 ## [1.11.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.10.0...v1.11.0) (2026-09-18)
 
 
