@@ -52,18 +52,23 @@ const (
 // defaultQueueCapacity 是队列容量缺省值（原 main 硬编码值）。
 const defaultQueueCapacity = 64
 
+func loadJSONSetting[T any](ctx context.Context, st *store.Store, key string, fallback T, valid func(T) bool) T {
+	raw, ok, err := st.GetSetting(ctx, key)
+	if err != nil || !ok {
+		return fallback
+	}
+	var value T
+	if json.Unmarshal([]byte(raw), &value) != nil || valid != nil && !valid(value) {
+		return fallback
+	}
+	return value
+}
+
 // LoadQueueCapacity 读取全局队列容量设置：键缺失或非法时回退默认 64。
 // main 装配内存队列时调用；容量在进程生命周期内固定，修改需重启生效。
 func LoadQueueCapacity(ctx context.Context, st *store.Store) int {
-	v, ok, err := st.GetSetting(ctx, settingKeyQueueCapacity)
-	if err != nil || !ok {
-		return defaultQueueCapacity
-	}
-	var n int
-	if err := json.Unmarshal([]byte(v), &n); err != nil || n <= 0 || n > 4096 {
-		return defaultQueueCapacity
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyQueueCapacity, defaultQueueCapacity,
+		func(n int) bool { return n > 0 && n <= 4096 })
 }
 
 // loadQueueCapacity 内部版本（带 Server 上下文）。
@@ -75,15 +80,8 @@ func (s *Server) loadQueueCapacity(ctx context.Context) int {
 // main 在数据库打开后、队列启动前调用并覆盖 cfg.WorkerCount；worker 数在进程
 // 生命周期内固定，修改需重启生效。
 func LoadWorkerCount(ctx context.Context, st *store.Store, envDefault int) int {
-	v, ok, err := st.GetSetting(ctx, settingKeyWorkerCount)
-	if err != nil || !ok {
-		return envDefault
-	}
-	var n int
-	if err := json.Unmarshal([]byte(v), &n); err != nil || n < minWorkerCount || n > maxWorkerCount {
-		return envDefault
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyWorkerCount, envDefault,
+		func(n int) bool { return n >= minWorkerCount && n <= maxWorkerCount })
 }
 
 // LoadMemoryBudget 读取内存管道进程级预算（字节）：键缺失、非法或越界时
@@ -93,16 +91,8 @@ func LoadMemoryBudget(ctx context.Context, st *store.Store, envDefault int64) in
 	if st == nil {
 		return envDefault
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyMemoryBudget)
-	if err != nil || !ok {
-		return envDefault
-	}
-	var n int64
-	if json.Unmarshal([]byte(v), &n) != nil ||
-		n < config.MinMemoryBudget || n > config.MaxMemoryBudget {
-		return envDefault
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyMemoryBudget, envDefault,
+		func(n int64) bool { return n >= config.MinMemoryBudget && n <= config.MaxMemoryBudget })
 }
 
 // LoadMaxLinksPerMessage 读取单条 Bot 输入允许的有效链接数。handler 每次处理
@@ -114,16 +104,8 @@ func LoadMaxLinksPerMessage(ctx context.Context, st *store.Store, envDefault int
 	if st == nil {
 		return envDefault
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyMaxLinksPerMessage)
-	if err != nil || !ok {
-		return envDefault
-	}
-	var n int
-	if json.Unmarshal([]byte(v), &n) != nil ||
-		n < config.MinLinksPerMessage || n > config.MaxLinksPerMessage {
-		return envDefault
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyMaxLinksPerMessage, envDefault,
+		func(n int) bool { return n >= config.MinLinksPerMessage && n <= config.MaxLinksPerMessage })
 }
 
 // LoadChannelCopyEnabled 读取频道副本同步总开关：键缺失或非法时回退开启。
@@ -133,15 +115,7 @@ func LoadChannelCopyEnabled(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return true
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyChannelCopyEnable)
-	if err != nil || !ok {
-		return true
-	}
-	var b bool
-	if json.Unmarshal([]byte(v), &b) != nil {
-		return true
-	}
-	return b
+	return loadJSONSetting(ctx, st, settingKeyChannelCopyEnable, true, nil)
 }
 
 // LoadTGReuseEnabled 读取 TG 链接复用总开关：键缺失或非法时回退开启。
@@ -151,15 +125,7 @@ func LoadTGReuseEnabled(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return true
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyTGReuseEnable)
-	if err != nil || !ok {
-		return true
-	}
-	var b bool
-	if json.Unmarshal([]byte(v), &b) != nil {
-		return true
-	}
-	return b
+	return loadJSONSetting(ctx, st, settingKeyTGReuseEnable, true, nil)
 }
 
 // LoadDumpChannelID 读取缓存频道数字 ID（settings）：0 表示未配置。
@@ -167,15 +133,7 @@ func LoadDumpChannelID(ctx context.Context, st *store.Store) int64 {
 	if st == nil {
 		return 0
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyDumpChannelID)
-	if err != nil || !ok {
-		return 0
-	}
-	var n int64
-	if json.Unmarshal([]byte(v), &n) != nil {
-		return 0
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyDumpChannelID, int64(0), nil)
 }
 
 // LoadEffectiveDumpChannelID 读取缓存频道的运行时有效值：settings 键存在时
@@ -185,15 +143,7 @@ func LoadEffectiveDumpChannelID(ctx context.Context, st *store.Store, envDefault
 	if st == nil {
 		return envDefault
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyDumpChannelID)
-	if err != nil || !ok {
-		return envDefault
-	}
-	var n int64
-	if json.Unmarshal([]byte(v), &n) != nil {
-		return envDefault
-	}
-	return n
+	return loadJSONSetting(ctx, st, settingKeyDumpChannelID, envDefault, nil)
 }
 
 // LoadDumpChannelTitle 读取缓存频道标题（展示用；未配置为空）。
@@ -201,15 +151,7 @@ func LoadDumpChannelTitle(ctx context.Context, st *store.Store) string {
 	if st == nil {
 		return ""
 	}
-	v, ok, err := st.GetSetting(ctx, settingKeyDumpChannelTitle)
-	if err != nil || !ok {
-		return ""
-	}
-	var s string
-	if json.Unmarshal([]byte(v), &s) != nil {
-		return ""
-	}
-	return s
+	return loadJSONSetting(ctx, st, settingKeyDumpChannelTitle, "", nil)
 }
 
 // ---- 事件解决 ----
@@ -243,25 +185,10 @@ func (s *Server) loadMediaSettings(ctx context.Context) (int64, int64, int64) {
 	if tempDirMax == 0 {
 		tempDirMax = int64(5) << 30
 	}
-	if raw, ok, err := s.st.GetSetting(ctx, settingKeyMaxFileSize); err == nil && ok {
-		var v int64
-		if json.Unmarshal([]byte(raw), &v) == nil && v > 0 {
-			maxSize = v
-		}
-	}
-	if raw, ok, err := s.st.GetSetting(ctx, settingKeyStreamLimit); err == nil && ok {
-		var v int64
-		if json.Unmarshal([]byte(raw), &v) == nil && v > 0 {
-			stream = v
-		}
-	}
-	if raw, ok, err := s.st.GetSetting(ctx, settingKeyTempDirMaxSize); err == nil && ok {
-		var v int64
-		if json.Unmarshal([]byte(raw), &v) == nil && v > 0 {
-			tempDirMax = v
-		}
-	}
-	return maxSize, stream, tempDirMax
+	positive := func(v int64) bool { return v > 0 }
+	return loadJSONSetting(ctx, s.st, settingKeyMaxFileSize, maxSize, positive),
+		loadJSONSetting(ctx, s.st, settingKeyStreamLimit, stream, positive),
+		loadJSONSetting(ctx, s.st, settingKeyTempDirMaxSize, tempDirMax, positive)
 }
 
 // parseMediaInput 把 MB/GB 表单值转换为字节，拒绝小数溢出和未知单位。
@@ -344,6 +271,17 @@ func (e *settingsStoreError) Error() string { return e.err.Error() }
 
 func (e *settingsStoreError) Unwrap() error { return e.err }
 
+func (s *Server) saveSettingValue(ctx context.Context, key, op string, value any) error {
+	raw, err := json.Marshal(value)
+	if err == nil {
+		err = s.st.SetSetting(ctx, key, string(raw))
+	}
+	if err != nil {
+		return &settingsStoreError{op: op, err: err}
+	}
+	return nil
+}
+
 // settingsApplyResult 汇总设置变更后的生效值；API 成功后重新读取展示。
 type settingsApplyResult struct {
 	Timezone      string
@@ -405,9 +343,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 		current := LoadMaxLinksPerMessage(ctx, s.st, s.cfg.MaxLinksPerMessage)
 		if n != current {
-			raw, _ := json.Marshal(n)
-			if err := s.st.SetSetting(ctx, settingKeyMaxLinksPerMessage, string(raw)); err != nil {
-				return res, &settingsStoreError{op: "保存单次最大链接数", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyMaxLinksPerMessage, "保存单次最大链接数", n); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.max_links_per_message", "settings", map[string]any{
 				"before": current, "after": n, "effect": "即时生效"})
@@ -418,9 +355,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 	if in.ChannelCopyEnabled != nil {
 		current := LoadChannelCopyEnabled(ctx, s.st)
 		if current != *in.ChannelCopyEnabled {
-			raw, _ := json.Marshal(*in.ChannelCopyEnabled)
-			if err := s.st.SetSetting(ctx, settingKeyChannelCopyEnable, string(raw)); err != nil {
-				return res, &settingsStoreError{op: "保存频道同步开关", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyChannelCopyEnable, "保存频道同步开关", *in.ChannelCopyEnabled); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.channel_copy_enabled", "settings", map[string]any{
 				"before": current, "after": *in.ChannelCopyEnabled, "effect": "即时生效"})
@@ -432,9 +368,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 	if in.TGReuseEnabled != nil {
 		current := LoadTGReuseEnabled(ctx, s.st)
 		if current != *in.TGReuseEnabled {
-			raw, _ := json.Marshal(*in.TGReuseEnabled)
-			if err := s.st.SetSetting(ctx, settingKeyTGReuseEnable, string(raw)); err != nil {
-				return res, &settingsStoreError{op: "保存链接复用开关", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyTGReuseEnable, "保存链接复用开关", *in.TGReuseEnabled); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.tg_reuse_enabled", "settings", map[string]any{
 				"before": current, "after": *in.TGReuseEnabled, "effect": "即时生效"})
@@ -466,13 +401,11 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				return res, &settingsParamError{"缓存频道校验失败：请确认频道存在且机器人已被设为管理员（公开频道填 @用户名 或 t.me 链接，私有频道填 -100 数字 ID）。"}
 			}
 			if id != before {
-				rawID, _ := json.Marshal(id)
-				rawTitle, _ := json.Marshal(title)
-				if err := s.st.SetSetting(ctx, settingKeyDumpChannelID, string(rawID)); err != nil {
-					return res, &settingsStoreError{op: "保存缓存频道", err: err}
+				if err := s.saveSettingValue(ctx, settingKeyDumpChannelID, "保存缓存频道", id); err != nil {
+					return res, err
 				}
-				if err := s.st.SetSetting(ctx, settingKeyDumpChannelTitle, string(rawTitle)); err != nil {
-					return res, &settingsStoreError{op: "保存缓存频道标题", err: err}
+				if err := s.saveSettingValue(ctx, settingKeyDumpChannelTitle, "保存缓存频道标题", title); err != nil {
+					return res, err
 				}
 				s.audit(ctx, "settings.dump_channel", "settings", map[string]any{
 					"before": before, "after": id, "title": title, "effect": "即时生效"})
@@ -527,9 +460,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 		if n != res.QueueCapacity {
 			before := res.QueueCapacity
-			raw, _ := json.Marshal(n)
-			if err := s.st.SetSetting(ctx, settingKeyQueueCapacity, string(raw)); err != nil {
-				return res, &settingsStoreError{op: "保存队列容量", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyQueueCapacity, "保存队列容量", n); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.queue_capacity", "settings", map[string]any{
 				"before": before, "after": n, "effect": "重启生效"})
@@ -548,9 +480,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 		current := LoadWorkerCount(ctx, s.st, s.cfg.WorkerCount)
 		if n != current {
-			raw, _ := json.Marshal(n)
-			if err := s.st.SetSetting(ctx, settingKeyWorkerCount, string(raw)); err != nil {
-				return res, &settingsStoreError{op: "保存任务并发 worker 数", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyWorkerCount, "保存任务并发 worker 数", n); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.worker_count", "settings", map[string]any{
 				"before": current, "after": n, "effect": "重启生效"})
@@ -590,21 +521,18 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 	}
 
 	if newMax != mediaMax {
-		raw, _ := json.Marshal(newMax)
-		if err := s.st.SetSetting(ctx, settingKeyMaxFileSize, string(raw)); err != nil {
-			return res, &settingsStoreError{op: "保存文件大小上限", err: err}
+		if err := s.saveSettingValue(ctx, settingKeyMaxFileSize, "保存文件大小上限", newMax); err != nil {
+			return res, err
 		}
 	}
 	if newStream != mediaStream {
-		raw, _ := json.Marshal(newStream)
-		if err := s.st.SetSetting(ctx, settingKeyStreamLimit, string(raw)); err != nil {
-			return res, &settingsStoreError{op: "保存流式阈值", err: err}
+		if err := s.saveSettingValue(ctx, settingKeyStreamLimit, "保存流式阈值", newStream); err != nil {
+			return res, err
 		}
 	}
 	if newTempDir != mediaTempDir {
-		raw, _ := json.Marshal(newTempDir)
-		if err := s.st.SetSetting(ctx, settingKeyTempDirMaxSize, string(raw)); err != nil {
-			return res, &settingsStoreError{op: "保存临时目录最大大小", err: err}
+		if err := s.saveSettingValue(ctx, settingKeyTempDirMaxSize, "保存临时目录最大大小", newTempDir); err != nil {
+			return res, err
 		}
 	}
 
@@ -629,9 +557,8 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 		current := LoadMemoryBudget(ctx, s.st, s.cfg.MemoryBudget)
 		if parsed != current {
-			encoded, _ := json.Marshal(parsed)
-			if err := s.st.SetSetting(ctx, settingKeyMemoryBudget, string(encoded)); err != nil {
-				return res, &settingsStoreError{op: "保存内存预算", err: err}
+			if err := s.saveSettingValue(ctx, settingKeyMemoryBudget, "保存内存预算", parsed); err != nil {
+				return res, err
 			}
 			s.audit(ctx, "settings.memory_budget", "settings", map[string]any{
 				"before_bytes": current, "after_bytes": parsed, "effect": "即时生效"})

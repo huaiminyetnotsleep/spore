@@ -97,6 +97,33 @@ func New(opt Options) (*Service, error) {
 		activity: opt.Activity, log: opt.Log, now: opt.Now}, nil
 }
 
+func (s *Service) joinedRecordsByID(ctx context.Context) (map[int64]store.JoinedChannelRecord, error) {
+	records, err := s.st.ListActiveJoinedChannels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]store.JoinedChannelRecord, len(records))
+	for _, record := range records {
+		byID[record.ChannelID] = record
+	}
+	return byID, nil
+}
+
+func (s *Service) applyPostJoinCfg(ctx context.Context, channelID, accessHash int64, cfg syscfg.JoinConfig) error {
+	return s.bridge.ApplyPostJoin(ctx, channelID, accessHash, mtproto.JoinOptions{
+		Mute: cfg.MuteEnabled, Archive: cfg.ArchiveEnabled,
+	})
+}
+
+func (s *Service) upsertExternalRecord(ctx context.Context, channel mtproto.JoinedChannel, failureMessage string) {
+	if err := s.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
+		ChannelID: channel.ChannelID, Title: channel.Title, Username: channel.Username,
+		Kind: channel.Kind, JoinedVia: store.JoinedViaExternal,
+	}); err != nil {
+		s.log.Warn(failureMessage, "channel_id", channel.ChannelID, "error", err.Error())
+	}
+}
+
 // NotifyUser 实现 Notifier：经 Bot API 私聊发送文本（HTML）。
 func (n SenderNotifier) NotifyUser(ctx context.Context, userID int64, text string) error {
 	if n.Sender == nil {
@@ -183,9 +210,7 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, text s
 		// 静音/归档——checkInvite 在此分支携带频道定位信息正是为此预留。
 		// 自动退出开启时让位给 Enforce 的退出语义。
 		if info.ChannelID != 0 && !cfg.AutoLeaveExternal && (cfg.MuteEnabled || cfg.ArchiveEnabled) {
-			if err := s.bridge.ApplyPostJoin(ctx, info.ChannelID, info.AccessHash, mtproto.JoinOptions{
-				Mute: cfg.MuteEnabled, Archive: cfg.ArchiveEnabled,
-			}); err != nil {
+			if err := s.applyPostJoinCfg(ctx, info.ChannelID, info.AccessHash, cfg); err != nil {
 				s.log.Warn("已是成员频道补静音/归档失败", "channel_id", info.ChannelID, "error", err.Error())
 			}
 		}
@@ -496,13 +521,9 @@ func (s *Service) ListJoined(ctx context.Context) ([]JoinedChannelView, error) {
 	if err != nil {
 		return nil, err
 	}
-	records, err := s.st.ListActiveJoinedChannels(ctx)
+	byID, err := s.joinedRecordsByID(ctx)
 	if err != nil {
 		return nil, err
-	}
-	byID := map[int64]store.JoinedChannelRecord{}
-	for _, r := range records {
-		byID[r.ChannelID] = r
 	}
 
 	out := make([]JoinedChannelView, 0, len(live))
@@ -517,12 +538,7 @@ func (s *Service) ListJoined(ctx context.Context) ([]JoinedChannelView, error) {
 			view.JoinedAt = rec.JoinedAt
 		} else {
 			// 实时存在但无留痕：外部拉入，补一条留痕（Enforce 的判定依据）
-			if err := s.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
-				ChannelID: c.ChannelID, Title: c.Title, Username: c.Username,
-				Kind: c.Kind, JoinedVia: store.JoinedViaExternal,
-			}); err != nil {
-				s.log.Warn("补写外部拉入留痕失败", "channel_id", c.ChannelID, "error", err.Error())
-			}
+			s.upsertExternalRecord(ctx, c, "补写外部拉入留痕失败")
 		}
 		out = append(out, view)
 	}
@@ -551,9 +567,7 @@ func (s *Service) archiveExternalPass(ctx context.Context, cfg syscfg.JoinConfig
 		if rec, ok := records[c.ChannelID]; ok && rec.JoinedVia != store.JoinedViaExternal {
 			continue // 本系统明示加入的频道
 		}
-		if err := s.bridge.ApplyPostJoin(ctx, c.ChannelID, c.AccessHash, mtproto.JoinOptions{
-			Mute: cfg.MuteEnabled, Archive: cfg.ArchiveEnabled,
-		}); err != nil {
+		if err := s.applyPostJoinCfg(ctx, c.ChannelID, c.AccessHash, cfg); err != nil {
 			s.log.Warn("外部拉入频道补静音/归档失败", "channel_id", c.ChannelID, "error", err.Error())
 			continue
 		}
@@ -575,14 +589,10 @@ func (s *Service) OnChannelsSeen(ctx context.Context, seen []mtproto.JoinedChann
 	if cfg.AutoLeaveExternal || (!cfg.MuteEnabled && !cfg.ArchiveEnabled) {
 		return
 	}
-	records, err := s.st.ListActiveJoinedChannels(ctx)
+	byID, err := s.joinedRecordsByID(ctx)
 	if err != nil {
 		s.log.Warn("实时归档前读取留痕失败", "error", err.Error())
 		return
-	}
-	byID := map[int64]store.JoinedChannelRecord{}
-	for _, r := range records {
-		byID[r.ChannelID] = r
 	}
 	for _, c := range seen {
 		if c.AccessHash == 0 {
@@ -592,19 +602,12 @@ func (s *Service) OnChannelsSeen(ctx context.Context, seen []mtproto.JoinedChann
 		if has && rec.JoinedVia != store.JoinedViaExternal {
 			continue // 本系统加入的频道，加入时已执行过静音/归档
 		}
-		if err := s.bridge.ApplyPostJoin(ctx, c.ChannelID, c.AccessHash, mtproto.JoinOptions{
-			Mute: cfg.MuteEnabled, Archive: cfg.ArchiveEnabled,
-		}); err != nil {
+		if err := s.applyPostJoinCfg(ctx, c.ChannelID, c.AccessHash, cfg); err != nil {
 			s.log.Warn("实时归档外部拉入频道失败", "channel_id", c.ChannelID, "error", err.Error())
 			continue
 		}
 		if !has {
-			if err := s.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
-				ChannelID: c.ChannelID, Title: c.Title, Username: c.Username,
-				Kind: c.Kind, JoinedVia: store.JoinedViaExternal,
-			}); err != nil {
-				s.log.Warn("实时归档后补写留痕失败", "channel_id", c.ChannelID, "error", err.Error())
-			}
+			s.upsertExternalRecord(ctx, c, "实时归档后补写留痕失败")
 		}
 		s.log.Info("实时归档外部拉入频道完成", "channel_id", c.ChannelID, "title", c.Title)
 	}
@@ -622,13 +625,9 @@ func (s *Service) ReconcileExternal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	records, err := s.st.ListActiveJoinedChannels(ctx)
+	byID, err := s.joinedRecordsByID(ctx)
 	if err != nil {
 		return err
-	}
-	byID := map[int64]store.JoinedChannelRecord{}
-	for _, r := range records {
-		byID[r.ChannelID] = r
 	}
 	if n := s.archiveExternalPass(ctx, cfg, live, byID); n > 0 {
 		s.log.Info("周期对账已归档外部拉入的频道", "count", n)
@@ -692,13 +691,9 @@ func (s *Service) enforceIfNeeded(ctx context.Context) (enforceResult, error) {
 	if err != nil {
 		return enforceResult{}, err
 	}
-	records, err := s.st.ListActiveJoinedChannels(ctx)
+	byID, err := s.joinedRecordsByID(ctx)
 	if err != nil {
 		return enforceResult{}, err
-	}
-	byID := map[int64]store.JoinedChannelRecord{}
-	for _, r := range records {
-		byID[r.ChannelID] = r
 	}
 
 	var res enforceResult
@@ -716,12 +711,7 @@ func (s *Service) enforceIfNeeded(ctx context.Context) (enforceResult, error) {
 			continue
 		}
 		if !has {
-			if err := s.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
-				ChannelID: c.ChannelID, Title: c.Title, Username: c.Username,
-				Kind: c.Kind, JoinedVia: store.JoinedViaExternal,
-			}); err != nil {
-				s.log.Warn("熔断前补写留痕失败", "channel_id", c.ChannelID, "error", err.Error())
-			}
+			s.upsertExternalRecord(ctx, c, "熔断前补写留痕失败")
 		}
 		res.enforced++
 		res.ids = append(res.ids, c.ChannelID)
@@ -763,10 +753,7 @@ func (s *Service) ReconcilePendingJoins(ctx context.Context) error {
 		if !info.AlreadyJoined || info.ChannelID == 0 {
 			continue // 频道侧尚未批准
 		}
-		if err := s.bridge.ApplyPostJoin(ctx, info.ChannelID, info.AccessHash, mtproto.JoinOptions{
-			Mute:    cfg.MuteEnabled,
-			Archive: cfg.ArchiveEnabled,
-		}); err != nil {
+		if err := s.applyPostJoinCfg(ctx, info.ChannelID, info.AccessHash, cfg); err != nil {
 			s.log.Warn("请求制频道补执行静音/归档失败", "request_id", r.ID, "channel_id", info.ChannelID, "error", err.Error())
 			continue
 		}

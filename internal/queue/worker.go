@@ -576,8 +576,6 @@ func isExpectedStateRace(err error) bool {
 	return apperr.From(err).Code == apperr.CodeStoreConstraint
 }
 
-// deleteStatusBestEffort 使用独立短窗口清理占位提示，覆盖管理员取消时原 ctx
-// 已被取消的路径；媒体句柄的 Cleanup 仍由其资源所有者负责。
 // deleteStatusBestEffort 在独立时间窗内尽力删除占位提示：使用剥离取消信号的
 // ctx，任务收尾（含取消与进程退出）时 Bot API 调用不因 ctx 已死而失效。
 func deleteStatusBestEffort(d Deps, ctx context.Context, j Job) {

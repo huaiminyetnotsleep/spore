@@ -135,18 +135,8 @@ func scanRequest(row scanner) (Request, error) {
 	if err != nil {
 		return r, err
 	}
-	var errDecode error
-	r.MediaTypes, errDecode = decodeMediaTypes(mediaTypesJSON)
-	if errDecode != nil {
-		return Request{}, wrapDB("解析请求媒体类型", errDecode)
-	}
-	r.SourceMediaDCIDs, errDecode = decodeDCIDs(dcJSON)
-	if errDecode != nil {
-		return Request{}, wrapDB("解析请求媒体 DC", errDecode)
-	}
-	r.SentMessageIDs, errDecode = decodeSentMessageIDs(sentIDsJSON)
-	if errDecode != nil {
-		return Request{}, wrapDB("解析请求已发送消息", errDecode)
+	if err := decodeRequestJSONColumns(&r, mediaTypesJSON, dcJSON, sentIDsJSON); err != nil {
+		return Request{}, err
 	}
 	return r, nil
 }
@@ -175,20 +165,24 @@ func scanRequestWithUser(row scanner) (RequestWithUser, error) {
 	if err != nil {
 		return out, err
 	}
-	var errDecode error
-	out.MediaTypes, errDecode = decodeMediaTypes(mediaTypesJSON)
-	if errDecode != nil {
-		return RequestWithUser{}, wrapDB("解析请求媒体类型", errDecode)
-	}
-	out.SourceMediaDCIDs, errDecode = decodeDCIDs(dcJSON)
-	if errDecode != nil {
-		return RequestWithUser{}, wrapDB("解析请求媒体 DC", errDecode)
-	}
-	out.SentMessageIDs, errDecode = decodeSentMessageIDs(sentIDsJSON)
-	if errDecode != nil {
-		return RequestWithUser{}, wrapDB("解析请求已发送消息", errDecode)
+	if err := decodeRequestJSONColumns(&out.Request, mediaTypesJSON, dcJSON, sentIDsJSON); err != nil {
+		return RequestWithUser{}, err
 	}
 	return out, nil
+}
+
+func decodeRequestJSONColumns(r *Request, mediaTypesJSON, dcJSON, sentIDsJSON sql.NullString) error {
+	var err error
+	if r.MediaTypes, err = decodeMediaTypes(mediaTypesJSON); err != nil {
+		return wrapDB("解析请求媒体类型", err)
+	}
+	if r.SourceMediaDCIDs, err = decodeDCIDs(dcJSON); err != nil {
+		return wrapDB("解析请求媒体 DC", err)
+	}
+	if r.SentMessageIDs, err = decodeSentMessageIDs(sentIDsJSON); err != nil {
+		return wrapDB("解析请求已发送消息", err)
+	}
+	return nil
 }
 
 func decodeDCIDs(raw sql.NullString) ([]int, error) {
