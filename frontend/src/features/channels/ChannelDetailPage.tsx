@@ -13,7 +13,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { fetchChannelDetail, type ChannelBotRow, type DistRow, type TrendPoint } from "../../api/admin";
-import { botLabel, distKeyText, fmtRate, fmtTime } from "../../shared/format";
+import { botLabel, distKeyText, errorCodeLabel, fmtRate, fmtTime } from "../../shared/format";
 import { DataTable } from "../shared/DataTable";
 import { FilterBar } from "../shared/FilterBar";
 import { MetricGrid } from "../shared/MetricGrid";
@@ -30,7 +30,12 @@ const trendColumns: ColumnsType<TrendPoint> = [
 ];
 
 const distColumns: ColumnsType<DistRow> = [
-  { title: "类型 / 错误码", dataIndex: "key", key: "key", render: distKeyText },
+  { title: "类型", dataIndex: "key", key: "key", render: distKeyText },
+  { title: "数量", dataIndex: "count", key: "count", align: "right" },
+];
+
+const errorDistColumns: ColumnsType<DistRow> = [
+  { title: "错误码", dataIndex: "key", key: "key", render: (key: string) => errorCodeLabel(distKeyText(key)) },
   { title: "数量", dataIndex: "count", key: "count", align: "right" },
 ];
 
@@ -172,7 +177,7 @@ export function ChannelDetailPage() {
               <DataTable<DistRow>
                 density="compact"
                 rowKey="key"
-                columns={distColumns}
+                columns={errorDistColumns}
                 dataSource={detail.error_dist}
                 pagination={false}
                 emptyText="当前筛选范围内没有错误分布数据。"

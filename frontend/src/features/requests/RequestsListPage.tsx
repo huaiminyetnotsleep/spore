@@ -18,6 +18,7 @@ import {
   Select,
   Space,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -52,9 +53,11 @@ import {
   DUMP_BACKFILL_SKIP_LABELS,
   DELIVERY_MODE_LABELS,
   DELIVERY_MODE_TAG_COLORS,
+  ERROR_CODE_LABELS,
   REQUEST_STATUS_LABELS,
   REQUEST_STATUS_TAG_COLORS,
   botLabel,
+  errorCodeLabel,
   fmtDuration,
   fmtTime,
   labelOf,
@@ -77,6 +80,13 @@ const MEDIA_TYPE_OPTIONS = ["text", "photo", "video", "document", "audio", "voic
 );
 
 const DELIVERY_MODE_OPTIONS = Object.entries(DELIVERY_MODE_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
+
+/** 错误码筛选选项：枚举全量错误码（中文标签 + showSearch 检索），未知码
+ * 由后端精确匹配兜底，不进选项。 */
+const ERROR_CODE_OPTIONS = Object.entries(ERROR_CODE_LABELS).map(([value, label]) => ({
   value,
   label,
 }));
@@ -453,7 +463,17 @@ export function RequestsListPage() {
         row.progress ? <RequestProgress progress={row.progress} /> : <RequestProgressEmpty />,
     },
     { title: "尝试", dataIndex: "attempt", key: "attempt", align: "right" },
-    { title: "错误码", dataIndex: "error_code", key: "error_code" },
+    {
+      title: "错误码",
+      dataIndex: "error_code",
+      key: "error_code",
+      render: (code: string) =>
+        code ? (
+          <Tooltip title={code}>
+            <Tag color="red">{errorCodeLabel(code)}</Tag>
+          </Tooltip>
+        ) : null,
+    },
     {
       title: "媒体",
       dataIndex: "media_type",
@@ -626,7 +646,16 @@ export function RequestsListPage() {
               />
             </Form.Item>
             <Form.Item name="error_code">
-              <Input placeholder="错误码" allowClear className="field-width-160" />
+              {/* 全量枚举选项（可搜索）：中文标签检索，值仍为原始错误码 */}
+              <Select
+                placeholder="错误码"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                className="field-width-160"
+                virtual={false}
+                options={[{ value: "", label: "全部" }, ...ERROR_CODE_OPTIONS]}
+              />
             </Form.Item>
             <Form.Item name="since">
               <DatePicker placeholder="开始日期" maxDate={dayjs()} />

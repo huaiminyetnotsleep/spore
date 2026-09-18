@@ -122,7 +122,7 @@ describe("频道详情页", () => {
     expect(container.querySelectorAll(".ant-table-small")).toHaveLength(4);
     expect(screen.getByTestId("channel-bot-dist")).toBeInTheDocument();
     expect(screen.getByText("@alpha_bot")).toBeInTheDocument();
-    expect(screen.getByText("MEDIA_DOWNLOAD_FAILED")).toBeInTheDocument();
+    expect(screen.getByText("媒体下载失败")).toBeInTheDocument();
   });
 
   it("空分区展示明确空态，而不是隐藏分区", async () => {

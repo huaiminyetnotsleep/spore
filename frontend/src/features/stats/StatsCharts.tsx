@@ -19,7 +19,7 @@ import type {
   StatsTrendPoint,
   StatsUser,
 } from "../../api/admin";
-import { botLabel, distKeyText, fmtTime } from "../../shared/format";
+import { botLabel, distKeyText, errorCodeLabel, fmtTime } from "../../shared/format";
 import { chartPalette } from "../../theme";
 import { ChartPanel } from "../shared/ChartPanel";
 import { RankBarChart, type RankBarDatum } from "../shared/RankBarChart";
@@ -349,7 +349,7 @@ function MediaDistributionChart({ rows, total, navigate }: { rows: DistRow[]; to
 function ErrorDistributionChart({ rows, navigate }: { rows: StatsError[]; navigate: NavigateFunction }) {
   const data: RankBarDatum[] = rows.map((row) => ({
     key: row.key,
-    label: row.key === OTHER_ERROR_KEY ? "其他" : distKeyText(row.key),
+    label: row.key === OTHER_ERROR_KEY ? "其他" : errorCodeLabel(distKeyText(row.key)),
     count: row.count,
     ratio: row.ratio,
   }));

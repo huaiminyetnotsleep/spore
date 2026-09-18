@@ -97,6 +97,75 @@ export const DELIVERY_MODE_TAG_COLORS: Record<string, string> = {
   dump: "geekblue",
 };
 
+/**
+ * 错误码中文标签（requests.error_code 与 apperr 错误模型同源）。
+ * 短标签供表格列与分布图快速扫读；完整用户文案以服务端 error_text 为准，
+ * 原文 code 经 Tooltip/详情页保留。未知码回退原值（历史/未来新增码兜底）。
+ */
+export const ERROR_CODE_LABELS: Record<string, string> = {
+  // 取数与解析
+  INVALID_URL: "链接无法识别",
+  INVALID_INVITE_URL: "邀请链接无法识别",
+  MESSAGE_NOT_FOUND: "消息不存在",
+  CHANNEL_NOT_ACCESSIBLE: "频道不可访问",
+  SERVICE_MESSAGE: "服务消息",
+  // 媒体与发送
+  MEDIA_UNSUPPORTED: "消息类型不支持",
+  FILE_TOO_LARGE: "文件超过上限",
+  TEMP_DIR_FULL: "临时目录已满",
+  MEDIA_DOWNLOAD_FAILED: "媒体下载失败",
+  NETWORK_ERROR: "网络故障",
+  TELEGRAM_SERVER_ERROR: "Telegram 服务端故障",
+  FILE_REFERENCE_INVALID: "媒体引用失效",
+  TELEGRAM_RATE_LIMIT: "Telegram 限流",
+  BOT_SEND_FAILED: "发送失败",
+  SEND_TARGET_INVALID: "发送目标不可用",
+  LARGE_CHANNEL_UNAVAILABLE: "大文件通道不可用",
+  INTERNAL_ERROR: "内部错误",
+  // 准入拒绝
+  USER_NOT_AUTHORIZED: "未在白名单",
+  USER_PENDING: "待审批",
+  USER_DISABLED: "账号已停用",
+  DUPLICATE_LINK: "重复链接",
+  RATE_LIMITED: "提交过于频繁",
+  QUOTA_EXCEEDED: "今日额度用尽",
+  CONCURRENT_LIMIT: "并发任务超限",
+  QUEUE_FULL: "队列已满",
+  CLOUD_DOWNLOAD_DENIED: "云盘权限未开放",
+  // 任务生命周期
+  INTERRUPTED: "服务重启中断",
+  REQUEST_CANCELLED: "已取消",
+  RETRY_EXHAUSTED: "重试次数用尽",
+  // 存储
+  STORE_UNAVAILABLE: "存储不可用",
+  STORE_MIGRATION_FAILED: "存储初始化失败",
+  STORE_CONSTRAINT: "数据冲突",
+  // Web 管理端认证
+  WEB_AUTH_FAILED: "登录失败",
+  WEB_LOGIN_LOCKED: "登录已锁定",
+  WEB_CSRF_INVALID: "CSRF 校验失败",
+  OAUTH_STATE_INVALID: "OAuth 状态无效",
+  OAUTH_EXCHANGE_FAILED: "GitHub 交换失败",
+  // 云盘
+  CLOUD_AUTH_FAILED: "网盘凭据错误",
+  CLOUD_QUOTA: "网盘空间不足",
+  CLOUD_NETWORK: "网盘网络异常",
+  CLOUD_UPLOAD_FAILED: "网盘上传失败",
+  CLOUD_UPLOAD_TIMEOUT: "网盘上传超时",
+  CLOUD_TEXT_ONLY: "纯文本无媒体",
+  CLOUD_VERIFY_FAILED: "云盘核验不可用",
+  // 频道绑定
+  CHANNEL_TARGET_INVALID: "频道标识无法解析",
+  CHANNEL_NOT_POSTABLE: "机器人无发言权限",
+  CHANNEL_ALREADY_BOUND: "频道已被绑定",
+  CHANNEL_BIND_LIMIT: "绑定数量达上限",
+};
+
+/** 错误码标签；未知原样返回（历史/新增码兜底）。 */
+export function errorCodeLabel(code: string): string {
+  return ERROR_CODE_LABELS[code] ?? code;
+}
+
 /** 云盘上传记录状态中文标签（cloud_uploads.status，后端只下发 raw key）。 */
 export const CLOUD_UPLOAD_STATUS_LABELS: Record<string, string> = {
   uploading: "上传中",
