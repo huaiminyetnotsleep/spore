@@ -173,7 +173,20 @@ func asRateLimit(err error) (*tgbot.TooManyRequestsError, bool) {
 	return nil, false
 }
 
-// classifyBotError 把 go-telegram/bot 的错误归类为 AppError。
+// sendTargetPatterns 是"发送目标不可用"的响应描述特征（Bot API 400/403
+// description 的小写匹配）：此类失败重试无效，需要用户重新绑定频道或
+// 管理员处理机器人权限，与可重试的临时失败语义不同。
+var sendTargetPatterns = []string{
+	"chat not found",              // 目标聊天不存在（机器人不在频道/已退出）
+	"bot was blocked by the user", // 私聊被用户拉黑
+	"bot was kicked",              // 机器人被踢出群组/频道
+	"bot is not a member",         // 机器人不是频道成员
+	"need administrator rights",   // 频道内无发言权限
+	"not enough rights",           // 权限不足（发言/发媒体被限制）
+}
+
+// classifyBotError 把 go-telegram/bot 的错误归类为 AppError：限流与
+// 目标不可用单列，网络传输故障归 NETWORK_ERROR，其余 BOT_SEND_FAILED 兜底。
 func classifyBotError(err error) error {
 	if err == nil {
 		return nil
@@ -184,6 +197,15 @@ func classifyBotError(err error) error {
 	}
 	if _, limited := asRateLimit(err); limited {
 		return apperr.Wrap(apperr.CodeRateLimited, err)
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range sendTargetPatterns {
+		if strings.Contains(msg, p) {
+			return apperr.Wrap(apperr.CodeSendTargetInvalid, err)
+		}
+	}
+	if apperr.IsTransportFailure(err) {
+		return apperr.Wrap(apperr.CodeNetworkError, err)
 	}
 	return apperr.Wrap(apperr.CodeSendFailed, err)
 }

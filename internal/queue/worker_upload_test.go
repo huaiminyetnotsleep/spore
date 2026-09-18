@@ -210,8 +210,8 @@ func TestWorkerUploadRefreshesExpiredReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取请求失败: %v", err)
 	}
-	if r.Status != store.RequestFailed || r.ErrorCode != "MEDIA_DOWNLOAD_FAILED" {
-		t.Fatalf("重试仍过期应落 failed(MEDIA_DOWNLOAD_FAILED): %+v", r)
+	if r.Status != store.RequestFailed || r.ErrorCode != "FILE_REFERENCE_INVALID" {
+		t.Fatalf("重试仍过期应落 failed(FILE_REFERENCE_INVALID): %+v", r)
 	}
 	// 两次发送尝试（初次 + 刷新重试）均发起但都因读源失败，无一成功送达
 	calls := sender.mediaCallsSnapshot()

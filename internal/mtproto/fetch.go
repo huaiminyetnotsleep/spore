@@ -15,7 +15,8 @@ import (
 )
 
 // classifyTgError 把 gotd 的 Telegram RPC 错误统一归类为 AppError；
-// 未识别的错误包装为 INTERNAL_ERROR，调用方无需自行兜底。
+// 优先匹配可定位的业务错误（源不可达/引用失效/限流/服务端故障/网络故障），
+// 未识别的错误才兜底 INTERNAL_ERROR。
 func classifyTgError(err error) *apperr.AppError {
 	switch {
 	case tgerr.Is(err, "CHANNEL_PRIVATE", "CHANNEL_PUBLIC_GROUP_NA", "CHAT_ADMIN_REQUIRED", "CHAT_NOT_FOUND"):
@@ -24,10 +25,14 @@ func classifyTgError(err error) *apperr.AppError {
 		return apperr.Wrap(apperr.CodeInvalidURL, err)
 	case tgerr.Is(err, "MESSAGE_ID_INVALID", "MESSAGE_EMPTY"):
 		return apperr.Wrap(apperr.CodeMessageNotFound, err)
-	case tgerr.Is(err, "FILE_REFERENCE_EXPIRED"):
-		return apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+	case tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "PERSISTENT_FILE_REFERENCE_INVALID"):
+		return apperr.Wrap(apperr.CodeFileReferenceInvalid, err)
 	case tgerr.Is(err, "FLOOD_WAIT_X", "FLOOD_PREMIUM_WAIT_X"):
 		return apperr.Wrap(apperr.CodeRateLimited, err)
+	case tgerr.IsCode(err, 500):
+		return apperr.Wrap(apperr.CodeTelegramServer, err)
+	case apperr.IsTransportFailure(err):
+		return apperr.Wrap(apperr.CodeNetworkError, err)
 	default:
 		return apperr.Wrap(apperr.CodeInternal, err)
 	}
