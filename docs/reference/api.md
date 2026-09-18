@@ -248,6 +248,7 @@
 | `top_channels` | array | Top 5 频道 `{key, total, succeeded, failed, success_rate, last_requested_at}` |
 | `top_users` | array | Top 10 用户 `{id, username, display_name, total, succeeded, failed, success_rate, last_requested_at}` |
 | `media_dist` | array | 媒体类型分布 `{key, count}` |
+| `delivery_dist` | array | 投递方式分布 `{key, count}`；按 `delivery_mode` 分组（全部状态，与 `media_dist` 口径一致） |
 | `error_dist` | array | 错误原因排行 `{key, count, ratio}`；Top 5 之外合并为 `key: "__other__"` |
 | `dc_dist` | array | 源媒体所在 Telegram DC 分布 `{key, count}`；`key` 为 DC ID 十进制串，空串 = 未记录；跨多个 DC 的请求在每个 DC 各计一次 |
 | `dc_trend` | array | 按日源媒体 DC 分布 `{day, dist: [{key, count}]}`；范围内空日期补齐（`dist` 为空数组）；全量模式只含有数据日期 |
@@ -1455,4 +1456,4 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 | `CHANNEL_ALREADY_BOUND` | 409 | 该频道已被其他用户绑定 |
 | `CHANNEL_BIND_LIMIT` | 409 | 已达到可绑定频道的数量上限 |
 
-请求记录可能出现的失败码（`error_code` 字段）：`INVALID_URL`、`MESSAGE_NOT_FOUND`、`CHANNEL_NOT_ACCESSIBLE`、`SERVICE_MESSAGE`、`MEDIA_UNSUPPORTED`、`FILE_TOO_LARGE`、`TEMP_DIR_FULL`、`MEDIA_DOWNLOAD_FAILED`、`TELEGRAM_RATE_LIMIT`、`BOT_SEND_FAILED`、`LARGE_CHANNEL_UNAVAILABLE`、`INTERRUPTED`、`REQUEST_CANCELLED`、`CLOUD_AUTH_FAILED`（云盘账号验证失败）、`CLOUD_QUOTA`（网盘空间不足）、`CLOUD_NETWORK`（网盘网络异常）、`CLOUD_UPLOAD_FAILED`（云盘上传兜底失败）、`CLOUD_UPLOAD_TIMEOUT`（云盘上传超过任务时限）、`CLOUD_VERIFY_FAILED`（同链接已上传核验/远端存在性检查暂时不可用）、`CLOUD_DOWNLOAD_DENIED`（用户级云盘下载权限被拒绝，见用户详情 `effective_cloud_download`）、`CLOUD_TEXT_ONLY`（纯文本消息不支持网盘下载） 等，中文文案由 `apperr.UserText` 统一提供。云盘任务的逐文件结果另见 `GET /api/v1/requests/{id}` 的 `cloud_uploads`。
+请求记录可能出现的失败码（`error_code` 字段）：`INVALID_URL`、`MESSAGE_NOT_FOUND`、`CHANNEL_NOT_ACCESSIBLE`、`SERVICE_MESSAGE`、`MEDIA_UNSUPPORTED`、`FILE_TOO_LARGE`、`TEMP_DIR_FULL`、`MEDIA_DOWNLOAD_FAILED`（下载兜底）、`NETWORK_ERROR`（网络连接失败或超时）、`TELEGRAM_SERVER_ERROR`（Telegram RPC 5xx）、`FILE_REFERENCE_INVALID`（媒体引用失效，刷新后仍不可得）、`TELEGRAM_RATE_LIMIT`、`SEND_TARGET_INVALID`（发送目标不可用，重试无效）、`BOT_SEND_FAILED`（发送兜底）、`LARGE_CHANNEL_UNAVAILABLE`、`INTERNAL_ERROR`（未分类兜底）、`INTERRUPTED`、`REQUEST_CANCELLED`、`CLOUD_AUTH_FAILED`（云盘账号验证失败）、`CLOUD_QUOTA`（网盘空间不足）、`CLOUD_NETWORK`（网盘网络异常）、`CLOUD_UPLOAD_FAILED`（云盘上传兜底失败）、`CLOUD_UPLOAD_TIMEOUT`（云盘上传超过任务时限）、`CLOUD_VERIFY_FAILED`（同链接已上传核验/远端存在性检查暂时不可用）、`CLOUD_DOWNLOAD_DENIED`（用户级云盘下载权限被拒绝，见用户详情 `effective_cloud_download`）、`CLOUD_TEXT_ONLY`（纯文本消息不支持网盘下载） 等，中文文案由 `apperr.UserText` 统一提供。`NETWORK_ERROR`/`TELEGRAM_SERVER_ERROR`/`FILE_REFERENCE_INVALID`/`SEND_TARGET_INVALID` 为细化码，仅对新增版本后的新失败产生；历史行保留归类时的原始码。云盘任务的逐文件结果另见 `GET /api/v1/requests/{id}` 的 `cloud_uploads`。
