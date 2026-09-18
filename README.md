@@ -6,6 +6,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![Docs](https://img.shields.io/badge/Docs-VitePress-646CFF?logo=vitepress&logoColor=white)
 ![Image](https://img.shields.io/badge/image-ghcr.io%2Fhuaiminyetnotsleep%2Fspore-0969DA?logo=github)
+![License](https://img.shields.io/badge/License-PolyForm_NC_1.0.0-D13030)
 
 </div>
 
@@ -201,10 +202,10 @@ Spore 只是一个由个人维护的自托管技术工具，不提供内容授�
 
 ## 📄 许可证及第三方协议
 
-- 本项目源代码以 [MIT License](LICENSE) 发布，软件按“原样”提供，不附带任何明示或默示担保。复制、修改、分发或再许可时，应保留 MIT 许可证要求的版权及许可声明。
-- “个人维护、当前不提供商业服务”描述的是本项目的维护和运营性质，**不改变 MIT License 本身允许包括商业使用在内的授权范围**。任何个人或组织基于本项目开展部署、分发或商业活动时，均应自行完成法律、平台、数据保护、税务及其他必要的合规评估。
+- 本项目源代码以 [PolyForm Noncommercial License 1.0.0](LICENSE) 发布，软件按“原样”提供，不附带任何明示或默示担保。复制、修改、分发时应保留版权及许可声明（或 [LICENSE](LICENSE) 中的协议链接）。
+- 本协议**仅授权非商业用途**：个人自用、学习研究、业余爱好项目，以及慈善、教育、公共研究等非商业组织的使用与 fork、分发均在授权范围内。**任何商业用途——包括但不限于商业部署、售卖、付费服务、集成进商业产品或服务、以营利为目的的运营——均未获授权**，如需商业使用请事先联系作者取得单独授权。
 - Go、前端及构建工具等第三方依赖仍分别受其上游许可证、版权声明和使用条款约束；使用者在重新分发软件、容器镜像或衍生作品前，应自行核对并履行相应的许可证义务。
-- Telegram 名称、商标、API、客户端协议和服务由其权利人提供并受相应条款约束；本项目的 MIT License 不授予任何第三方内容、商标、服务或数据的权利。
+- Telegram 名称、商标、API、客户端协议和服务由其权利人提供并受相应条款约束；本项目的 PolyForm Noncommercial License 不授予任何第三方内容、商标、服务或数据的权利。
 
 ## 🙏 致谢
 

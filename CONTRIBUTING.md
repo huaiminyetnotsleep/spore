@@ -48,4 +48,4 @@ make frontend-build
 
 ## 许可
 
-提交到本项目的贡献将按照项目 [MIT License](LICENSE) 发布。提交内容前请确认你有权授予该许可。
+提交到本项目的贡献将按照项目 [PolyForm Noncommercial License 1.0.0](LICENSE) 发布。提交内容前请确认你有权授予该许可。
