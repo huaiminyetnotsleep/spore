@@ -444,7 +444,8 @@ func (c *BotClient) cachedPeer(userID int64) (int64, bool) {
 }
 
 // classifySendError 把 MTProto 上传/发送错误包装为 AppError：限流 →
-// TELEGRAM_RATE_LIMIT，其余 → BOT_SEND_FAILED。cause 保留原始 tgerr，
+// TELEGRAM_RATE_LIMIT，服务端 5xx → TELEGRAM_SERVER_ERROR，网络传输故障 →
+// NETWORK_ERROR，其余 → BOT_SEND_FAILED 兜底。cause 保留原始 tgerr，
 // 调用方可经错误链（AppError.Unwrap）做 tgerr 结构化判定。
 func classifySendError(err error) error {
 	if err == nil {
@@ -452,6 +453,12 @@ func classifySendError(err error) error {
 	}
 	if _, ok := tgerr.AsFloodWait(err); ok {
 		return apperr.Wrap(apperr.CodeRateLimited, err)
+	}
+	if tgerr.IsCode(err, 500) {
+		return apperr.Wrap(apperr.CodeTelegramServer, err)
+	}
+	if apperr.IsTransportFailure(err) {
+		return apperr.Wrap(apperr.CodeNetworkError, err)
 	}
 	return apperr.Wrap(apperr.CodeSendFailed, err)
 }

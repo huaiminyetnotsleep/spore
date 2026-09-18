@@ -83,14 +83,15 @@ type apiStatsRequests struct {
 	SuccessRate float64 `json:"success_rate"` // [0,1]；无终态时为 0
 	ErrorRate   float64 `json:"error_rate"`   // [0,1]；无终态时为 0
 
-	Trend       []apiStatsTrend   `json:"trend"`
-	TopChannels []apiStatsChannel `json:"top_channels"`
-	TopUsers    []apiStatsUser    `json:"top_users"`
-	MediaDist   []apiDistRow      `json:"media_dist"`
-	ErrorDist   []apiStatsError   `json:"error_dist"`
-	DCDist      []apiDistRow      `json:"dc_dist"`
-	DCTrend     []apiDCTrendPoint `json:"dc_trend"`
-	BotDist     []apiStatsBot     `json:"bot_dist"`
+	Trend        []apiStatsTrend   `json:"trend"`
+	TopChannels  []apiStatsChannel `json:"top_channels"`
+	TopUsers     []apiStatsUser    `json:"top_users"`
+	MediaDist    []apiDistRow      `json:"media_dist"`
+	DeliveryDist []apiDistRow      `json:"delivery_dist"`
+	ErrorDist    []apiStatsError   `json:"error_dist"`
+	DCDist       []apiDistRow      `json:"dc_dist"`
+	DCTrend      []apiDCTrendPoint `json:"dc_trend"`
+	BotDist      []apiStatsBot     `json:"bot_dist"`
 }
 
 // apiStatsView 是 GET /api/v1/stats 的只读 DTO。
@@ -133,14 +134,15 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 		SinceDay: tr.SinceDay,
 		UntilDay: tr.UntilDay,
 		Requests: apiStatsRequests{
-			Trend:       []apiStatsTrend{},
-			TopChannels: []apiStatsChannel{},
-			TopUsers:    []apiStatsUser{},
-			MediaDist:   []apiDistRow{},
-			ErrorDist:   []apiStatsError{},
-			DCDist:      []apiDistRow{},
-			DCTrend:     []apiDCTrendPoint{},
-			BotDist:     []apiStatsBot{},
+			Trend:        []apiStatsTrend{},
+			TopChannels:  []apiStatsChannel{},
+			TopUsers:     []apiStatsUser{},
+			MediaDist:    []apiDistRow{},
+			DeliveryDist: []apiDistRow{},
+			ErrorDist:    []apiStatsError{},
+			DCDist:       []apiDistRow{},
+			DCTrend:      []apiDCTrendPoint{},
+			BotDist:      []apiStatsBot{},
 		},
 	}
 	// ranged 构造同范围筛选（bot 筛选跟随；排行/分布类再带各自 Limit）
@@ -207,6 +209,13 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request, _ sessio
 		}
 	} else {
 		s.log.Warn("聚合媒体分布失败", "op", op, "error", err.Error())
+	}
+	if dd, err := s.st.ListDeliveryModeDist(ctx, filter); err == nil {
+		for _, d := range dd {
+			view.Requests.DeliveryDist = append(view.Requests.DeliveryDist, apiDistRow{Key: d.Key, Count: d.Count})
+		}
+	} else {
+		s.log.Warn("聚合投递方式分布失败", "op", op, "error", err.Error())
 	}
 	if ed, err := s.st.ListErrorDist(ctx, filter); err == nil {
 		view.Requests.ErrorDist = statsErrorDist(ed, totals.Failed, 5)

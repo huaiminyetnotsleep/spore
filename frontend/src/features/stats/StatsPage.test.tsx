@@ -95,7 +95,14 @@ function statsResponse(overrides: Partial<StatsResponse> = {}): StatsResponse {
       top_users: [
         { id: 1, username: "alice", display_name: "Alice", total: 12, succeeded: 9, failed: 2, success_rate: 9 / 11, last_requested_at: 0 },
       ],
-      media_dist: [{ key: "photo", count: 9 }],
+      delivery_dist: [
+        { key: "upload", count: 6 },
+        { key: "cloud", count: 2 },
+        { key: "reuse", count: 1 },
+        { key: "text", count: 1 },
+      ],
+      media_dist: [
+{ key: "photo", count: 9 }],
       error_dist: [{ key: "MEDIA_DOWNLOAD_FAILED", count: 2, ratio: 1 }],
       dc_dist: [{ key: "2", count: 12 }],
       dc_trend: [{ day: "2026-08-27", dist: [{ key: "2", count: 12 }] }],
@@ -173,8 +180,8 @@ describe("业务统计页", () => {
     // 生效范围在工具栏回显
     expect(screen.getByText("统计范围：2026-08-21 ~ 2026-08-27")).toBeInTheDocument();
 
-    // 柱状图移除：折线 + DC 堆叠柱状 + 两排行 + 三饼图 = 7 张 mock 占位（页级 mock 不区分类型）
-    expect(await screen.findAllByTestId("mock-plot")).toHaveLength(7);
+    // 柱状图移除：折线 + DC 堆叠柱状 + 两排行 + 四饼图 = 8 张 mock 占位（页级 mock 不区分类型）
+    expect(await screen.findAllByTestId("mock-plot")).toHaveLength(8);
 
     // 全时段快照：用户计数 + 频道加入指标 + 上限后缀
     expect(screen.getByText("全时段快照")).toBeInTheDocument();

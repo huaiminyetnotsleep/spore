@@ -15,10 +15,26 @@ import (
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 )
+
+// downloadErrorCode 把下载路径的底层错误细分为可定位的错误码：
+// file reference 失效 → FILE_REFERENCE_INVALID（cause 保留，worker 经
+// IsFileReferenceExpired 结构化判断后仍会刷新重试）；网络传输故障 →
+// NETWORK_ERROR；其余保持 MEDIA_DOWNLOAD_FAILED 兜底。
+func downloadErrorCode(err error) apperr.Code {
+	switch {
+	case tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "PERSISTENT_FILE_REFERENCE_INVALID"):
+		return apperr.CodeFileReferenceInvalid
+	case apperr.IsTransportFailure(err):
+		return apperr.CodeNetworkError
+	default:
+		return apperr.CodeMediaDownloadFailed
+	}
+}
 
 // Handle 表示一份准备就绪的媒体数据。
 // Cleanup 在消费完成或放弃时必须调用：
@@ -90,7 +106,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 			_, err := dl.Download(api, m.Location).Stream(ctx, &countWriter{w: pw, on: onDownload})
 			if err != nil {
 				log.Debug("流式下载结束", "file", m.FileName, "error", err.Error())
-				err = apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+				err = apperr.Wrap(downloadErrorCode(err), err)
 			}
 			_ = pw.CloseWithError(err) // 成功时为 nil，正常关闭
 		}()
@@ -119,7 +135,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 				_, err := dl.Download(api, m.Location).WithThreads(opt.DownloadThreads).Parallel(ctx, &countWriterAt{w: buf, on: onDownload})
 				if err != nil {
 					log.Debug("内存管道下载结束", "file", m.FileName, "error", err.Error())
-					err = apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+					err = apperr.Wrap(downloadErrorCode(err), err)
 				}
 				buf.CloseWithError(err) // 成功时为 nil；短读在缓冲内升级为错误
 			}()
@@ -157,7 +173,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 		_, err := dl.Download(api, m.Location).WithThreads(opt.DownloadThreads).Parallel(dctx, gate)
 		if err != nil {
 			log.Debug("临时文件下载结束", "file", m.FileName, "error", err.Error())
-			err = apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+			err = apperr.Wrap(downloadErrorCode(err), err)
 		}
 		gate.CloseWithError(err) // 成功时为 nil；短读在门控内升级为错误
 	}()

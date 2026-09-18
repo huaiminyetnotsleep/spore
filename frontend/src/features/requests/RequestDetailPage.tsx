@@ -24,6 +24,7 @@ import {
   REQUEST_STATUS_TAG_COLORS,
   botLabel,
   distKeyText,
+  errorCodeLabel,
   fmtBytes,
   fmtDuration,
   fmtFileSize,
@@ -206,8 +207,8 @@ export function RequestDetailPage() {
                 </Descriptions.Item>
                 {detail.error_code ? (
                   <Descriptions.Item label="错误">
-                    {detail.error_code}
-                    <Text type="secondary">（{detail.error_text}）</Text>
+                    <Tag color="red">{errorCodeLabel(detail.error_code)}</Tag>
+                    <Text type="secondary">（{detail.error_code}：{detail.error_text}）</Text>
                   </Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="媒体类型">

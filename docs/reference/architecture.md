@@ -426,9 +426,13 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `SERVICE_MESSAGE` | `*tg.MessageService` 或转换后无可提取内容 | 这是一条服务消息，没有可提取的内容。 |
 | `MEDIA_UNSUPPORTED` | 贴纸、webpage 等暂不支持类型 | 暂不支持这种消息类型。 |
 | `FILE_TOO_LARGE` | Size > MaxFileSize | 文件超过大小上限，暂无法发送。 |
-| `MEDIA_DOWNLOAD_FAILED` | 下载流/临时文件失败 | 媒体下载失败，请稍后重试。 |
+| `MEDIA_DOWNLOAD_FAILED` | 下载流/临时文件失败（非网络、非引用类失败的兜底） | 媒体下载失败，请稍后重试。 |
+| `NETWORK_ERROR` | 连接失败/超时/连接重置等传输层故障（取数、下载、发送共用；ctx 取消不在此列，由 worker 改判 `INTERRUPTED`） | 网络连接失败或超时，请稍后重试。 |
+| `TELEGRAM_SERVER_ERROR` | Telegram RPC 5xx（INTERNAL_SERVER_ERROR、TIMEOUT 等） | Telegram 服务暂时故障，请稍后重试。 |
+| `FILE_REFERENCE_INVALID` | file reference 过期或彻底失效（`RefreshMedia` 刷新重试后仍不可得） | 源消息的媒体引用已失效且无法刷新，内容可能已被删除或更换，请确认后重试。 |
 | `TELEGRAM_RATE_LIMIT` | `*tg.ErrorFloodWait` 兜底 | 请求过于频繁，请稍后重试。 |
-| `BOT_SEND_FAILED` | Bot API / MTProto 其他发送错误 | 发送失败，请稍后重试。 |
+| `SEND_TARGET_INVALID` | Bot API 目标类失败（chat not found、bot 被拉黑/被踢出、权限不足——重试无效） | 消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。 |
+| `BOT_SEND_FAILED` | Bot API / MTProto 其他发送错误（兜底） | 发送失败，请稍后重试。 |
 | `LARGE_CHANNEL_UNAVAILABLE` | 超过 Bot API 上限的媒体遇到大文件直传通道（Bot 会话）未就绪 | 大文件发送通道暂不可用，请稍后重试。 |
 | `INTERNAL_ERROR` | 未分类异常 | 处理失败，请稍后重试。 |
 | `USER_NOT_AUTHORIZED` | 用户不在白名单（access 六步链第 1 步） | 此机器人仅限白名单用户使用，请先发送 /start 申请。 |

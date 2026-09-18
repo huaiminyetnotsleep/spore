@@ -13,6 +13,8 @@ func TestUserText(t *testing.T) {
 		CodeServiceMessage, CodeMediaUnsupported, CodeFileTooLarge,
 		CodeMediaDownloadFailed, CodeRateLimited,
 		CodeSendFailed, CodeLargeChannelUnavailable, CodeInternal,
+		CodeNetworkError, CodeTelegramServer, CodeFileReferenceInvalid,
+		CodeSendTargetInvalid,
 
 		CodeStoreUnavailable, CodeStoreMigration, CodeStoreConstraint,
 		CodeUserNotAuthorized, CodeUserPending, CodeUserDisabled,
@@ -51,6 +53,18 @@ func TestUserText(t *testing.T) {
 	}
 	if got := UserText(CodeCloudVerifyFailed); got != "云盘文件核验暂时不可用，请稍后重试。" {
 		t.Errorf("云盘核验不可用文案不符合契约: %q", got)
+	}
+	if got := UserText(CodeNetworkError); got != "网络连接失败或超时，请稍后重试。" {
+		t.Errorf("网络故障文案不符合契约: %q", got)
+	}
+	if got := UserText(CodeTelegramServer); got != "Telegram 服务暂时故障，请稍后重试。" {
+		t.Errorf("服务端故障文案不符合契约: %q", got)
+	}
+	if got := UserText(CodeFileReferenceInvalid); got != "源消息的媒体引用已失效且无法刷新，内容可能已被删除或更换，请确认后重试。" {
+		t.Errorf("引用失效文案不符合契约: %q", got)
+	}
+	if got := UserText(CodeSendTargetInvalid); got != "消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。" {
+		t.Errorf("发送目标不可用文案不符合契约: %q", got)
 	}
 	if UserText("NOT_A_CODE") != UserText(CodeInternal) {
 		t.Error("未知错误码应回落 INTERNAL_ERROR 文案")

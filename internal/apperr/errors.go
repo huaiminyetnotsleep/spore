@@ -25,6 +25,16 @@ const (
 	CodeMediaDownloadFailed Code = "MEDIA_DOWNLOAD_FAILED"
 	CodeRateLimited         Code = "TELEGRAM_RATE_LIMIT"
 	CodeSendFailed          Code = "BOT_SEND_FAILED"
+	// 传输与目标细分码：把大筐码（INTERNAL_ERROR / MEDIA_DOWNLOAD_FAILED /
+	// BOT_SEND_FAILED）中可定位的失败原因拆出来，请求记录里能直接看出
+	// 问题出在本机网络、Telegram 服务端、源内容还是发送目标；未命中的
+	// 场景仍由各自的大筐码兜底。
+	CodeNetworkError         Code = "NETWORK_ERROR"         // 网络连接失败或超时（重试通常可恢复）
+	CodeTelegramServer       Code = "TELEGRAM_SERVER_ERROR" // Telegram 服务端故障（RPC 5xx）
+	CodeFileReferenceInvalid Code = "FILE_REFERENCE_INVALID"
+	// CodeFileReferenceInvalid 源媒体 file reference 失效（过期或彻底失效）且
+	// 刷新后仍不可得：通常意味着源内容已被删除或更换，重试无意义。
+	CodeSendTargetInvalid Code = "SEND_TARGET_INVALID" // 发送目标不可用（聊天不存在/机器人被拒/权限不足）
 	// CodeLargeChannelUnavailable 大文件直传通道（Bot 号 MTProto 会话）未就绪：
 	// 超过 Bot API 上限的媒体无法发送，小文件不受影响。
 	CodeLargeChannelUnavailable Code = "LARGE_CHANNEL_UNAVAILABLE"
@@ -87,6 +97,10 @@ var userTexts = map[Code]string{
 	CodeFileTooLarge:            "文件超过大小上限，暂无法发送。",
 	CodeTempDirFull:             "临时目录空间已满，请稍后重试。",
 	CodeMediaDownloadFailed:     "媒体下载失败，请稍后重试。",
+	CodeNetworkError:            "网络连接失败或超时，请稍后重试。",
+	CodeTelegramServer:          "Telegram 服务暂时故障，请稍后重试。",
+	CodeFileReferenceInvalid:    "源消息的媒体引用已失效且无法刷新，内容可能已被删除或更换，请确认后重试。",
+	CodeSendTargetInvalid:       "消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。",
 	CodeRateLimited:             "请求过于频繁，请稍后重试。",
 	CodeSendFailed:              "发送失败，请稍后重试。",
 	CodeLargeChannelUnavailable: "大文件发送通道暂不可用，请稍后重试。",

@@ -470,3 +470,60 @@ func TestRequestTotals(t *testing.T) {
 		t.Errorf("空库应为零值，得到 %+v", got)
 	}
 }
+
+func TestListDeliveryModeDist(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	mustUser(t, s, 1)
+
+	// 投递方式覆盖七个取值 + 空串回落默认 upload
+	for i, in := range []struct {
+		status string
+		mode   string
+	}{
+		{RequestSucceeded, DeliveryModeUpload},
+		{RequestSucceeded, DeliveryModeText},
+		{RequestSucceeded, DeliveryModeCloud},
+		{RequestSucceeded, DeliveryModeReuse},
+		{RequestFailed, DeliveryModeUpload},
+		{RequestFailed, DeliveryModeDump},
+		{RequestFailed, DeliveryModeReference},
+		{RequestFailed, DeliveryModeMixed},
+		{RequestSucceeded, ""}, // 空串落库回落默认 upload
+		{RequestQueued, ""},    // 在途行保持创建时的默认 upload，参与分布
+	} {
+		r, err := s.CreateRequest(ctx, Request{
+			UserID: 1, ChannelKey: "alpha", MessageID: i + 1, RequestedAt: int64(100 + i), QueuedAt: int64(100 + i),
+		})
+		if err != nil {
+			t.Fatalf("创建请求失败: %v", err)
+		}
+		if in.status != RequestQueued {
+			if err := s.FinishRequest(ctx, r.ID, RequestResult{
+				Status: in.status, DeliveryMode: in.mode, At: int64(200 + i),
+			}); err != nil {
+				t.Fatalf("落库终态失败: %v", err)
+			}
+		}
+	}
+
+	got, err := s.ListDeliveryModeDist(ctx, StatsFilter{})
+	if err != nil {
+		t.Fatalf("聚合投递方式分布失败: %v", err)
+	}
+	// upload=4 居首（含排队行的创建默认值）；并列 1 的按 key 字母序
+	//（ORDER BY COUNT(*) DESC, 1）
+	want := []DistPoint{
+		{DeliveryModeUpload, 4}, {DeliveryModeCloud, 1}, {DeliveryModeDump, 1},
+		{DeliveryModeMixed, 1}, {DeliveryModeReference, 1}, {DeliveryModeReuse, 1},
+		{DeliveryModeText, 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("投递方式分布应有 %d 组，得到 %d: %+v", len(want), len(got), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("第 %d 组应为 %+v，得到 %+v", i, w, got[i])
+		}
+	}
+}

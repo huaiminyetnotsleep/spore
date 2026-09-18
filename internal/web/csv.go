@@ -200,17 +200,17 @@ func sourceMediaDCText(ids []int) string {
 func deliveryModeText(mode string) string {
 	switch mode {
 	case store.DeliveryModeReference:
-		return "引用"
+		return "引用直发"
 	case store.DeliveryModeUpload:
-		return "上传"
+		return "媒体投递"
 	case store.DeliveryModeMixed:
-		return "混合"
+		return "混合投递"
 	case store.DeliveryModeText:
-		return "文本"
+		return "文本投递"
 	case store.DeliveryModeReuse:
-		return "复用"
+		return "缓存直发"
 	case store.DeliveryModeCloud:
-		return "网盘"
+		return "网盘转存"
 	case store.DeliveryModeDump:
 		return "缓存补写"
 	default:
