@@ -313,6 +313,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, user github
 		s.log.Info("已清理过期会话", "count", n)
 	}
 	s.audit(r.Context(), "auth.login", "web", map[string]any{"method": "github", "ip": ip})
+	s.notifyAdminLogin(r, "GitHub", ip)
 	s.log.Info("管理端登录成功", "ip", ip, "method", "github")
 	// GitHub 登录成功后与密钥登录一致，落地 SPA 管理端入口
 	http.Redirect(w, r, "/admin", http.StatusFound)

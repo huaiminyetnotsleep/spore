@@ -6,6 +6,9 @@ import "slices"
 const (
 	CategorySystemAlert    = "system_alert"
 	CategorySystemRecovery = "system_recovery"
+	// CategoryActivity 是逐次即时活动通知（登录、申请等）：不写事件中心、
+	// 不受告警冷却约束，每次发生都独立投递；仍受通知策略按类别/事件控制。
+	CategoryActivity = "activity"
 )
 
 // EventDefinition is the compile-time metadata for one event type.
@@ -33,6 +36,11 @@ var eventCatalog = []EventDefinition{
 	{Type: KeyCloudUploadFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘任务连续失败", Description: "云盘下载任务连续失败，请到管理端消息记录页查看失败原因。", SupportsRecovery: true},
 	{Type: KeyCloudConfigInvalid, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘配置无效", Description: "云盘下载配置无效（文件损坏或默认目的地悬空），功能暂按未配置处理；请在管理端修正。"},
 	{Type: KeyCloudDisabled, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘功能不可用", Description: "云盘下载已开启但 rclone 不可用，/download 暂不可用；请安装或修复 rclone 后重试。", SupportsRecovery: true},
+
+	// 活动通知：逐次即时推送，不写事件中心（审计已有 audit_log 覆盖）。
+	{Type: KeyWebAdminLogin, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "管理后台登录成功", Description: "有新的管理后台登录。"},
+	{Type: KeyUserApplication, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "新用户申请", Description: "有用户提交了使用申请，等待审批。"},
+	{Type: KeyChannelJoinRequest, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "频道加入申请", Description: "有用户提交频道邀请链接，进入待审批。"},
 }
 
 var eventDefinitions = func() map[string]EventDefinition {

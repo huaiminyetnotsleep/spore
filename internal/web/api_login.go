@@ -114,6 +114,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("已清理过期会话", "count", n)
 	}
 	s.audit(r.Context(), "auth.login", "web", map[string]any{"method": "key", "ip": ip})
+	s.notifyAdminLogin(r, "访问密钥", ip)
 	s.log.Info("管理端登录成功", "ip", ip, "method", "key")
 	writeAPIJSON(w, http.StatusOK, apiWriteOK{OK: true})
 }

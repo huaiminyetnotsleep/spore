@@ -17,26 +17,29 @@ import (
 
 // recordingSink 记录 worker 全部事件回调的可编程假实现。
 type recordingSink struct {
-	mu     sync.Mutex
-	tasks  []bool // TaskResult 的 succeeded 序列
-	clouds []bool // CloudResult 的 succeeded 序列（云盘任务）
-	stores int    // StoreWriteFailed 次数
-	disks  int    // CheckTempDir 次数
+	mu      sync.Mutex
+	tasks   []bool   // TaskResult 的 succeeded 序列
+	clouds  []bool   // CloudResult 的 succeeded 序列（云盘任务）
+	details []string // TaskResult/CloudResult 的 detail 序列（失败上下文）
+	stores  int      // StoreWriteFailed 次数
+	disks   int      // CheckTempDir 次数
 }
 
-func (r *recordingSink) TaskResult(_ context.Context, succeeded bool) {
+func (r *recordingSink) TaskResult(_ context.Context, succeeded bool, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tasks = append(r.tasks, succeeded)
+	r.details = append(r.details, detail)
 }
 
-func (r *recordingSink) CloudResult(_ context.Context, succeeded bool) {
+func (r *recordingSink) CloudResult(_ context.Context, succeeded bool, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.clouds = append(r.clouds, succeeded)
+	r.details = append(r.details, detail)
 }
 
-func (r *recordingSink) StoreWriteFailed(context.Context) {
+func (r *recordingSink) StoreWriteFailed(_ context.Context, _ string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.stores++

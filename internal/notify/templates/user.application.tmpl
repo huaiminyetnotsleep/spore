@@ -1,0 +1,4 @@
+🕐 时间：{{ .Time }}
+👤 用户：{{ fallback .Payload.DisplayName .Payload.Username | display }}{{ with .Payload.Username }}（@{{ . }}）{{ end }}
+🆔 用户 ID：{{ .Payload.UserID }}
+🤖 来源 Bot：{{ display .Payload.SourceBotUsername }}

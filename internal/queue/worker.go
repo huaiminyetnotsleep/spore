@@ -54,12 +54,14 @@ type Fetcher interface {
 // 以接口注入保持 queue 不依赖 notify，装配层接线即可；nil 表示无事件回调。
 type EventSink interface {
 	// TaskResult 上报任务结果：连续失败达到阈值时由事件中心产生告警，成功清零。
-	TaskResult(ctx context.Context, succeeded bool)
+	// detail 为最近一次失败任务的可读上下文（随告警展示；成功时忽略）。
+	TaskResult(ctx context.Context, succeeded bool, detail string)
 	// CloudResult 上报云盘任务（/download）结果：独立连续失败计数
-	// （cloud.upload_failed 事件源），成功清零；仅云盘任务调用。
-	CloudResult(ctx context.Context, succeeded bool)
+	//（cloud.upload_failed 事件源），成功清零；仅云盘任务调用。detail 语义同 TaskResult。
+	CloudResult(ctx context.Context, succeeded bool, detail string)
 	// StoreWriteFailed 上报任务终态落库失败（数据库错误的代表性位置）。
-	StoreWriteFailed(ctx context.Context)
+	// scene 为写入场景的可读标签（随告警展示）。
+	StoreWriteFailed(ctx context.Context, scene string)
 	// CheckTempDir 在任务开始前提供低频抽样点：事件中心据此检查临时目录占用。
 	CheckTempDir(ctx context.Context)
 }
@@ -288,11 +290,16 @@ func Process(d Deps) Processor {
 		}
 		d.Log.Info("任务结束", "job_id", j.ID)
 		// 事件上报放在收尾最后：成功清零连续失败计数，失败累计并按阈值告警；
-		// 云盘任务另经 CloudResult 进入独立计数（cloud.upload_failed 事件源）
+		// 云盘任务另经 CloudResult 进入独立计数（cloud.upload_failed 事件源）。
+		// 失败时附带来源链接人可读形式，随告警通知展示最近失败上下文。
 		if d.Events != nil {
-			d.Events.TaskResult(ctx, err == nil)
+			detail := ""
+			if err != nil {
+				detail = j.Ref.String()
+			}
+			d.Events.TaskResult(ctx, err == nil, detail)
 			if j.CloudDest != "" {
-				d.Events.CloudResult(ctx, err == nil)
+				d.Events.CloudResult(ctx, err == nil, detail)
 			}
 		}
 	}
@@ -532,7 +539,7 @@ func markStarted(ctx context.Context, d Deps, j Job) bool {
 		}
 		d.Log.Warn("记录任务开始失败", "job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 		if d.Events != nil {
-			d.Events.StoreWriteFailed(ctx)
+			d.Events.StoreWriteFailed(ctx, "任务开始标记落库")
 		}
 	}
 	return true
@@ -556,7 +563,7 @@ func finishRequest(d Deps, ctx context.Context, j Job, r store.RequestResult) er
 			"status", r.Status, "error", err.Error())
 		// 数据库写入失败的代表性事件源：终态丢失意味着记录失真，需要管理员关注
 		if d.Events != nil {
-			d.Events.StoreWriteFailed(wctx)
+			d.Events.StoreWriteFailed(wctx, "任务终态落库")
 		}
 	}
 	return err
@@ -642,9 +649,9 @@ func Discard(d Deps) Processor {
 		if d.Events != nil {
 			// 排队任务在退出 drain 中同样是失败结果，应纳入连续失败统计；
 			// finishRequest 已先完成请求终态收尾，避免事件看到未完成记录。
-			d.Events.TaskResult(ctx, false)
+			d.Events.TaskResult(ctx, false, j.Ref.String())
 			if j.CloudDest != "" {
-				d.Events.CloudResult(ctx, false)
+				d.Events.CloudResult(ctx, false, j.Ref.String())
 			}
 		}
 	}

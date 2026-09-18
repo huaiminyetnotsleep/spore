@@ -1,0 +1,5 @@
+🕐 时间：{{ .Time }}
+📺 频道：{{ display .Payload.ChannelTitle }}
+👤 用户：{{ fallback .Payload.DisplayName .Payload.Username | display }}{{ with .Payload.Username }}（@{{ . }}）{{ end }}
+🆔 用户 ID：{{ .Payload.UserID }}
+👥 链接人数：{{ if .Payload.Participants }}{{ .Payload.Participants }}{{ else }}未知{{ end }}

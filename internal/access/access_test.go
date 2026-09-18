@@ -87,7 +87,7 @@ func (f *fakeSender) messages() []sentMessage {
 
 type storeFailureSink struct{ calls atomic.Int32 }
 
-func (s *storeFailureSink) StoreWriteFailed(context.Context) { s.calls.Add(1) }
+func (s *storeFailureSink) StoreWriteFailed(context.Context, string) { s.calls.Add(1) }
 
 // newTestService 在临时库上组装服务；返回同队列便于构造饱和等状态。
 func newTestService(t *testing.T, capacity int, now func() time.Time) (*Service, *store.Store, *queue.Queue) {
@@ -1439,5 +1439,72 @@ func TestSetUserCloudDownload(t *testing.T) {
 	}
 	if err := svc.SetUserCloudDownload(ctx, "admin", 404, store.CloudDownloadAllow); err == nil {
 		t.Fatal("不存在的用户应报错")
+	}
+}
+
+// ---- 新用户申请活动通知 ----
+
+// activityRecorder 收集新申请活动上报的假实现（seen 供异步断言同步）。
+type activityRecorder struct {
+	mu   sync.Mutex
+	apps []ApplicationInfo
+	seen chan struct{}
+}
+
+func (r *activityRecorder) UserApplied(_ context.Context, app ApplicationInfo) {
+	r.mu.Lock()
+	r.apps = append(r.apps, app)
+	r.mu.Unlock()
+	r.seen <- struct{}{}
+}
+
+func (r *activityRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.apps)
+}
+
+func TestHandleStartNotifiesNewApplicationOnly(t *testing.T) {
+	clock := newClock(baseTime)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"), testLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	sink := &activityRecorder{seen: make(chan struct{}, 8)}
+	svc, err := New(Options{Store: st, Queue: queue.New(4), Activity: sink, Log: testLog(), Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// 首次 /start：新申请落库并异步通知
+	if out, err := svc.HandleStart(ctx, StartInput{
+		UserID: 7, Username: "bob", DisplayName: "Bob", BotID: 9, BotUsername: "mybot",
+	}); err != nil || out != StartPending {
+		t.Fatalf("陌生 /start 应落 pending: %v err=%v", out, err)
+	}
+	select {
+	case <-sink.seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("新申请应触发活动通知")
+	}
+	app := sink.apps[0]
+	if app.UserID != 7 || app.Username != "bob" || app.DisplayName != "Bob" || app.SourceBotUsername != "mybot" {
+		t.Fatalf("申请通知 payload 不符: %+v", app)
+	}
+
+	// 重复 /start（pending 刷新）：不再通知
+	clock.Advance(time.Minute)
+	if out, err := svc.HandleStart(ctx, StartInput{UserID: 7, Username: "bob"}); err != nil || out != StartPending {
+		t.Fatalf("重复 /start 应保持 pending: %v err=%v", out, err)
+	}
+	select {
+	case <-sink.seen:
+		t.Fatal("pending 刷新不应重复通知")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if n := sink.count(); n != 1 {
+		t.Fatalf("通知次数=%d, want 1", n)
 	}
 }

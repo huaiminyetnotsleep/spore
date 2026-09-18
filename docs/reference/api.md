@@ -1152,7 +1152,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/notification/event-catalog
 
-返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery`，严重级别为 `info` / `warn` / `error`。
+返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error`。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
 
 ### GET /api/v1/notification/policy
 
@@ -1164,13 +1164,14 @@ cloud-drive.json.enc
   "minimum_severity": "warn",
   "categories": {
     "system_alert": {"admin_badge": true, "bot": true, "webhook": true},
-    "system_recovery": {"admin_badge": true, "bot": true, "webhook": true}
+    "system_recovery": {"admin_badge": true, "bot": true, "webhook": true},
+    "activity": {"admin_badge": true, "bot": true, "webhook": true}
   },
   "events": {}
 }
 ```
 
-缺少 `notification_policy` 文档时返回代码内默认策略。`minimum_severity` 只约束外部 `bot` / `webhook`；事件渠道显式 `enabled` 可覆盖最低级别。
+缺少 `notification_policy` 文档时返回代码内默认策略；存量策略文档缺少后加类别时加载即自动补齐（各渠道默认开启）。`minimum_severity` 只约束 `system_alert` / `system_recovery` 类别的外部 `bot` / `webhook` 投递（活动通知不受约束）；事件渠道显式 `enabled` 可覆盖最低级别。
 
 ### PUT /api/v1/notification/policy
 

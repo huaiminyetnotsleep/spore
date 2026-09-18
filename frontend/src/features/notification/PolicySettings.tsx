@@ -66,6 +66,7 @@ function categoryLabel(category: string): string {
   const labels: Record<string, string> = {
     system_alert: "系统告警",
     system_recovery: "系统恢复",
+    activity: "活动通知",
   };
   return labels[category] ?? category;
 }

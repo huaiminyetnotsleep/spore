@@ -45,7 +45,23 @@ type RequestCanceller interface {
 
 // EventSink 是访问控制服务对事件中心的最小依赖；避免 access 反向依赖 notify。
 type EventSink interface {
-	StoreWriteFailed(context.Context)
+	StoreWriteFailed(ctx context.Context, scene string)
+}
+
+// ActivityNotifier 是访问控制服务对活动通知的最小依赖（由装配层适配到
+// 事件中心，保持 access 不依赖 notify）；nil 表示不通知。
+type ActivityNotifier interface {
+	// UserApplied 在新用户提交申请（/start 落 pending）时触发；
+	// 已有 pending 的重复 /start 刷新不触发。
+	UserApplied(ctx context.Context, app ApplicationInfo)
+}
+
+// ApplicationInfo 一次新用户申请的关键信息（活动通知 payload）。
+type ApplicationInfo struct {
+	UserID            int64
+	Username          string // Telegram username，可空
+	DisplayName       string // Telegram 显示名，可空
+	SourceBotUsername string // 受理申请的 bot username，可空
 }
 
 // Options 聚合服务依赖。
@@ -54,6 +70,7 @@ type Options struct {
 	Queue            Enqueuer         // 必填：链接提取任务内存队列
 	RequestCanceller RequestCanceller // 可选；缺省从 Queue 自动探测
 	Events           EventSink        // 可选：数据库不可用时上报事件
+	Activity         ActivityNotifier // 可选：新用户申请活动通知
 	Log              *slog.Logger
 	Now              func() time.Time // 可注入时钟（测试用）；缺省 time.Now
 }
@@ -64,6 +81,7 @@ type Service struct {
 	queue     Enqueuer
 	canceller RequestCanceller
 	events    EventSink
+	activity  ActivityNotifier
 	senderMu  sync.RWMutex
 	sender    delivery.Sender // 审批结果通知通道；Bot 就绪后经 SetSender 注入（见注释）
 	dumpLive  dumpLiveFunc    // 缓存副本有效性校验；Bot 就绪后经 SetDumpLive 注入
@@ -87,7 +105,7 @@ func New(opt Options) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: opt.Store, queue: opt.Queue, canceller: canceller, events: opt.Events, log: opt.Log, now: now}, nil
+	return &Service{store: opt.Store, queue: opt.Queue, canceller: canceller, events: opt.Events, activity: opt.Activity, log: opt.Log, now: now}, nil
 }
 
 // SetSender 注入审批结果通知通道。通知依赖 Bot 实例，而 Bot 装配又需要本服务
@@ -267,7 +285,7 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 	})
 	if err != nil {
 		if s.events != nil && apperr.From(err).Code == apperr.CodeStoreUnavailable {
-			s.events.StoreWriteFailed(ctx)
+			s.events.StoreWriteFailed(ctx, "提交请求落库")
 		}
 		return Decision{}, err
 	}
@@ -294,7 +312,7 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		if ferr := s.store.FinishRequest(ctx, d.RequestID, finish); ferr != nil {
 			s.log.Error("标记队列满失败状态未落库", "request_id", d.RequestID, "error", ferr.Error())
 			if s.events != nil && apperr.From(ferr).Code == apperr.CodeStoreUnavailable {
-				s.events.StoreWriteFailed(ctx)
+				s.events.StoreWriteFailed(ctx, "队列满终态落库")
 			}
 		}
 		return Decision{Reason: apperr.CodeQueueFull, RequestID: d.RequestID}, nil
@@ -520,6 +538,15 @@ func (s *Service) HandleStart(ctx context.Context, in StartInput) (StartOutcome,
 			SourceBotUsername: in.BotUsername,
 		}); err != nil {
 			return 0, err
+		}
+		// 新申请活动通知（异步，不阻塞 Bot 回复；已有 pending 的刷新不通知）
+		if s.activity != nil {
+			go s.activity.UserApplied(ctx, ApplicationInfo{
+				UserID:            in.UserID,
+				Username:          in.Username,
+				DisplayName:       in.DisplayName,
+				SourceBotUsername: in.BotUsername,
+			})
 		}
 		return StartPending, nil
 	}

@@ -69,7 +69,12 @@ func Evaluate(policy Policy, mutes []MuteSchedule, eventType, channel string, re
 	if channelOverride == OverrideEnabled {
 		return Evaluation{Enabled: true, Reason: DecisionEnabled}
 	}
-	if (channel == ChannelBot || channel == ChannelWebhook) && severityRank(definition.Severity) < severityRank(policy.MinimumSeverity) {
+	// 最低严重级别是告警降噪手段：活动通知（登录/申请等）是 info 级的逐次
+	// 显式业务通知，不受该门槛约束（否则默认 warn 会静默吞掉全部活动通知）；
+	// 其开关由类别/事件覆盖与静音控制。
+	if definition.Category != notify.CategoryActivity &&
+		(channel == ChannelBot || channel == ChannelWebhook) &&
+		severityRank(definition.Severity) < severityRank(policy.MinimumSeverity) {
 		return Evaluation{Reason: DecisionBelowSeverity}
 	}
 	category, ok := policy.Categories[effectiveCategory]

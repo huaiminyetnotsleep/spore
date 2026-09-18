@@ -109,7 +109,7 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		if err != nil {
 			a.log.Warn("机器人接入失败，跳过该 token", "index", i, "error", err.Error())
 			a.hub.Raise(ctx, notify.KeyBotInitFailed, notify.SeverityError,
-				"有机器人 token 接入失败，该 bot 已跳过（其余机器人不受影响；请检查 token 后重启）。")
+				notify.BotIDData{BotID: botlist.BotID(bt.Token)})
 			continue
 		}
 		members = append(members, m)
@@ -180,7 +180,7 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		if m := a.pool.MemberByID(botID); m != nil && m.SetConflict(true) {
 			a.log.Warn("机器人消息拉取冲突（token 被其他服务占用，收不到新消息）", "bot_id", botID)
 			a.hub.Raise(ctx, notify.KeyBotPollConflict, notify.SeverityError,
-				"有机器人收不到新消息：其 token 正被其他服务占用（webhook 或另一个轮询实例）。请让对方服务下线该 bot，或在管理端移除该 token 后重启。")
+				notify.BotIDData{BotID: botID})
 		}
 	}
 	// NoteActive：收到该 bot 的 update 即证明轮询已恢复，清除冲突态并解决事件。

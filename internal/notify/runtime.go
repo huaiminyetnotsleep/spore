@@ -6,7 +6,8 @@ import (
 )
 
 // EventNotification 是已经过事件目录约束的通知上下文。
-// 动态内容只能来自受控事件定义；通道实现不得把底层错误或敏感值加入消息。
+// 动态内容只能来自受控事件定义与事件源上报的 payload（经模板渲染）；
+// 通道实现不得把底层错误或敏感值加入消息。
 type EventNotification struct {
 	SourceName string
 	TypeCode   string
@@ -19,6 +20,9 @@ type EventNotification struct {
 	Count      int
 	OccurredAt time.Time
 	Recovery   bool
+	// Activity 表示逐次活动通知：渲染时省略"已发生 N 次"脚注
+	// （登录/申请等每次发生都独立投递，次数无意义）。
+	Activity bool
 }
 
 // RuntimeDeliveryResult 描述一次配置通道投递尝试。

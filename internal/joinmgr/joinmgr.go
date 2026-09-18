@@ -27,6 +27,23 @@ type Notifier interface {
 	NotifyUser(ctx context.Context, userID int64, text string) error
 }
 
+// ActivityNotifier 是对活动通知（事件中心）的最小依赖（由装配层适配，
+// 保持 joinmgr 不依赖 notify）；nil 表示不通知。
+type ActivityNotifier interface {
+	// ChannelJoinRequested 在新的待审批申请落库时触发；
+	// 同链接重复提交（刷新）不触发。
+	ChannelJoinRequested(ctx context.Context, info JoinRequestInfo)
+}
+
+// JoinRequestInfo 一次新频道加入申请的关键信息（活动通知 payload）。
+type JoinRequestInfo struct {
+	UserID       int64
+	Username     string // Telegram username，可空
+	DisplayName  string // Telegram 显示名，可空
+	ChannelTitle string // 邀请链接指向的频道标题
+	Participants int    // 链接携带的参与人数；0 表示未知
+}
+
 // SenderNotifier 用业务 Sender（Bot API 私聊文本）实现通知。
 type SenderNotifier struct {
 	Sender interface {
@@ -48,7 +65,8 @@ type Bridge interface {
 type Options struct {
 	Store    *store.Store
 	Bridge   Bridge
-	Notifier Notifier // 可空
+	Notifier Notifier         // 可空
+	Activity ActivityNotifier // 可空：新加入申请活动通知
 	Log      *slog.Logger
 	Now      func() time.Time // 可空（测试注入）
 }
@@ -59,6 +77,7 @@ type Service struct {
 	bridge   Bridge
 	notify   Notifier
 	notifyMu sync.Mutex
+	activity ActivityNotifier
 	log      *slog.Logger
 	now      func() time.Time
 }
@@ -75,7 +94,7 @@ func New(opt Options) (*Service, error) {
 		opt.Now = time.Now
 	}
 	return &Service{st: opt.Store, bridge: opt.Bridge, notify: opt.Notifier,
-		log: opt.Log, now: opt.Now}, nil
+		activity: opt.Activity, log: opt.Log, now: opt.Now}, nil
 }
 
 // NotifyUser 实现 Notifier：经 Bot API 私聊发送文本（HTML）。
@@ -207,6 +226,17 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, text s
 	kind := SubmitPending
 	if !created {
 		kind = SubmitPendingDuplicate
+	} else if s.activity != nil {
+		// 新申请活动通知（异步，不阻塞 Bot 回复；重复提交刷新不通知）。
+		// 用户名/显示名尽力补齐，查询失败不阻断申请流程。
+		username, displayName := "", ""
+		if u, uerr := s.st.GetUser(ctx, userID); uerr == nil {
+			username, displayName = u.Username, u.DisplayName
+		}
+		go s.activity.ChannelJoinRequested(ctx, JoinRequestInfo{
+			UserID: userID, Username: username, DisplayName: displayName,
+			ChannelTitle: info.Title, Participants: info.Participants,
+		})
 	}
 	return SubmitOutcome{Kind: kind, Title: req.ChannelTitle}, nil
 }

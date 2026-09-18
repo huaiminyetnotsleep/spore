@@ -39,6 +39,11 @@ const (
 	KeyCloudUploadFailed  = "cloud.upload_failed"  // 云盘任务连续失败（独立计数）
 	KeyCloudConfigInvalid = "cloud.config_invalid" // 云盘配置损坏或默认目的地悬空
 	KeyCloudDisabled      = "cloud.disabled"       // 已开启云盘但 rclone 二进制不可用
+
+	// 活动通知（CategoryActivity）：逐次即时推送，不写事件中心、无冷却。
+	KeyWebAdminLogin      = "web.admin_login"      // 管理后台登录成功
+	KeyUserApplication    = "user.application"     // 新用户申请（/start 落 pending）
+	KeyChannelJoinRequest = "channel.join_request" // 频道加入申请（/join 进入待审批）
 )
 
 // 事件源默认参数（可经环境变量覆盖，见 internal/config）。
@@ -70,6 +75,7 @@ type Options struct {
 	TempDir            string                          // 临时媒体目录（占用检查目标；空串关闭该检查）
 	DiskLimitBytes     int64                           // 临时目录占用阈值（字节）；<=0 回落默认 1GB
 	DirUsage           func(dir string) (int64, error) // 可注入的目录占用函数（测试用）
+	Timezone           func() *time.Location           // 通知时间渲染时区（运营时区；nil 回落 GMT+8）
 	Now                func() time.Time                // 可注入时钟（测试用）；缺省 time.Now
 }
 
@@ -85,7 +91,12 @@ type Hub struct {
 	tempDir            string
 	diskLimit          int64
 	dirUsage           func(dir string) (int64, error)
+	tzMu               sync.RWMutex
+	timezone           func() *time.Location // 通知时间渲染时区；nil 回落 GMT+8
 	now                func() time.Time
+
+	payloadMu sync.RWMutex
+	payloads  map[string]any // 各告警事件最近一次 payload（合并后仍展示最新关键信息）
 
 	senderMu sync.RWMutex
 	sender   Notifier // 兼容旧业务 Bot owner 私聊通道；nil 表示通道不可用
@@ -145,7 +156,25 @@ func New(opt Options) (*Hub, error) {
 		cooldown: cooldown, botFailThreshold: botFail, taskFailThreshold: taskFail,
 		cloudFailThreshold: cloudFail,
 		tempDir:            opt.TempDir, diskLimit: diskLimit, dirUsage: usage, now: now,
+		timezone: opt.Timezone, payloads: make(map[string]any),
 	}, nil
+}
+
+// SetTimezone 注入通知时间渲染时区（装配层接入运营时区设置；变更即生效）。
+func (h *Hub) SetTimezone(fn func() *time.Location) {
+	h.tzMu.Lock()
+	defer h.tzMu.Unlock()
+	h.timezone = fn
+}
+
+// snapshotTimezone 返回当前时区函数快照；未注入时回落固定 GMT+8。
+func (h *Hub) snapshotTimezone() func() *time.Location {
+	h.tzMu.RLock()
+	defer h.tzMu.RUnlock()
+	if h.timezone != nil {
+		return h.timezone
+	}
+	return func() *time.Location { return gmt8Zone }
 }
 
 // SetSender 注入通知通道（Bot 就绪后由装配层调用；MTProto 每轮重连都会以
@@ -187,6 +216,9 @@ func (h *Hub) snapshotRuntimeNotifier() RuntimeNotifier {
 }
 
 // Raise 记录（或按 key 合并）一次事件，并在冷却窗口外尝试通知管理员：
+//   - data 是本次事件的关键信息 payload（见 data.go），渲染为推送消息正文；
+//     内存保留每 key 最近一次 payload（事件合并后仍展示最新关键信息），
+//     payload 不写入 events 表（事件中心文案仍为目录受控描述）；
 //   - 事件写入失败只记日志——事件中心不得阻塞主链路；
 //   - 通知成功才推进冷却期（MarkEventNotified）；失败只记日志并保留未通知状态，
 //     下次事件发生或通道恢复时可再次尝试，不让失败阻塞事件写入；
@@ -194,9 +226,14 @@ func (h *Hub) snapshotRuntimeNotifier() RuntimeNotifier {
 //
 // Raise 内部把 ctx 剥离取消信号并限时：事件落库属于"尽力完成的收尾写"，
 // 进程退出路径上最后一次告警不应因 ctx 已取消而丢失（上限 raiseTimeout 防挂死）。
-func (h *Hub) Raise(ctx context.Context, key, severity, _ string) {
+func (h *Hub) Raise(ctx context.Context, key, severity string, data any) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), raiseTimeout)
 	defer cancel()
+	if data != nil {
+		h.payloadMu.Lock()
+		h.payloads[key] = data
+		h.payloadMu.Unlock()
+	}
 	if err := h.st.UpsertEvent(ctx, store.Event{
 		Key: key, Severity: severity, Message: controlledEventMessage(key),
 	}); err != nil {
@@ -235,55 +272,107 @@ func (h *Hub) maybeNotify(ctx context.Context, e store.Event) {
 }
 
 // deliver 执行一次通知尝试；只有至少一个实际通道发送成功才推进冷却期。
-// 配置化运行时通道启用后由它接管事件投递；未启用时回退到旧的 owner 私聊，
-// 保持旧部署的行为兼容。事件本身始终先落库，不受策略抑制影响。
+// 事件本身始终先落库，不受策略抑制影响。
 func (h *Hub) deliver(ctx context.Context, e store.Event, now time.Time) {
 	message := h.eventNotification(ctx, e, false)
+	if h.sendViaChannels(ctx, e.Key, message) {
+		if err := h.st.MarkEventNotified(ctx, e.Key, now.UnixMilli()); err != nil {
+			h.log.Warn("记录事件通知时间失败", "key", e.Key, "error", err.Error())
+		}
+	}
+}
+
+// sendViaChannels 投递一条通知：配置化运行时通道启用后由它接管（Managed），
+// 未启用时回退到旧的 owner 私聊，保持旧部署的行为兼容。
+// Managed 但全部失败/被策略抑制时不回退（用户显式配置优先），返回 false 由
+// 调用方决定后续（告警保留未通知状态待重试；活动通知直接丢弃）。
+func (h *Hub) sendViaChannels(ctx context.Context, key string, message EventNotification) bool {
 	if runtime := h.snapshotRuntimeNotifier(); runtime != nil {
 		result, err := runtime.NotifyEvent(ctx, message)
 		if err != nil {
-			h.log.Warn("配置化通知通道读取失败，将尝试兼容通知", "key", e.Key, "error", err.Error())
+			h.log.Warn("配置化通知通道读取失败，将尝试兼容通知", "key", key, "error", err.Error())
 		}
 		if result.Managed {
 			if result.Delivered > 0 {
-				h.log.Info("已通过配置化通知通道推送事件", "key", e.Key,
+				h.log.Info("已通过配置化通知通道推送事件", "key", key,
 					"delivered", result.Delivered, "failed", result.Failed)
-				if err := h.st.MarkEventNotified(ctx, e.Key, now.UnixMilli()); err != nil {
-					h.log.Warn("记录事件通知时间失败", "key", e.Key, "error", err.Error())
-				}
-			} else if result.Failed > 0 {
-				h.log.Warn("配置化通知通道发送失败，将在后续事件中重试", "key", e.Key,
+				return true
+			}
+			if result.Failed > 0 {
+				h.log.Warn("配置化通知通道发送失败，将在后续事件中重试", "key", key,
 					"failed", result.Failed)
 			}
-			return
+			return false
 		}
 	}
 
 	snd := h.snapshotSender()
 	if snd == nil {
-		// Bot 未就绪：事件保留在 Web 事件中心，SetSender 时补发
-		h.log.Info("通知通道未就绪，事件仅记录到 Web 事件中心", "key", e.Key)
-		return
+		// Bot 未就绪：告警事件保留在 Web 事件中心，SetSender 时补发；
+		// 活动通知无落库留痕，直接跳过（审计日志另有留痕）。
+		h.log.Info("通知通道未就绪，通知跳过", "key", key)
+		return false
 	}
 	// 管理员 Chat ID 取 users 表 owner 用户的 Telegram ID（Bot 私聊 chat_id
 	// 与用户 ID 相同）：不新增环境变量，Web 变更 owner 后下次发送即生效。
 	chatID, err := h.st.OwnerID(ctx)
 	if errors.Is(err, store.ErrNotFound) {
-		h.log.Warn("未设置 owner 用户，事件通知暂无法投递", "key", e.Key)
-		return
+		h.log.Warn("未设置 owner 用户，事件通知暂无法投递", "key", key)
+		return false
 	}
 	if err != nil {
-		h.log.Error("查询管理员失败", "key", e.Key, "error", err.Error())
-		return
+		h.log.Error("查询管理员失败", "key", key, "error", err.Error())
+		return false
 	}
 	if _, err := snd.SendMessage(ctx, chatID, RenderHTML(message)); err != nil {
-		h.log.Warn("管理员通知发送失败，将在后续事件中重试", "key", e.Key, "error", err.Error())
-		return
+		h.log.Warn("管理员通知发送失败，将在后续事件中重试", "key", key, "error", err.Error())
+		return false
 	}
-	h.log.Info("已向管理员推送事件通知", "key", e.Key)
-	if err := h.st.MarkEventNotified(ctx, e.Key, now.UnixMilli()); err != nil {
-		h.log.Warn("记录事件通知时间失败", "key", e.Key, "error", err.Error())
+	h.log.Info("已向管理员推送事件通知", "key", key)
+	return true
+}
+
+// pushActivity 投递一条活动通知：逐次即时推送，不写事件中心、无冷却/去重；
+// 投递失败只记日志（活动通知有时效性，不做补发，审计日志已有留痕）。
+func (h *Hub) pushActivity(ctx context.Context, key string, payload any) {
+	definition, ok := GetDefinition(key)
+	if !ok {
+		return // 目录外事件不投递，防止误用
 	}
+	occurred := h.now()
+	message := EventNotification{
+		SourceName: syscfg.Name(ctx, h.st), TypeCode: definition.Category,
+		TypeLabel: definition.TypeLabel, Category: definition.Category,
+		Severity: definition.Severity, EventType: key, Title: definition.Title,
+		Body: renderEventBody(key, templateData{
+			Time: h.formatTime(occurred), Payload: payload,
+		}),
+		Count: 1, OccurredAt: occurred, Activity: true,
+	}
+	h.sendViaChannels(ctx, key, message)
+}
+
+// pushActivityDetached 为活动通知剥离调用方 ctx 的取消信号并限时（活动通知
+// 由请求路径异步触发，handler 返回后仍需完成发送）。
+func (h *Hub) pushActivityDetached(ctx context.Context, key string, payload any) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), raiseTimeout)
+	defer cancel()
+	h.pushActivity(ctx, key, payload)
+}
+
+// AdminLogin 推送一次管理后台登录成功活动通知（web.admin_login）。
+func (h *Hub) AdminLogin(ctx context.Context, d AdminLoginData) {
+	h.pushActivityDetached(ctx, KeyWebAdminLogin, d)
+}
+
+// UserApplied 推送一次新用户申请活动通知（user.application）。
+func (h *Hub) UserApplied(ctx context.Context, d UserApplicationData) {
+	h.pushActivityDetached(ctx, KeyUserApplication, d)
+}
+
+// ChannelJoinRequested 推送一次频道加入申请活动通知（channel.join_request）。
+func (h *Hub) ChannelJoinRequested(ctx context.Context, d ChannelJoinRequestData) {
+	h.pushActivityDetached(ctx, KeyChannelJoinRequest, d)
 }
 
 // FlushPending 补发冷却窗口外仍未成功通知的 open 事件（最近发生的先发）。
@@ -337,22 +426,22 @@ func (h *Hub) Recover(ctx context.Context, key string) {
 
 // TaskResult 记录一次任务结果：连续失败达到阈值时产生（或合并）事件，
 // 成功清零。达到阈值后仍持续失败时每次都合并进同一事件（count 累计），
-// 通知仍受冷却窗口约束。
-func (h *Hub) TaskResult(ctx context.Context, succeeded bool) {
-	h.recordStreak(ctx, succeeded, &h.taskFails, h.taskFailThreshold, KeyTaskFailures)
+// 通知仍受冷却窗口约束。detail 为最近一次失败任务的可读上下文（来源链接）。
+func (h *Hub) TaskResult(ctx context.Context, succeeded bool, detail string) {
+	h.recordStreak(ctx, succeeded, &h.taskFails, h.taskFailThreshold, KeyTaskFailures, detail)
 }
 
 // BotSendResult 记录一次 Bot API 发送结果：连续失败达到阈值时产生（或合并）事件，
 // 成功清零。语义与 TaskResult 一致。
 func (h *Hub) BotSendResult(ctx context.Context, succeeded bool) {
-	h.recordStreak(ctx, succeeded, &h.botFails, h.botFailThreshold, KeyBotSendFailures)
+	h.recordStreak(ctx, succeeded, &h.botFails, h.botFailThreshold, KeyBotSendFailures, "")
 }
 
 // CloudResult 记录一次云盘任务（/download）结果：独立于 TG 任务的连续失败
 // 计数，达到阈值时产生（或合并）cloud.upload_failed 事件，
-// 成功清零并自动恢复（管理员 TG 通知 + 事件页）。
-func (h *Hub) CloudResult(ctx context.Context, succeeded bool) {
-	h.recordStreak(ctx, succeeded, &h.cloudFails, h.cloudFailThreshold, KeyCloudUploadFailed)
+// 成功清零并自动恢复（管理员 TG 通知 + 事件页）。detail 语义同 TaskResult。
+func (h *Hub) CloudResult(ctx context.Context, succeeded bool, detail string) {
+	h.recordStreak(ctx, succeeded, &h.cloudFails, h.cloudFailThreshold, KeyCloudUploadFailed, detail)
 }
 
 // CloudConfigInvalid 记录云盘配置损坏或默认目的地悬空（启动加载或保存后
@@ -373,9 +462,9 @@ func (h *Hub) CloudDisabledRecovered(ctx context.Context) {
 	h.Recover(ctx, KeyCloudDisabled)
 }
 
-// StoreWriteFailed 记录一次数据库写入失败（任务终态未能落库等代表性位置）。
-func (h *Hub) StoreWriteFailed(ctx context.Context) {
-	h.Raise(ctx, KeyStoreWriteFailed, SeverityError, "数据库写入失败，请检查磁盘空间与数据库文件。")
+// StoreWriteFailed 记录一次数据库写入失败；scene 为写入场景的可读标签。
+func (h *Hub) StoreWriteFailed(ctx context.Context, scene string) {
+	h.Raise(ctx, KeyStoreWriteFailed, SeverityError, StoreWriteData{Scene: scene})
 }
 
 // CheckTempDir 抽样检查临时目录占用：超过阈值时产生（或合并）事件，
@@ -403,8 +492,7 @@ func (h *Hub) CheckTempDir(ctx context.Context) {
 		return
 	}
 	if used > h.diskLimit {
-		h.Raise(ctx, KeyTempDirUsage, SeverityWarn,
-			fmt.Sprintf("临时目录占用 %s，超过阈值 %s。", humanBytes(used), humanBytes(h.diskLimit)))
+		h.Raise(ctx, KeyTempDirUsage, SeverityWarn, TempUsageData{Used: used, Limit: h.diskLimit})
 		return
 	}
 	// 未超限：若历史事件仍处于 open（如占用刚回落、或上次进程中断遗留），自动恢复
@@ -432,13 +520,42 @@ func (h *Hub) eventNotification(ctx context.Context, e store.Event, recovery boo
 	if severity == "" {
 		severity = definition.Severity
 	}
+	occurred := time.UnixMilli(e.LastAt)
 	return EventNotification{
 		SourceName: syscfg.Name(ctx, h.st), TypeCode: definition.Category,
 		TypeLabel: definition.TypeLabel, Category: definition.Category,
 		Severity: severity, EventType: e.Key, Title: definition.Title,
-		Body: definition.Description, Count: e.Count, OccurredAt: time.UnixMilli(e.LastAt),
+		Body: renderEventBody(e.Key, templateData{
+			Time:    h.formatTime(occurred),
+			Payload: h.snapshotPayload(e.Key),
+		}),
+		Count: e.Count, OccurredAt: occurred,
 		Recovery: recovery,
 	}
+}
+
+// snapshotPayload 返回事件最近一次 payload 快照（事件合并后仍展示最新关键信息）。
+func (h *Hub) snapshotPayload(key string) any {
+	h.payloadMu.RLock()
+	defer h.payloadMu.RUnlock()
+	return h.payloads[key]
+}
+
+// formatTime 把时间渲染为通知正文用的人可读形式：运营时区的
+// "2006/01/02 15:04（GMT+8）"样式，GMT 偏移按实际时区动态生成。
+func (h *Hub) formatTime(t time.Time) string {
+	loc := h.snapshotTimezone()()
+	t = t.In(loc)
+	_, offset := t.Zone()
+	sign, hours, minutes := "+", offset/3600, offset%3600/60
+	if offset < 0 {
+		sign, hours, minutes = "-", -hours, -minutes
+	}
+	label := fmt.Sprintf("GMT%s%d", sign, hours)
+	if minutes > 0 {
+		label = fmt.Sprintf("GMT%s%d:%02d", sign, hours, minutes)
+	}
+	return fmt.Sprintf("%s（%s）", t.Format("2006/01/02 15:04"), label)
 }
 
 // notifyHTML 渲染通知正文（HTML parse_mode）：只使用事件目录中的受控文案、

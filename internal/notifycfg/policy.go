@@ -245,6 +245,8 @@ func (m *PolicyManager) load(ctx context.Context) (policyDocument, error) {
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return policyDocument{}, errors.New("通知策略格式无效")
 	}
+	// 类别扩充的就地升级：先补齐缺失类别再校验，存量文档不受影响。
+	backfillCategories(&doc.Policy)
 	if err := validatePolicy(doc.Policy); err != nil {
 		return policyDocument{}, errors.New("通知策略格式无效")
 	}
@@ -445,6 +447,20 @@ func knownPolicyCategories() map[string]bool {
 	return map[string]bool{
 		notify.CategorySystemAlert:    true,
 		notify.CategorySystemRecovery: true,
+		notify.CategoryActivity:       true,
+	}
+}
+
+// backfillCategories 为存量策略文档补齐后加的类别（各渠道默认开启），
+// 保证旧版本 JSON 在类别扩充后仍能通过完整性校验（就地升级，无需版本迁移）。
+func backfillCategories(policy *Policy) {
+	if policy.Categories == nil {
+		policy.Categories = make(map[string]CategoryPolicy, len(knownPolicyCategories()))
+	}
+	for category := range knownPolicyCategories() {
+		if _, ok := policy.Categories[category]; !ok {
+			policy.Categories[category] = CategoryPolicy{AdminBadge: true, Bot: true, Webhook: true}
+		}
 	}
 }
 

@@ -401,33 +401,33 @@ func TestTaskResultStreak(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	h.TaskResult(ctx, false)
-	h.TaskResult(ctx, false)
+	h.TaskResult(ctx, false, "")
+	h.TaskResult(ctx, false, "")
 	if _, err := st.GetEvent(ctx, KeyTaskFailures); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("未达阈值不应产生事件，得到 %v", err)
 	}
 
-	h.TaskResult(ctx, false) // 第 3 次：触发
+	h.TaskResult(ctx, false, "") // 第 3 次：触发
 	e := mustEvent(t, st, KeyTaskFailures)
 	if e.Count != 1 || e.Severity != SeverityError {
 		t.Fatalf("达到阈值应产生事件: %+v", e)
 	}
 
 	// 成功清零并自动恢复事件：之后 2 次失败不触发
-	h.TaskResult(ctx, true)
+	h.TaskResult(ctx, true, "")
 	e = mustEvent(t, st, KeyTaskFailures)
 	if e.Status != store.EventResolved {
 		t.Fatalf("任务恢复后事件应自动解决，得到 %s", e.Status)
 	}
-	h.TaskResult(ctx, false)
-	h.TaskResult(ctx, false)
+	h.TaskResult(ctx, false, "")
+	h.TaskResult(ctx, false, "")
 	e = mustEvent(t, st, KeyTaskFailures)
 	if e.Count != 1 {
 		t.Fatalf("清零后未达阈值不应合并，得到 count=%d", e.Count)
 	}
 
 	// 清零后再连败 3 次：再次触发并合并（通知受冷却窗口约束）
-	h.TaskResult(ctx, false)
+	h.TaskResult(ctx, false, "")
 	e = mustEvent(t, st, KeyTaskFailures)
 	if e.Count != 2 {
 		t.Fatalf("再次达到阈值应合并事件，得到 count=%d", e.Count)
@@ -471,7 +471,7 @@ func TestStoreWriteFailedRaises(t *testing.T) {
 	clock := newClock(time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC))
 	h := newHub(t, st, clock)
 
-	h.StoreWriteFailed(context.Background())
+	h.StoreWriteFailed(context.Background(), "测试场景")
 	e := mustEvent(t, st, KeyStoreWriteFailed)
 	if e.Severity != SeverityError {
 		t.Fatalf("数据库写失败应为 error 级别，得到 %s", e.Severity)
@@ -616,8 +616,8 @@ func TestRaiseConcurrentWithSetSender(t *testing.T) {
 			for j := 0; j < 10; j++ {
 				h.Raise(context.Background(), fmt.Sprintf("k%d", i%3), SeverityWarn, "并发")
 				h.SetSender(&fakeNotifier{})
-				h.TaskResult(context.Background(), j%2 == 0)
-				h.CloudResult(context.Background(), j%2 == 0)
+				h.TaskResult(context.Background(), j%2 == 0, "")
+				h.CloudResult(context.Background(), j%2 == 0, "")
 				h.CheckTempDir(context.Background())
 			}
 		}(i)
@@ -635,33 +635,33 @@ func TestCloudResultStreak(t *testing.T) {
 	h := newHub(t, st, clock) // 未注入 CloudFailThreshold：默认阈值 3
 	ctx := context.Background()
 
-	h.CloudResult(ctx, false)
-	h.CloudResult(ctx, false)
+	h.CloudResult(ctx, false, "")
+	h.CloudResult(ctx, false, "")
 	if _, err := st.GetEvent(ctx, KeyCloudUploadFailed); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("未达阈值不应产生事件，得到 %v", err)
 	}
 
-	h.CloudResult(ctx, false) // 第 3 次：触发
+	h.CloudResult(ctx, false, "") // 第 3 次：触发
 	e := mustEvent(t, st, KeyCloudUploadFailed)
 	if e.Count != 1 || e.Severity != SeverityError || e.Status != store.EventOpen {
 		t.Fatalf("达到阈值应产生 error 事件: %+v", e)
 	}
 
 	// 成功清零并自动恢复事件
-	h.CloudResult(ctx, true)
+	h.CloudResult(ctx, true, "")
 	e = mustEvent(t, st, KeyCloudUploadFailed)
 	if e.Status != store.EventResolved {
 		t.Fatalf("云盘任务恢复后事件应自动解决，得到 %s", e.Status)
 	}
-	h.CloudResult(ctx, false)
-	h.CloudResult(ctx, false)
+	h.CloudResult(ctx, false, "")
+	h.CloudResult(ctx, false, "")
 	e = mustEvent(t, st, KeyCloudUploadFailed)
 	if e.Count != 1 {
 		t.Fatalf("清零后未达阈值不应合并，得到 count=%d", e.Count)
 	}
 
 	// 清零后再连败 3 次：再次触发并合并
-	h.CloudResult(ctx, false)
+	h.CloudResult(ctx, false, "")
 	e = mustEvent(t, st, KeyCloudUploadFailed)
 	if e.Count != 2 {
 		t.Fatalf("再次达到阈值应合并事件，得到 count=%d", e.Count)
@@ -675,10 +675,10 @@ func TestCloudResultIndependentFromTaskResult(t *testing.T) {
 	h := newHub(t, st, newClock(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)))
 	ctx := context.Background()
 
-	h.CloudResult(ctx, false)
-	h.CloudResult(ctx, false)
-	h.TaskResult(ctx, true)   // TG 任务成功：不影响云盘计数
-	h.CloudResult(ctx, false) // 云盘第 3 连败：仍应触发
+	h.CloudResult(ctx, false, "")
+	h.CloudResult(ctx, false, "")
+	h.TaskResult(ctx, true, "")   // TG 任务成功：不影响云盘计数
+	h.CloudResult(ctx, false, "") // 云盘第 3 连败：仍应触发
 	e := mustEvent(t, st, KeyCloudUploadFailed)
 	if e.Count != 1 {
 		t.Fatalf("TG 任务结果不应清零云盘计数，得到 count=%d", e.Count)

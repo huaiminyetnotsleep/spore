@@ -17,9 +17,12 @@ func TestCatalogCompleteAndReadOnly(t *testing.T) {
 		KeyCloudUploadFailed,
 		KeyCloudConfigInvalid,
 		KeyCloudDisabled,
+		KeyWebAdminLogin,
+		KeyUserApplication,
+		KeyChannelJoinRequest,
 	}
 	validCategories := map[string]bool{
-		CategorySystemAlert: true, CategorySystemRecovery: true,
+		CategorySystemAlert: true, CategorySystemRecovery: true, CategoryActivity: true,
 	}
 	validSeverities := map[string]bool{SeverityInfo: true, SeverityWarn: true, SeverityError: true}
 

@@ -7,8 +7,9 @@ import (
 )
 
 // RenderText renders the controlled event message for text-based webhook
-// adapters. It intentionally contains only the notification envelope and
-// catalog text; callers cannot inject a raw cause or message body.
+// adapters. It intentionally contains only the notification envelope,
+// catalog text and template-rendered key info; callers cannot inject a raw
+// cause or message body.
 func RenderText(message EventNotification) string {
 	source := displayValue(message.SourceName, "Spore")
 	typeLabel := displayValue(message.TypeLabel, "系统告警")
@@ -17,6 +18,9 @@ func RenderText(message EventNotification) string {
 	body := displayValue(message.Body, "请查看管理端事件中心。")
 	if message.Recovery {
 		return fmt.Sprintf("[%s · %s · %s]\n✅ %s\n\n%s", source, typeLabel, severity, title, body)
+	}
+	if message.Activity {
+		return fmt.Sprintf("[%s · %s · %s]\n%s\n\n%s", source, typeLabel, severity, title, body)
 	}
 	count := message.Count
 	if count < 1 {
@@ -37,6 +41,10 @@ func RenderHTML(message EventNotification) string {
 	body := html.EscapeString(displayValue(message.Body, "请查看管理端事件中心。"))
 	if message.Recovery {
 		return fmt.Sprintf("<b>%s · %s · %s</b>\n✅ <b>%s</b>\n\n%s",
+			source, typeLabel, severity, title, body)
+	}
+	if message.Activity {
+		return fmt.Sprintf("<b>%s · %s · %s</b>\n<b>%s</b>\n%s",
 			source, typeLabel, severity, title, body)
 	}
 	count := message.Count

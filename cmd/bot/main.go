@@ -208,7 +208,7 @@ func main() {
 		// 启动恢复的批量中断也是事件：入 Web 事件中心，
 		// Bot 通道就绪后由 SetSender 补发通知
 		hub.Raise(ctx, notify.KeyStartupRecovered, notify.SeverityWarn,
-			fmt.Sprintf("上次运行遗留的 %d 个未完成任务已标记为失败（INTERRUPTED），可在管理端重试。", n))
+			notify.InterruptedData{Count: n})
 	}
 
 	// 内存队列与访问控制服务在 MTProto 就绪前创建：Web 管理页面的
@@ -222,11 +222,17 @@ func main() {
 		Store: st, Transfers: progressRegistry, TempDir: cfg.TempDir, Logger: logger,
 	})
 	go metrics.Run(ctx)
-	accessSvc, err := access.New(access.Options{Store: st, Queue: q, Events: hub, Log: logger})
+	accessSvc, err := access.New(access.Options{
+		Store: st, Queue: q, Events: hub,
+		Activity: activityHub{hub: hub}, // 新用户申请活动通知
+		Log:      logger,
+	})
 	if err != nil {
 		logger.Error("初始化访问控制服务失败", "error", err.Error())
 		os.Exit(1)
 	}
+	// 通知时间渲染接入运营时区（设置变更即时生效；未设置回退 GMT+8）。
+	hub.SetTimezone(func() *time.Location { return accessSvc.Location(context.Background()) })
 	// 频道绑定服务（Bot /bind 与 Web 管理端共用）：Bot 客户端在长轮询链路
 	// 就绪后经 SetBot 注入；worker 的频道副本投递也由它实现（queue.Copier）。
 	bindingSvc, err := binding.New(binding.Options{Store: st, Log: logger})
@@ -259,8 +265,7 @@ func main() {
 	if err := botMgr.LoadError(); err != nil {
 		// hub 尚未构建（云盘同款时序差异）：延迟到 hub 就绪后上报
 		defer func() {
-			hub.Raise(context.Background(), notify.KeyBotListInvalid, notify.SeverityWarn,
-				"机器人列表文件损坏，文件条目已忽略（仅 env 来源生效），可在管理端修复后重启。")
+			hub.Raise(context.Background(), notify.KeyBotListInvalid, notify.SeverityWarn, nil)
 		}()
 	}
 	// 每 bot 独立的大文件直传会话（botID 即 token 数字前缀）：跨 MTProto
@@ -285,8 +290,7 @@ func main() {
 	m.Session().SetStateHook(func(state string) {
 		switch state {
 		case mtproto.StateOffline:
-			hub.Raise(ctx, notify.KeySessionOffline, notify.SeverityError,
-				"MTProto 会话已离线，需要重新登录（可在管理端扫码重连，或重启进程走终端登录）。")
+			hub.Raise(ctx, notify.KeySessionOffline, notify.SeverityError, nil)
 		case mtproto.StateReady:
 			hub.Recover(ctx, notify.KeySessionOffline)
 		}
@@ -295,9 +299,10 @@ func main() {
 	// 送达申请人（sender 在 MTProto ready 内经 SetNotifier 注入）；
 	// Bridge 的实际能力同样在 ready 作用域内绑定。
 	joinSvc, err := joinmgr.New(joinmgr.Options{
-		Store:  st,
-		Bridge: membership,
-		Log:    logger,
+		Store:    st,
+		Bridge:   membership,
+		Activity: activityHub{hub: hub}, // 新频道加入申请活动通知
+		Log:      logger,
 	})
 	if err != nil {
 		logger.Error("初始化频道加入服务失败", "error", err.Error())

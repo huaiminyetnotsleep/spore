@@ -315,7 +315,7 @@ func insertCloudUploadRow(ctx context.Context, d Deps, j Job, dest cloudarchive.
 	if err != nil {
 		d.Log.Warn("创建云盘上传记录失败", "job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
 		if d.Events != nil {
-			d.Events.StoreWriteFailed(ctx)
+			d.Events.StoreWriteFailed(ctx, "云盘上传记录落库")
 		}
 		return 0
 	}
