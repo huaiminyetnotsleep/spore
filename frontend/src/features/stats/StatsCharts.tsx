@@ -19,7 +19,14 @@ import type {
   StatsTrendPoint,
   StatsUser,
 } from "../../api/admin";
-import { botLabel, distKeyText, errorCodeLabel, fmtTime } from "../../shared/format";
+import {
+  DELIVERY_MODE_LABELS,
+  botLabel,
+  distKeyText,
+  errorCodeLabel,
+  fmtTime,
+  labelOf,
+} from "../../shared/format";
 import { chartPalette } from "../../theme";
 import { ChartPanel } from "../shared/ChartPanel";
 import { RankBarChart, type RankBarDatum } from "../shared/RankBarChart";
@@ -346,6 +353,44 @@ function MediaDistributionChart({ rows, total, navigate }: { rows: DistRow[]; to
   );
 }
 
+function DeliveryModeDistributionChart({ rows, total, navigate }: { rows: DistRow[]; total: number; navigate: NavigateFunction }) {
+  const data: RankBarDatum[] = rows.map((row) => ({
+    key: row.key,
+    label: labelOf(DELIVERY_MODE_LABELS, row.key),
+    count: row.count,
+    ratio: total > 0 ? row.count / total : 0,
+  }));
+  const config: PieConfig = {
+    data,
+    angleField: "count",
+    colorField: "label",
+    height: CHART_HEIGHT,
+    radius: 0.82,
+    innerRadius: 0.52,
+    legend: { color: { position: "right" } },
+    tooltip: {
+      title: { field: "label" },
+      items: [
+        { field: "count", name: "请求数" },
+        { field: "ratio", name: "占范围请求比例", valueFormatter: (value: number) => `${(value * 100).toFixed(1)}%` },
+      ],
+    },
+    onEvent: distributionNavigation(navigate, (datum) =>
+      datum.key === "" ? null : `/requests?delivery_mode=${encodeURIComponent(datum.key)}`,
+    ),
+  };
+  return (
+    <ChartPanel
+      title="投递方式分布"
+      description="按请求数展示各投递方式占比（媒体投递/文本投递/网盘转存/缓存直发等）；点击切片查看请求记录。"
+      empty={data.length === 0}
+      emptyMessage="当前范围内没有投递方式分布数据。"
+    >
+      <Pie {...config} />
+    </ChartPanel>
+  );
+}
+
 function ErrorDistributionChart({ rows, navigate }: { rows: StatsError[]; navigate: NavigateFunction }) {
   const data: RankBarDatum[] = rows.map((row) => ({
     key: row.key,
@@ -525,6 +570,7 @@ export function StatsCharts({ requests }: { requests: StatsRequests }) {
       <SectionCard title="分布">
         <div className="chart-grid">
           <MediaDistributionChart rows={requests.media_dist} total={requests.total} navigate={navigate} />
+          <DeliveryModeDistributionChart rows={requests.delivery_dist} total={requests.total} navigate={navigate} />
           <ErrorDistributionChart rows={requests.error_dist} navigate={navigate} />
           <DCDistributionChart rows={requests.dc_dist} total={requests.total} />
           <BotDistributionChart rows={requests.bot_dist} total={requests.total} />

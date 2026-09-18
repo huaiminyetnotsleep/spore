@@ -275,6 +275,8 @@ export interface StatsRequests {
   top_channels: StatsChannel[];
   top_users: StatsUser[];
   media_dist: DistRow[];
+  /** 投递方式分布：全部状态请求按 delivery_mode 分组。 */
+  delivery_dist: DistRow[];
   error_dist: StatsError[];
   /** 源媒体 DC 分布：一条请求跨多个 DC 时在每个 DC 各计一次。 */
   dc_dist: DistRow[];

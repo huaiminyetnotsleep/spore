@@ -127,6 +127,12 @@ const requests: StatsRequests = {
     { key: "video", count: 4 },
     { key: "", count: 1 },
   ],
+  delivery_dist: [
+    { key: "upload", count: 6 },
+    { key: "cloud", count: 2 },
+    { key: "reuse", count: 1 },
+    { key: "text", count: 1 },
+  ],
   error_dist: [{ key: "MESSAGE_NOT_FOUND", count: 2, ratio: 1 }],
   dc_dist: [
     { key: "2", count: 5 },
@@ -162,9 +168,10 @@ describe("业务统计图表", () => {
       "label/count/1/y///////////-c0",
     ]);
     const pies = screen.getAllByTestId("mock-pie");
-    expect(pies).toHaveLength(3);
+    expect(pies).toHaveLength(4);
     expect(pies.map((pie) => pie.textContent)).toEqual([
       "count/label/2/count",
+      "count/label/4/count",
       "count/label/1/count",
       "count/label/2/count",
     ]);
@@ -227,7 +234,7 @@ describe("业务统计图表", () => {
     );
 
     fireEvent.click(screen.getAllByTestId("mock-plot")[1]);
-    fireEvent.click(screen.getAllByTestId("mock-pie")[2]);
+    fireEvent.click(screen.getAllByTestId("mock-pie")[3]);
     expect(screen.getByTestId("location")).toHaveTextContent("/overview");
   });
 
@@ -250,6 +257,16 @@ describe("业务统计图表", () => {
       </MemoryRouter>,
     );
     fireEvent.click(screen.getAllByTestId("mock-pie")[1]);
+    expect(screen.getByTestId("location")).toHaveTextContent("/requests?delivery_mode=upload");
+    cleanup();
+
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <LocationProbe />
+        <StatsCharts requests={requests} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getAllByTestId("mock-pie")[2]);
     expect(screen.getByTestId("location")).toHaveTextContent(
       "/requests?status=failed&error_code=MESSAGE_NOT_FOUND",
     );
@@ -266,7 +283,7 @@ describe("业务统计图表", () => {
         />
       </MemoryRouter>,
     );
-    fireEvent.click(screen.getAllByTestId("mock-pie")[1]);
+    fireEvent.click(screen.getAllByTestId("mock-pie")[2]);
     expect(screen.getByTestId("location")).toHaveTextContent("/overview");
   });
 
@@ -280,6 +297,7 @@ describe("业务统计图表", () => {
             top_channels: [],
             top_users: [],
             media_dist: [],
+            delivery_dist: [],
             error_dist: [],
             dc_dist: [],
             dc_trend: [],
@@ -294,6 +312,7 @@ describe("业务统计图表", () => {
     expect(screen.getByText("当前范围内没有频道排行数据。")).toBeInTheDocument();
     expect(screen.getByText("当前范围内没有用户排行数据。")).toBeInTheDocument();
     expect(screen.getByText("当前范围内没有媒体类型分布数据。")).toBeInTheDocument();
+    expect(screen.getByText("当前范围内没有投递方式分布数据。")).toBeInTheDocument();
     expect(screen.getByText("当前范围内没有失败请求或错误原因数据。")).toBeInTheDocument();
     expect(screen.getByText("当前范围内没有源媒体 DC 日分布数据。")).toBeInTheDocument();
     expect(screen.getByText("当前范围内没有源媒体 DC 分布数据。")).toBeInTheDocument();

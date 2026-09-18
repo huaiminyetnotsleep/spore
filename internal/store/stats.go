@@ -177,6 +177,23 @@ func (s *Store) ListMediaTypeDist(ctx context.Context, f StatsFilter) ([]DistPoi
 	return scanDist(rows, "扫描媒体分布行")
 }
 
+// ListDeliveryModeDist 统计投递方式分布（全部终态与在途请求；按 Count 倒序）。
+// 取值集合固定（upload/text/cloud/reuse/dump 及历史 reference/mixed），
+// 无需 Limit 截断。
+func (s *Store) ListDeliveryModeDist(ctx context.Context, f StatsFilter) ([]DistPoint, error) {
+	where, args := f.where()
+	rows, err := s.ex.QueryContext(ctx, `SELECT COALESCE(delivery_mode, ''), COUNT(*)
+		FROM requests`+where+`
+		GROUP BY 1
+		ORDER BY COUNT(*) DESC, 1`,
+		args...)
+	if err != nil {
+		return nil, wrapDB("聚合投递方式分布", err)
+	}
+	defer rows.Close()
+	return scanDist(rows, "扫描投递方式分布行")
+}
+
 // ListErrorDist 统计失败请求的错误码分布（仅 status = failed；按 Count 倒序）。
 func (s *Store) ListErrorDist(ctx context.Context, f StatsFilter) ([]DistPoint, error) {
 	where, args := f.where()
