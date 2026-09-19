@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.15.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.15.0...v1.15.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **media:** 切段输出显式 matroska 并让整组切段失败自动回退逐条 ([dacec95](https://github.com/huaiminyetnotsleep/spore/commit/dacec9546f20f90c98f2d00c0d89f2bdd1fffff8))
+
 ## [1.15.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.14.0...v1.15.0) (2026-09-19)
 
 
