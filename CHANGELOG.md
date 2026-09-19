@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.14.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.13.0...v1.14.0) (2026-09-19)
+
+
+### Features
+
+* **media:** 超过 2GB 的媒体分卷拆分投递 ([54176e8](https://github.com/huaiminyetnotsleep/spore/commit/54176e860062a5945c51d8f38a4f0371e73dc807))
+
 ## [1.13.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.12.0...v1.13.0) (2026-09-19)
 
 
