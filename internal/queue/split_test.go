@@ -198,3 +198,78 @@ func TestWorkerSplitDeliveryFailure(t *testing.T) {
 		t.Fatalf("未成功的拆分应回落 upload: %q", r.DeliveryMode)
 	}
 }
+
+// videoSegmentName 固定 .mkv 后缀（muxer 显式 matroska，不依赖输出扩展名
+// 猜测——源文件名的大写/空白扩展名会让猜测失败）。
+func TestVideoSegmentName(t *testing.T) {
+	cases := []struct{ base, want string }{
+		{"big.mp4", "big.part1of2.mkv"},
+		{"big.MP4", "big.part1of2.mkv"}, // 大写扩展名同样归一
+		{"noext", "noext.part1of2.mkv"},
+		{".mp4", "video.part1of2.mkv"}, // 防御：裸扩展名视为无名字
+	}
+	for _, tc := range cases {
+		if got := videoSegmentName(tc.base, 1, 2); got != tc.want {
+			t.Errorf("videoSegmentName(%q) = %q, want %q", tc.base, got, tc.want)
+		}
+	}
+	if got := videoSegmentName("movie.mkv", 2, 3); got != "movie.part2of3.mkv" {
+		t.Errorf("videoSegmentName 序号不符: %q", got)
+	}
+}
+
+// 混合相册整组切段失败（FFMPEG_PATH 指向必失败的可执行文件）→ 整组回退
+// 逐条：普通成员单发，超大成员在单媒体路径自动降级字节分段投递。切段发生
+// 在任何字节发出之前，回退仍是原子的；delivery_mode 仍为 split（字节分段
+// 兜底成功送达）。
+func TestWorkerSplitGroupCutFailureFallsBackIndividually(t *testing.T) {
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 0)
+	payload := make([]byte, 95) // 大成员声明 95B（落盘内容与分段读取按声明大小）
+
+	sender := &fakeSender{consumeAlbumReaders: true,
+		groupable: func(m message.Media) bool { return m.Size <= 50 }}
+	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}), sender)
+	d.Media = media.Options{
+		TmpDir:            t.TempDir(),
+		MaxFileSize:       50,
+		MaxSplitTotalSize: 400,
+		SplitSegmentSize:  40,
+		FFmpegPath:        "/bin/false", // LookPath 成功（切段会执行），运行必失败
+	}
+
+	// 相册：小成员（40B，≤50B 走常规）+ 大成员（95B，可拆视频 → 切段失败回退）
+	msgs := []*tg.Message{oversizeMsg(7, 1101, 40), oversizeMsg(8, 1102, 95)}
+	msgs[0].SetGroupedID(42)
+	msgs[1].SetGroupedID(42)
+	d.Fetcher.(*fakeFetcher).msgs = msgs
+	Process(d)(context.Background(), job)
+
+	r, err := s.GetRequest(context.Background(), job.RequestID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
+	}
+	if r.Status != store.RequestSucceeded {
+		t.Fatalf("切段失败回退后任务应成功: %s/%s", r.Status, r.ErrorCode)
+	}
+	// 普通成员单发（SendMedia）
+	if calls := sender.mediaCallsSnapshot(); len(calls) != 1 {
+		t.Fatalf("普通成员应单发一次: %+v", calls)
+	}
+	// 超大成员降级字节分段整组（95B/40B → 3 段 document）
+	calls := sender.albumCallsSnapshot()
+	if len(calls) != 1 || len(calls[0].Kinds) != 3 {
+		t.Fatalf("超大成员应降级为 3 段字节分段整组: %+v", calls)
+	}
+	for i, k := range calls[0].Kinds {
+		if k != message.KindDocument {
+			t.Errorf("降级分段应为 document: [%d]=%v", i, k)
+		}
+	}
+	if !strings.Contains(calls[0].Captions[0].Text, "已分为 3 段") {
+		t.Errorf("降级后首段应附合并提示: %q", calls[0].Captions[0].Text)
+	}
+	if r.DeliveryMode != store.DeliveryModeSplit {
+		t.Fatalf("delivery_mode 应为 split: %q", r.DeliveryMode)
+	}
+}

@@ -17,6 +17,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -85,18 +86,18 @@ func splitPartName(base string, i, n int) string {
 	return fmt.Sprintf("%s.part%dof%d", base, i, n)
 }
 
-// videoSegmentName 生成可播放分段的名字：<去扩展名>.part<i>of<n><原扩展>，
-// 扩展名决定 ffmpeg 输出 muxer（与源容器一致，编解码流原样封装）。
+// videoSegmentName 生成可播放分段的名字：<去扩展名>.part<i>of<n>.mkv。
+// 输出容器固定 matroska（与 cutVideoSegment 的 -f matroska 一致）：mkv 接受
+// 几乎所有编解码流，且切段不依赖 ffmpeg 按输出扩展名猜 muxer——源文件名
+// 的大写/尾部空白/特殊字符扩展名会让猜测失败（真机 2026-09-20：
+// Unable to choose an output format）。
 func videoSegmentName(base string, i, n int) string {
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 	if stem == "" {
 		stem = "video"
 	}
-	if ext == "" {
-		ext = ".mkv" // matroska 接受几乎所有编解码流，无扩展名时的安全兜底
-	}
-	return fmt.Sprintf("%s.part%dof%d%s", stem, i, n, ext)
+	return fmt.Sprintf("%s.part%dof%d.mkv", stem, i, n)
 }
 
 // splitNote 是字节分段首段 caption 末尾的合并提示（纯文本，无 shell 变量
@@ -112,6 +113,11 @@ func splitNote(n int) string {
 func splitVideoNote(n int) string {
 	return fmt.Sprintf("📦 原文件超过单文件上限，已切分为 %d 段视频，每段可直接播放，无需合并。", n)
 }
+
+// errSegmentCut 标记切段阶段失败（ffmpeg 执行/段文件落盘/单段超限），
+// 与下载失败区分：整组路径据此自动回退逐条投递——切段发生在任何字节发出
+// 之前，回退仍是原子的。errors.Is(err, errSegmentCut) 判定。
+var errSegmentCut = errors.New("视频切段失败")
 
 // videoSegment 是一个切好的可播放分段：真实视频文件 + 上传元数据。
 type videoSegment struct {
@@ -195,7 +201,7 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 		f, err := os.Open(seg.path)
 		if err != nil {
 			cleanup()
-			return nil, nil, apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+			return nil, nil, errors.Join(errSegmentCut, apperr.Wrap(apperr.CodeMediaDownloadFailed, err))
 		}
 		readers = append(readers, f)
 		ec := message.Caption{}
@@ -247,15 +253,15 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 		name := media.TempName(fmt.Sprintf("%s-seg%d", key, i), videoSegmentName(base, i, n))
 		out := filepath.Join(d.Media.TmpDir, name)
 		if err := cutVideoSegment(ctx, d.Media.FFmpegPath, src, start, end-start, out); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", errSegmentCut, err)
 		}
 		info, err := os.Stat(out)
 		if err != nil {
-			return nil, apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+			return nil, errors.Join(errSegmentCut, apperr.Wrap(apperr.CodeMediaDownloadFailed, err))
 		}
 		if info.Size() > config.MaxMediaFileSize {
-			return nil, apperr.New(apperr.CodeFileTooLarge,
-				fmt.Sprintf("分段 %s 实际大小 %d 超过单文件上限 %d（关键帧边界偏移）", name, info.Size(), config.MaxMediaFileSize))
+			return nil, errors.Join(errSegmentCut, apperr.New(apperr.CodeFileTooLarge,
+				fmt.Sprintf("分段 %s 实际大小 %d 超过单文件上限 %d（关键帧边界偏移）", name, info.Size(), config.MaxMediaFileSize)))
 		}
 		seg := videoSegment{
 			media: message.Media{
@@ -318,6 +324,8 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 
 // cutVideoSegment 执行单段流复制：-ss 输入快定位（对齐关键帧，首帧可解码）
 // + -c copy 不转码 + -avoid_negative_ts make_zero 修正复制切段的负时间戳。
+// 输出 muxer 显式指定 matroska（不依赖输出扩展名猜测——真机 2026-09-20：
+// 源文件名的大写/空白扩展名导致 Unable to choose an output format）。
 func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur float64, out string) error {
 	ctx, cancel := context.WithTimeout(ctx, splitCutTimeout)
 	defer cancel()
@@ -328,6 +336,7 @@ func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur flo
 		"-t", strconv.FormatFloat(dur, 'f', 3, 64),
 		"-c", "copy",
 		"-avoid_negative_ts", "make_zero",
+		"-f", "matroska",
 		"-y", out,
 	)
 	if outBytes, err := cmd.CombinedOutput(); err != nil {

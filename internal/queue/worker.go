@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -757,16 +758,23 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 
 	handles := make([]*media.Handle, len(items))
 	segCleanups := make([]func(), len(items)) // 分段 reader/文件清理（发送消费完后执行）
-	defer func() {                            // 无论成败都清理已打开句柄与分段文件（未打开/未切段的槽位为 nil）
+	// cleanupAll 幂等：既在函数返回时兜底执行，也在切段失败回退逐条前
+	// 显式调用（先行释放旧句柄与段文件，避免逐条重下期间磁盘双份占用）
+	cleanupAll := func() {
 		for i, h := range handles {
 			if segCleanups[i] != nil {
 				segCleanups[i]()
+				segCleanups[i] = nil
 			}
 			if h != nil && h.Cleanup != nil {
 				h.Cleanup()
+				handles[i] = nil
 			}
 		}
-	}()
+	}
+	defer cleanupAll()
+
+	var cutFailed atomic.Bool // 任一成员切段失败：整组回退逐条（见 g.Wait 之后）
 
 	memberEntries := make([][]delivery.AlbumEntry, len(items))
 	openCtx, cancelOpen := context.WithCancel(ctx)
@@ -794,7 +802,10 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
 					sourceURL, links, i == 0)
 				if err != nil {
-					cancelOpen() // 切段失败：整组失败（未发出任何字节）
+					cancelOpen() // 切段失败：终止其余成员在途下载（未发出任何字节）
+					if errors.Is(err, errSegmentCut) {
+						cutFailed.Store(true)
+					}
 					return err
 				}
 				memberEntries[i] = ents
@@ -820,6 +831,17 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 		})
 	}
 	if err := g.Wait(); err != nil {
+		// 切段失败（ffmpeg 执行/单段超限等，区别于下载失败）：此时尚未发出
+		// 任何字节，整组回退逐条投递仍是原子的——超大成员在单媒体路径自动
+		// 降级字节分段；其余成员的旧句柄先行释放，避免重下期间磁盘双份占用。
+		// 下载类失败不回退（整组失败不重下，维持既有语义）。
+		if cutFailed.Load() {
+			d.Log.Warn("视频切段失败，整组回退逐条投递（超大成员自动降级字节分段）",
+				"job_id", j.ID, "items", len(items), "error", err.Error())
+			cancelOpen()
+			cleanupAll()
+			return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
+		}
 		return err
 	}
 	// 展开摊平（按成员顺序，拆分段跟在其源成员位置）
