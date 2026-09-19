@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.15.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.14.0...v1.15.0) (2026-09-19)
+
+
+### Features
+
+* **media:** 拆分投递改为可播放的视频分段并修复缓存频道副本 ([a13c4ce](https://github.com/huaiminyetnotsleep/spore/commit/a13c4ceef18c60880432dee52590589c78a35481))
+
 ## [1.14.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.13.0...v1.14.0) (2026-09-19)
 
 
