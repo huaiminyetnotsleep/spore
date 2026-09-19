@@ -132,6 +132,9 @@ type fakeSender struct {
 
 	consumeMediaReaders bool // 单媒体调用时读尽 Reader 并传播读错误（模拟真实上传侧）
 	consumeAlbumReaders bool // 整组调用时逐成员读尽 Reader（模拟上传侧消费）
+
+	captureAlbumContent bool     // 整组调用时逐成员留存读取内容（分段内容校验用）
+	albumContent        [][]byte // captureAlbumContent 时按成员顺序留存（含读错误前的部分内容）
 }
 
 func (f *fakeSender) SendMessage(_ context.Context, _ int64, html string) (int, error) {
@@ -171,15 +174,22 @@ func (f *fakeSender) SendAlbum(_ context.Context, _ int64, entries []delivery.Al
 		thumbLens = append(thumbLens, len(e.Media.ThumbJPEG))
 	}
 	call := albumCall{Kinds: kinds, Captions: captions, ThumbLens: thumbLens}
+	var content [][]byte
 	if f.consumeAlbumReaders { // 模拟上传侧读源：驱动流式/内存管道的下载
 		for _, e := range entries {
 			data, err := io.ReadAll(e.Reader)
 			call.ReadLens = append(call.ReadLens, len(data))
 			call.ReadErrs = append(call.ReadErrs, err)
+			if f.captureAlbumContent {
+				content = append(content, data)
+			}
 		}
 	}
 	f.mu.Lock()
 	f.albumCalls = append(f.albumCalls, call)
+	if content != nil {
+		f.albumContent = append(f.albumContent, content...)
+	}
 	albumErr := f.albumErr
 	f.mu.Unlock()
 	for _, err := range call.ReadErrs { // 读源失败即整组发送失败（真实 multipart/uploader 语义）
@@ -278,6 +288,12 @@ func (f *fakeSender) albumCallsSnapshot() []albumCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]albumCall(nil), f.albumCalls...)
+}
+
+func (f *fakeSender) albumContentSnapshot() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]byte(nil), f.albumContent...)
 }
 
 // contractSender 在 fakeSender 之上执行 delivery 的"媒体数据源"契约：

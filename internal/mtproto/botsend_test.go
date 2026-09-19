@@ -605,16 +605,49 @@ func TestBotClientSendAlbumLocalDefenses(t *testing.T) {
 		}
 	})
 
-	t.Run("非 photo/video 成员", func(t *testing.T) {
+	t.Run("非 photo/video/document 成员", func(t *testing.T) {
 		invalid := append([]message.Media(nil), medias...)
-		invalid[1] = message.Media{Kind: message.KindDocument, FileName: "f.bin", Size: 3}
+		invalid[1] = message.Media{Kind: message.KindAudio, FileName: "f.mp3", Size: 3}
 		_, err := c.SendAlbum(context.Background(), 7, invalid, readers, captions)
 		var ae *apperr.AppError
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeInternal {
-			t.Fatalf("document 成员应防御报错: %v", err)
+			t.Fatalf("audio 成员应防御报错: %v", err)
 		}
 		if inv.sendCalls != 0 {
 			t.Errorf("不应发出 sendMultiMedia: %d", inv.sendCalls)
+		}
+	})
+
+	t.Run("document 成员（分卷拆分段）", func(t *testing.T) {
+		inv2 := &albumSendInvoker{users: tg.UserClassVector{Elems: []tg.UserClass{
+			&tg.User{ID: 7, AccessHash: 777},
+		}}}
+		c2 := newTestBotClient(t)
+		c2.setReady(tg.NewClient(inv2))
+		docs := []message.Media{
+			{Kind: message.KindDocument, FileName: "big.mkv.part1of2", Size: 5},
+			{Kind: message.KindDocument, FileName: "big.mkv.part2of2", Size: 3},
+		}
+		docReaders := []io.Reader{strings.NewReader("part-1"), strings.NewReader("part-2")}
+		docCaptions := []message.Caption{{Text: "首段合并提示"}, {Text: ""}}
+		ids, err := c2.SendAlbum(context.Background(), 7, docs, docReaders, docCaptions)
+		if err != nil {
+			t.Fatalf("全 document 组（分卷拆分段）应整组直传成功: %v", err)
+		}
+		if len(ids) != 2 {
+			t.Fatalf("应返回 2 个消息 ID: %v", ids)
+		}
+		if inv2.sendCalls != 1 || inv2.uploadCalls != 2 {
+			t.Fatalf("应 2 次 uploadMedia + 1 次 sendMultiMedia: upload=%d send=%d",
+				inv2.uploadCalls, inv2.sendCalls)
+		}
+		req := inv2.lastSend
+		for i, m := range req.MultiMedia {
+			doc, ok := m.Media.(*tg.InputMediaDocument)
+			if !ok {
+				t.Fatalf("成员 %d 应以 InputMediaDocument 坐标引用发送: %T", i, m.Media)
+			}
+			_ = doc
 		}
 	})
 

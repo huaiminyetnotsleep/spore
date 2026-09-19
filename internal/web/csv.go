@@ -213,6 +213,8 @@ func deliveryModeText(mode string) string {
 		return "网盘转存"
 	case store.DeliveryModeDump:
 		return "缓存补写"
+	case store.DeliveryModeSplit:
+		return "分卷投递"
 	default:
 		return mode
 	}

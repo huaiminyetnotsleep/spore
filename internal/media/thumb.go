@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 )
 
@@ -26,9 +27,6 @@ const thumbMaxDimension = 320
 // 的视频无法从头解析，ffmpeg 报错返回，调用方降级为无封面。
 // ffmpeg 不可用（未安装/路径不对）时返回错误，与抽帧失败同语义。
 func ExtractFrameJPEG(ctx context.Context, ffmpegPath, tmpDir string, head []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
-	defer cancel()
-
 	// 经临时文件喂入而非 stdin 管道：MP4 demuxer 解析 moov 需要可回退的
 	// seekable 输入，非 seekable 管道对部分正常文件也会失败
 	f, err := os.CreateTemp(tmpDir, "thumb-head-*.bin")
@@ -43,17 +41,43 @@ func ExtractFrameJPEG(ctx context.Context, ffmpegPath, tmpDir string, head []byt
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
-
-	var out, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, ffmpegPath,
-		"-hide_banner", "-loglevel", "error", "-nostdin",
+	return runFFmpegFrame(ctx, ffmpegPath,
 		"-i", f.Name(),
 		"-frames:v", "1",
 		"-an", "-sn", "-dn",
+	)
+}
+
+// ExtractFrameAtJPEG 用 ffmpeg 从完整视频文件的指定时间点提取单帧 JPEG。
+// 分卷拆投的逐段封面用：分段字节流没有容器头不可解码，改为按"段起始
+// 字节 / 总大小 × 总时长"换算时间戳，对已完整落盘的文件用 -ss 输入快速
+// 定位抽帧（定位到目标时间最近的解码关键帧）。VBR 视频按平均码率近似，
+// 画面与段边界可能有小偏移；文件不完整或容器无法解析时返回错误，调用方
+// 降级为无封面。
+func ExtractFrameAtJPEG(ctx context.Context, ffmpegPath, videoPath string, sec float64) ([]byte, error) {
+	return runFFmpegFrame(ctx, ffmpegPath,
+		"-ss", strconv.FormatFloat(sec, 'f', 3, 64),
+		"-i", videoPath,
+		"-frames:v", "1",
+		"-an", "-sn", "-dn",
+	)
+}
+
+// runFFmpegFrame 执行 ffmpeg 单帧抽取并把 stdout 收为 JPEG 字节；输出帧
+// 公共参数（缩放框、质量、mjpeg 管道输出）在此统一，args 为输入侧参数
+// （-i 之前与之后的部分）。
+func runFFmpegFrame(ctx context.Context, ffmpegPath string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
+	defer cancel()
+
+	full := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, args...)
+	full = append(full,
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", thumbMaxDimension, thumbMaxDimension),
 		"-q:v", "5",
 		"-f", "mjpeg", "pipe:1",
 	)
+	cmd := exec.CommandContext(ctx, ffmpegPath, full...)
+	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

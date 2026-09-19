@@ -14,6 +14,7 @@ type deliveryTrack struct {
 	converted bool // 消息已完成转换（区分转换前失败与纯文本请求）
 	hasMedia  bool // 条目中含媒体（区分纯文本与未送达的媒体请求）
 	uploadOK  int  // 成功送达的媒体计数（相册整组记 1）
+	split     bool // 媒体经分卷拆分投递（超限文件切分段整组发送；仅成功时标记）
 }
 
 // delivered 记录一次成功送达。
@@ -28,13 +29,17 @@ func (t *deliveryTrack) delivered() {
 //   - 未转换（取数失败等）→ ""；
 //   - 纯文本请求（无媒体条目）→ text；
 //   - 媒体请求（无论送达与否）→ upload（统一"下载+上传"路径，
-//     发送失败时错误码另行记录失败原因）。
+//     发送失败时错误码另行记录失败原因）；其中经分卷拆分成功送达的
+//     标记为 split。
 func mergeDeliveryMode(t deliveryTrack) string {
 	if !t.converted {
 		return ""
 	}
 	if !t.hasMedia {
 		return store.DeliveryModeText
+	}
+	if t.split {
+		return store.DeliveryModeSplit
 	}
 	return store.DeliveryModeUpload
 }

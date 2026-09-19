@@ -196,7 +196,10 @@ SourceRef
    │
    ├─ media.Open 下载（三条路径共用）：
    │     Document.Size / photo size 预检查
-   │     ├─ Size > MaxFileSize  → FILE_TOO_LARGE，直接拒绝，不发起下载
+   │     ├─ Size > MaxFileSize 且不可拆分（未启用拆分或
+   │     │     > MaxSplitTotalSize≈19GB）→ FILE_TOO_LARGE，直接拒绝
+   │     ├─ Size > MaxFileSize 且可拆分 → 强制临时文件路径（拆分需要
+   │     │     完整落盘后按区间切分，流式/内存管道不可回放）
    │     ├─ Size ≤ StreamLimit  → 流式：goroutine 内 downloader.Stream(ctx, pw)
    │     │                        错误经 pw.CloseWithError 传出；pr 交给
    │     │                        models.InputFileUpload{Data}（chunked 上传）
@@ -222,7 +225,22 @@ SourceRef
          └─ 相册整组：全员 ≤uploadCap 且 Bot API 可整组 → sendMediaGroup；
                含超限成员（video 且 ≤2000MB）→ 同一 Bot 会话逐成员 uploader
                上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
-               整组直传；通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败
+               整组直传；全 document 组（分卷拆分段）同走该通道；
+               通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败
+
+分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
+上限（2000MB）的媒体不再失败——按 SplitSegmentSize（1900MB，距 4000 分片
+服务器硬边界留 margin）切为 N 个分段 document（⌈Size/1900MB⌉，相册 10 成员
+上限 → 单条消息总量约 19GB，超出仍 FILE_TOO_LARGE），完整落盘后经相册整组
+直传为同一条消息。分段是纯字节切割、不可独立播放，以普通 document 发送
+（不挂 video 属性，避免客户端给出播放必败的假播放器），文件名
+`<原名>.part<i>of<N>`；caption 只挂首段并追加合并提示（cat / copy /b）。
+逐段封面：首段沿用源缩略图优先 → ffmpeg 首帧兜底；第 2 段起分段字节流
+没有容器头不可解码，按"段起始字节 / 总大小 × 总时长"换算时间戳对完整
+文件 `ffmpeg -ss` 定位抽帧（`media.ExtractFrameAtJPEG`，VBR 按平均码率
+近似）；缺时长 / ffmpeg 不可用 / 抽帧失败 → 该段降级无封面。拆分放弃
+"边下边传"交叠（抽帧与区间读取依赖完整落盘），先 WaitDownloaded 再发送；
+delivery_mode 记 `split`（仅成功时，失败回落 upload 由错误码记录原因）。
 
 默认 MaxFileSize 为 2000MB（MTProto 上传硬上限：4000 part × 512KB）；
 默认 InMemoryLimit 为 512MB（单文件常驻内存上限）；内存路径另受进程级
@@ -234,7 +252,7 @@ SourceRef
 配置本地 Bot API 服务器后 uploadCap 放宽到 MaxFileSize（全部上传走该服务器，
 相册整组恒走 Bot API）。相册成员经 AlbumGroupable 预检（Bot API 承载 ∪ video
 ≤MaxFileSize 的 MTProto 整组承载）；photo 超 photoLimit、document/audio 及超
-MaxFileSize 的成员不可整组，相册逐条发送。
+MaxFileSize 的成员不可整组，相册逐条发送（逐条后超限成员各自走分卷拆分）。
 ```
 
 统一返回 `media.Handle{Reader, Cleanup}`；三条路径的 `Cleanup` 都是"放弃
@@ -425,7 +443,7 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `CHANNEL_NOT_ACCESSIBLE` | `tg.ErrChannelPrivate`、`ErrChatAdminRequired`、AccessHash 拿不到 | 无法访问该频道，请确认用户账号已加入该频道。 |
 | `SERVICE_MESSAGE` | `*tg.MessageService` 或转换后无可提取内容 | 这是一条服务消息，没有可提取的内容。 |
 | `MEDIA_UNSUPPORTED` | 贴纸、webpage 等暂不支持类型 | 暂不支持这种消息类型。 |
-| `FILE_TOO_LARGE` | Size > MaxFileSize | 文件超过大小上限，暂无法发送。 |
+| `FILE_TOO_LARGE` | Size > MaxFileSize 且不可拆分（未启用拆分或 > MaxSplitTotalSize≈19GB） | 文件超过单条消息大小上限（约 19GB），暂无法发送。 |
 | `MEDIA_DOWNLOAD_FAILED` | 下载流/临时文件失败（非网络、非引用类失败的兜底） | 媒体下载失败，请稍后重试。 |
 | `NETWORK_ERROR` | 连接失败/超时/连接重置等传输层故障（取数、下载、发送共用；ctx 取消不在此列，由 worker 改判 `INTERRUPTED`） | 网络连接失败或超时，请稍后重试。 |
 | `TELEGRAM_SERVER_ERROR` | Telegram RPC 5xx（INTERNAL_SERVER_ERROR、TIMEOUT 等） | Telegram 服务暂时故障，请稍后重试。 |
@@ -715,7 +733,9 @@ update 到达
 
 ```text
 media.Open(ctx, api, media, jobID, opt, log)
- ├─ Size > MaxFileSize → FILE_TOO_LARGE（不发起下载）
+ ├─ Size > MaxFileSize 且不可拆分 → FILE_TOO_LARGE（不发起下载）
+ ├─ Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）→ 强制临时文件路径
+ │      （拆分需要完整落盘后按区间切分，见 §3.4 分卷拆分投递）
  ├─ Size ≤ StreamLimit → 流式：io.Pipe + 协程 downloader.Stream
  │      上传端直接消费读端，全程不落盘（Cleanup 关闭 Pipe 读端）
  ├─ StreamLimit < Size ≤ InMemoryLimit → 内存管道：协程 downloader.Parallel

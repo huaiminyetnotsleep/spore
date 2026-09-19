@@ -63,6 +63,21 @@ func (c Caption) WithSourceLink(sourceURL string) Caption {
 	return Caption{Text: prefix + c.Text, Entities: entities}
 }
 
+// WithNote 在 caption 末尾追加纯文本附注（无实体——纯尾部追加不平移既有
+// 实体偏移）。分卷拆投的合并提示等场景使用；须在 WithSourceLink /
+// WithChannels 之后调用，避免被前插/后追语义重新排位。截断预算内放不下时
+// 由 Limited 尾部截断，不作保序承诺。
+func (c Caption) WithNote(text string) Caption {
+	if text == "" {
+		return c
+	}
+	if c.Text != "" {
+		c.Text += "\n\n"
+	}
+	c.Text += text
+	return c
+}
+
 // cloneEntityWithOffset 浅拷贝 gotd 生成的实体结构并平移 Offset，避免污染源消息实体。
 func cloneEntityWithOffset(entity tg.MessageEntityClass, delta int) (tg.MessageEntityClass, bool) {
 	if entity == nil {

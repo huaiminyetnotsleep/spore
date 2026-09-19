@@ -58,8 +58,17 @@ const (
 	//（gotd uploader 大文件分片规则），再大无通道可承载。
 	MaxMediaFileSize    = int64(2000) << 20
 	OfficialMaxFileSize = int64(50) << 20 // 官方 Bot API 服务器的上传硬上限
-	MinTempDirMaxSize   = int64(1) << 20  // 1MB，临时目录上限最小
-	MaxTempDirMaxSize   = int64(1) << 40  // 1TB，临时目录上限最大
+
+	// 分卷拆分投递（split）：超过 MaxMediaFileSize 的媒体不再失败，切为 N 个
+	// 分段 document 经相册整组直传为同一条消息。
+	// SplitSegmentSize 取 1900MB 而非贴 2000MB 上限：单段 part 数（1900MB ÷
+	// 512KB = 3800）距服务器 4000 分片硬边界留出 margin，防止满配额边界失败。
+	SplitSegmentSize = int64(1900) << 20
+	// MaxSplitTotalSize 是拆分投递的单条消息总上限：相册成员上限 10 × 单段
+	// 1900MB。超过即 FILE_TOO_LARGE（当前技术极限，任何身份都无法承载）。
+	MaxSplitTotalSize = 10 * SplitSegmentSize
+	MinTempDirMaxSize = int64(1) << 20 // 1MB，临时目录上限最小
+	MaxTempDirMaxSize = int64(1) << 40 // 1TB，临时目录上限最大
 
 	// MaxBots 是多机器人池的 token 数量上限：防止误配置出超大 bot 列表，
 	// 放大长轮询与 MTProto 会话的常驻连接开销。

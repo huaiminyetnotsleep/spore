@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -337,4 +338,128 @@ func TestOpenDownloadProgressCallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 分卷拆分路径：超过单文件上限但落在拆分总上限内的媒体不再拒绝，强制走
+// 临时文件路径；完整落盘后 Path/WaitDownloaded/OpenSection 支撑按区间
+// 切分。不可拆分（未配置拆分上限或超出总上限）保持 FILE_TOO_LARGE。
+func TestOpenSplitPath(t *testing.T) {
+	log := testLogger()
+	payload := make([]byte, 200)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	newOpt := func() Options {
+		return Options{
+			TmpDir:            t.TempDir(),
+			MaxFileSize:       100,
+			StreamLimit:       10,
+			MemoryLimit:       50,
+			DownloadThreads:   3,
+			MaxSplitTotalSize: 400,
+			SplitSegmentSize:  60,
+		}
+	}
+	newMedia := func(size int64) message.Media {
+		return message.Media{
+			Kind:     message.KindDocument,
+			Size:     size,
+			FileName: "big.bin",
+			Location: &tg.InputDocumentFileLocation{ID: 1, AccessHash: 2, FileReference: []byte{1}},
+		}
+	}
+
+	t.Run("超限可拆分：强制临时文件路径并完整落盘", func(t *testing.T) {
+		opt := newOpt()
+		h, err := Open(context.Background(), tg.NewClient(chunkInvoker{payload: payload}),
+			newMedia(200), "123", opt, log, nil)
+		if err != nil {
+			t.Fatalf("拆分媒体应放行: %v", err)
+		}
+		defer h.Cleanup()
+		path, ok := h.Path()
+		if !ok {
+			t.Fatal("拆分媒体应走临时文件路径（Path 可用）")
+		}
+		if err := h.WaitDownloaded(context.Background()); err != nil {
+			t.Fatalf("下载应完整落盘: %v", err)
+		}
+		// 区间切分：60/60/60/20 四段，拼接等于原文件
+		var got []byte
+		for start := int64(0); start < 200; start += 60 {
+			length := min(int64(60), 200-start)
+			sr, err := h.OpenSection(start, length)
+			if err != nil {
+				t.Fatalf("区间打开失败: %v", err)
+			}
+			data, err := io.ReadAll(sr)
+			sr.Close()
+			if err != nil {
+				t.Fatalf("区间读取失败: %v", err)
+			}
+			got = append(got, data...)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("分段拼接应等于原文件: got %d 字节", len(got))
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("临时文件应存在于 Cleanup 前: %v", err)
+		}
+	})
+
+	t.Run("区间越界拒绝", func(t *testing.T) {
+		opt := newOpt()
+		h, err := Open(context.Background(), tg.NewClient(chunkInvoker{payload: payload}),
+			newMedia(200), "124", opt, log, nil)
+		if err != nil {
+			t.Fatalf("拆分媒体应放行: %v", err)
+		}
+		defer h.Cleanup()
+		if err := h.WaitDownloaded(context.Background()); err != nil {
+			t.Fatalf("下载应完整落盘: %v", err)
+		}
+		if _, err := h.OpenSection(150, 60); apperr.From(err).Code != apperr.CodeInternal {
+			t.Fatalf("越界区间应防御报错: %v", err)
+		}
+	})
+
+	t.Run("超出拆分总上限拒绝", func(t *testing.T) {
+		opt := newOpt()
+		_, err := Open(context.Background(), tg.NewClient(chunkInvoker{payload: payload}),
+			newMedia(401), "125", opt, log, nil)
+		if apperr.From(err).Code != apperr.CodeFileTooLarge {
+			t.Fatalf("超拆分总上限应报 FILE_TOO_LARGE: %v", err)
+		}
+	})
+
+	t.Run("未启用拆分保持历史拒绝", func(t *testing.T) {
+		opt := newOpt()
+		opt.MaxSplitTotalSize = 0
+		_, err := Open(context.Background(), tg.NewClient(chunkInvoker{payload: payload}),
+			newMedia(200), "126", opt, log, nil)
+		if apperr.From(err).Code != apperr.CodeFileTooLarge {
+			t.Fatalf("未启用拆分应报 FILE_TOO_LARGE: %v", err)
+		}
+	})
+
+	t.Run("非临时文件路径不支持拆分扩展", func(t *testing.T) {
+		opt := newOpt()
+		small := newMedia(10)
+		opt.MaxFileSize = 100
+		h, err := Open(context.Background(), tg.NewClient(chunkInvoker{payload: payload[:10]}),
+			small, "127", opt, log, nil)
+		if err != nil {
+			t.Fatalf("小文件应正常打开: %v", err)
+		}
+		defer h.Cleanup()
+		if _, ok := h.Path(); ok {
+			t.Fatal("流式路径不应暴露文件路径")
+		}
+		if err := h.WaitDownloaded(context.Background()); apperr.From(err).Code != apperr.CodeInternal {
+			t.Fatalf("流式路径应拒绝等待落盘: %v", err)
+		}
+		if _, err := h.OpenSection(0, 1); apperr.From(err).Code != apperr.CodeInternal {
+			t.Fatalf("流式路径应拒绝区间读取: %v", err)
+		}
+	})
 }

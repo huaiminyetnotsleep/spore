@@ -46,7 +46,61 @@ func downloadErrorCode(err error) apperr.Code {
 type Handle struct {
 	Reader  io.Reader
 	Cleanup func()
+
+	// 拆分投递扩展（仅临时文件路径填充）：完整落盘后的文件路径与就绪
+	// 门控，支撑按字节区间切分上传与 ffmpeg 定位抽帧；其余路径为零值。
+	filePath string
+	gate     *fileGate
+	size     int64
 }
+
+// Path 返回临时文件路径与是否为临时文件路径。调用方在 WaitDownloaded
+// 成功之前不得按路径读取——未落盘区域是稀疏空洞，读出零字节。
+func (h *Handle) Path() (string, bool) {
+	if h == nil || h.filePath == "" {
+		return "", false
+	}
+	return h.filePath, true
+}
+
+// WaitDownloaded 阻塞等待全部字节落盘，返回下载 goroutine 的收尾错误
+// （已按 apperr 分类；nil 表示完整落盘，含短读升级的 errShortDownload）。
+// 仅临时文件路径支持；其余路径返回内部错误。ctx 取消经下载侧传播：
+// 下载 goroutine 收到取消即以错误关闭门控，本方法随之返回，不会悬挂到
+// 任务超时。
+func (h *Handle) WaitDownloaded(ctx context.Context) error {
+	if h == nil || h.gate == nil {
+		return apperr.New(apperr.CodeInternal, "非临时文件路径不支持等待落盘")
+	}
+	return h.gate.waitClosed()
+}
+
+// OpenSection 打开已落盘文件的独立区间读取器 [offset, offset+length)，
+// 与 Handle.Reader 互不影响（不经过就绪水位门控——调用方必须先
+// WaitDownloaded 成功，否则稀疏空洞区域读出零字节）。返回的 ReadCloser
+// 由调用方负责关闭。仅临时文件路径支持。
+func (h *Handle) OpenSection(offset, length int64) (io.ReadCloser, error) {
+	if h == nil || h.filePath == "" {
+		return nil, apperr.New(apperr.CodeInternal, "非临时文件路径不支持区间读取")
+	}
+	if offset < 0 || length < 0 || offset+length > h.size {
+		return nil, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("区间越界：[%d, %d) 超出文件大小 %d", offset, offset+length, h.size))
+	}
+	f, err := os.Open(h.filePath)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
+	}
+	return &sectionReader{SectionReader: io.NewSectionReader(f, offset, length), f: f}, nil
+}
+
+// sectionReader 是绑定文件句柄的区间读取器：读完后关闭句柄。
+type sectionReader struct {
+	*io.SectionReader
+	f *os.File
+}
+
+func (s *sectionReader) Close() error { return s.f.Close() }
 
 // downloadPartSize 是下载分片大小：upload.getFile 单请求上限 1MB（4KB 对齐），
 // 三种下载路径共用（gotd downloader 默认 512KB，调大后请求次数减半、RTT
@@ -69,11 +123,20 @@ type Options struct {
 	// FFmpegPath 是视频封面兜底抽帧用的 ffmpeg 可执行文件路径（FFMPEG_PATH，
 	// 默认按 PATH 查找 "ffmpeg"）；空串表示关闭抽帧兜底（测试用）。
 	FFmpegPath string
+	// MaxSplitTotalSize 是分卷拆分投递的单条消息总上限；<=0 表示禁用拆分
+	//（Size 超过 MaxFileSize 即拒绝，历史行为）。
+	MaxSplitTotalSize int64
+	// SplitSegmentSize 是拆分单段大小（拆分编排队列读取；Open 仅用
+	// MaxSplitTotalSize 做预检，不感知段切分）。
+	SplitSegmentSize int64
 }
 
 // Open 按大小选择下载路径并返回句柄。
 //
-//   - Size > MaxFileSize：拒绝（不发起下载）
+//   - Size > MaxFileSize 且不可拆分（未配置拆分上限或超 MaxSplitTotalSize）：
+//     拒绝（不发起下载）
+//   - Size > MaxFileSize 但可拆分：强制走临时文件路径（拆分需要完整落盘后
+//     按区间切分，流式/内存管道不可回放）
 //   - Size <= StreamLimit：goroutine 中流式写入 io.Pipe，与 Bot API 上传背压串联
 //   - StreamLimit < Size <= MemoryLimit：多线程并行下载到内存重排序缓冲
 //     （reorderBuffer），上传侧顺序阻塞读——下载与上传完全重叠、零磁盘写入
@@ -87,9 +150,12 @@ type Options struct {
 // onDownload 在每段字节落位时收到增量字节数（下载进度观测，可为 nil）：
 // 内存管道路径下分片乱序落位，计数代表"已落位字节"而非顺序前缀。
 func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, opt Options, log *slog.Logger, onDownload func(int64)) (*Handle, error) {
-	if m.Size > opt.MaxFileSize {
+	// 拆分投递：超过单文件上限但落在拆分总上限内的媒体放行，强制完整落盘
+	splittable := opt.MaxSplitTotalSize > 0 && m.Size > opt.MaxFileSize &&
+		m.Size <= opt.MaxSplitTotalSize
+	if m.Size > opt.MaxFileSize && !splittable {
 		return nil, apperr.New(apperr.CodeFileTooLarge,
-			fmt.Sprintf("size=%d > max_file_size=%d", m.Size, opt.MaxFileSize))
+			fmt.Sprintf("size=%d > max_file_size=%d（拆分上限 %d）", m.Size, opt.MaxFileSize, opt.MaxSplitTotalSize))
 	}
 	if m.Location == nil {
 		// 防御：无下载位置的媒体（如转换失败的兜底类型）不应进入下载，
@@ -99,7 +165,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 
 	dl := downloader.NewDownloader().WithPartSize(downloadPartSize)
 
-	if m.Size <= opt.StreamLimit {
+	if !splittable && m.Size <= opt.StreamLimit {
 		log.Debug("媒体走流式路径", "file", m.FileName, "size", m.Size)
 		pr, pw := io.Pipe()
 		go func() {
@@ -118,7 +184,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 		}, nil
 	}
 
-	if opt.MemoryLimit > 0 && m.Size <= opt.MemoryLimit {
+	if !splittable && opt.MemoryLimit > 0 && m.Size <= opt.MemoryLimit {
 		if !tryAcquireMemory(opt.Memory, m.Size) {
 			// 进程内存预算已满：降级到下方临时文件路径（边下边传语义不变），
 			// 把常驻 RAM 钉死在预算内。Debug 级别——饱和期逐文件触发，Info
@@ -186,7 +252,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 			log.Warn("临时文件清理失败", "path", path, "error", rmErr.Error())
 		}
 	}
-	return &Handle{Reader: gate, Cleanup: cleanup}, nil
+	return &Handle{Reader: gate, Cleanup: cleanup, filePath: path, gate: gate, size: m.Size}, nil
 }
 
 // countWriter 在每次成功写入后按增量字节数回调（流式路径下载观测）。

@@ -148,6 +148,19 @@ func (g *fileGate) Read(p []byte) (int, error) {
 	}
 }
 
+// waitClosed 等待门控关闭并返回关闭原因（下载成功结束为 nil，含短读
+// 升级的 errShortDownload）。拆分投递在切分前经 Handle.WaitDownloaded
+// 间接调用；ctx 取消经下载侧传播——下载 goroutine 收到取消即以错误关闭，
+// 本方法随之返回，无需独立监听 ctx。
+func (g *fileGate) waitClosed() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for !g.closed {
+		g.cond.Wait()
+	}
+	return g.err
+}
+
 // CloseWithError 关闭门控。err 为 nil 表示下载成功结束——就绪字节不足声明
 // 大小时升级为 errShortDownload，拒绝把截断数据当完整文件上传；成功关闭后
 // 已落盘的就绪数据仍可继续读出，读尽返回 EOF。幂等：首次关闭为准。

@@ -272,6 +272,29 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("全 document 组（分卷拆分段）→ MTProto 整组直传", func(t *testing.T) {
+		large := &fakeLargeSender{available: true}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap)
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindDocument, FileName: "big.mkv.part1of2", Size: testUploadCap + 1},
+				Reader: strings.NewReader("p1"), Caption: message.Caption{Text: "首段"}},
+			{Media: message.Media{Kind: message.KindDocument, FileName: "big.mkv.part2of2", Size: testUploadCap + 1},
+				Reader: strings.NewReader("p2")},
+		}
+		ids, err := s.SendAlbum(ctx, 7, entries)
+		if err != nil {
+			t.Fatalf("document 整组应走大文件通道: %v", err)
+		}
+		if large.albumCalls != 1 || api.albumCalls != 0 {
+			t.Fatalf("应只调大文件通道整组: large=%d api=%d", large.albumCalls, api.albumCalls)
+		}
+		if len(ids) != 2 {
+			t.Fatalf("应透传消息 ID: %v", ids)
+		}
+	})
+
 	t.Run("缺 Reader → 契约防御", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}

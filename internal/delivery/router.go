@@ -114,8 +114,12 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // SendAlbum 路由整组发送：全员经 Bot API 判定且在上限内 → Bot API
 // sendMediaGroup；含超限成员（经 AlbumGroupable 预检必为 video 且 ≤ largeCap）
 // → Bot 号 MTProto 整组直传，保住"图+大视频混合相册"的整组语义。
-// 大文件通道未就绪按确定性失败处理（与单媒体路径同姿态）；混入双通道都
-// 承载不了的成员属调用方违约（worker 预检已排除），按防御错误处理。
+// document 成员同样走 MTProto 整组通道——只由分卷拆分路径产生（全 document
+// 组，Telegram 允许；与 photo/video 混组会被服务器拒绝，调用方保证不出现），
+// worker 相册预检（AlbumGroupable）不感知，普通相册的 document 成员仍逐条
+// 降级，历史行为不变。大文件通道未就绪按确定性失败处理（与单媒体路径同
+// 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
+// 按防御错误处理。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	allAPI := true
 	for i, e := range entries {
@@ -125,7 +129,8 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 		}
 		switch {
 		case e.Media.Size <= s.uploadCap && s.api.AlbumGroupable(e.Media): // Bot API 承载
-		case e.Media.Kind == message.KindVideo && e.Media.Size <= s.largeCap: // MTProto 整组承载
+		case e.Media.Size <= s.largeCap &&
+			(e.Media.Kind == message.KindVideo || e.Media.Kind == message.KindDocument): // MTProto 整组承载
 			allAPI = false
 		default:
 			return nil, apperr.New(apperr.CodeInternal,

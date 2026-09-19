@@ -94,7 +94,7 @@ var userTexts = map[Code]string{
 	CodeChannelInaccessible:     "无法访问该频道：系统读取账号未加入该频道。可发送 /join 频道邀请链接（t.me/+…）让它加入；链接可用你入群时拿到的那个，或向频道管理员索取。",
 	CodeServiceMessage:          "这是一条服务消息，没有可提取的内容。",
 	CodeMediaUnsupported:        "暂不支持这种消息类型。",
-	CodeFileTooLarge:            "文件超过大小上限，暂无法发送。",
+	CodeFileTooLarge:            "文件超过单条消息大小上限（约 19GB），暂无法发送。",
 	CodeTempDirFull:             "临时目录空间已满，请稍后重试。",
 	CodeMediaDownloadFailed:     "媒体下载失败，请稍后重试。",
 	CodeNetworkError:            "网络连接失败或超时，请稍后重试。",

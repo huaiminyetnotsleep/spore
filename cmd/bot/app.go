@@ -352,6 +352,9 @@ func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher) queuepkg.
 			MaxDirSize:      a.cfg.TempDirMaxSize,
 			Memory:          a.memoryGate, // 进程级内存预算（预算不足降级落盘）
 			FFmpegPath:      a.cfg.FFmpegPath,
+			// 分卷拆分投递（split）：超限媒体切段后经相册整组直传
+			MaxSplitTotalSize: config.MaxSplitTotalSize,
+			SplitSegmentSize:  config.SplitSegmentSize,
 		},
 		Log: a.log,
 	}

@@ -227,3 +227,41 @@ func TestCaptionWithQuotedBody(t *testing.T) {
 		}
 	})
 }
+
+func TestCaptionWithNote(t *testing.T) {
+	t.Run("空附注原样返回", func(t *testing.T) {
+		c := Caption{Text: "正文"}
+		if got := c.WithNote(""); got.Text != "正文" || len(got.Entities) != 0 {
+			t.Fatalf("空附注不应改动 caption: %+v", got)
+		}
+	})
+
+	t.Run("尾部追加不平移实体", func(t *testing.T) {
+		c := Caption{Text: "正文", Entities: []tg.MessageEntityClass{
+			&tg.MessageEntityBold{Offset: 0, Length: 4},
+		}}
+		got := c.WithNote("附注")
+		if got.Text != "正文\n\n附注" {
+			t.Fatalf("附注应追加在文本尾部: %q", got.Text)
+		}
+		bold, ok := got.Entities[0].(*tg.MessageEntityBold)
+		if !ok || bold.Offset != 0 || bold.Length != 4 {
+			t.Fatalf("既有实体偏移不应变化: %#v", got.Entities[0])
+		}
+	})
+
+	t.Run("与来源卡片/脚注构建器串联", func(t *testing.T) {
+		got := Caption{Text: "正文"}.
+			WithSourceLink("https://t.me/example/7").
+			WithNote("已分为 3 段")
+		if !strings.HasPrefix(got.Text, "🔗 原消息") {
+			t.Fatalf("附注应在来源卡片之后: %q", got.Text)
+		}
+		if !strings.HasSuffix(got.Text, "已分为 3 段") {
+			t.Fatalf("附注应在最末: %q", got.Text)
+		}
+		if len(got.Entities) != 3 {
+			t.Fatalf("来源卡片实体应保留: %d", len(got.Entities))
+		}
+	})
+}

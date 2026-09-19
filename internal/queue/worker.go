@@ -793,7 +793,8 @@ func sendMediaItem(ctx context.Context, d Deps, j Job, target int64, it message.
 
 // openAndSend 打开句柄 → 发送到 target → 清理（无论成败）。
 // 视频媒体在发送前就地解析缩略图（源缩略图优先、ffmpeg 抽帧兜底，见
-// thumb.go）；上传路径的尝试与送达在此计入投递观测。
+// thumb.go）；超过单文件上限的媒体走分卷拆分（见 split.go）；上传路径的
+// 尝试与送达在此计入投递观测。
 func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	h, err := media.Open(ctx, d.Fetcher.API(), *it.Media, tempKey(j, it), d.Media, d.Log, downloadReporter(d, j))
 	if err != nil {
@@ -805,6 +806,9 @@ func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.It
 		}
 	}()
 	m := *it.Media
+	if needsSplit(d.Media, m) {
+		return sendSplitDocument(ctx, d, j, target, it, m, h, sourceURL, links, track, sent)
+	}
 	src, err := prepareVideoThumb(ctx, d, &m, h.Reader, tempKey(j, it)+"-thumb")
 	if err != nil {
 		return err

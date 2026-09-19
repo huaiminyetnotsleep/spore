@@ -86,9 +86,11 @@ func (c *BotClient) SendMedia(ctx context.Context, chatID int64, m message.Media
 // SendAlbum 上传并发送整组相册（实现 delivery.LargeFileSender 的整组形态）：
 // 每成员 uploader.Upload → messages.uploadMedia 注册到目标 peer → 汇总为
 // InputMediaPhoto/InputMediaDocument 引用 → messages.sendMultiMedia 一次整组
-// 发送（上限 2000MB，承载含超过 Bot API 上限成员的相册）。
+// 发送（单成员上限 2000MB，承载含超过 Bot API 上限成员的相册与分卷拆分段）。
 // 两阶段是协议硬约束：sendMultiMedia 只接受已注册的媒体引用，直接携带
 // inputMediaUploaded* 会被 400 MEDIA_INVALID 拒绝（真机结论 2026-09-03）。
+// 成员类型支持 photo/video/document（document 即分卷拆分段——Telegram 不允许
+// document 与 photo/video 混组，全 document 组合法，混组由调用方保证不出现）。
 // medias/readers/captions 按位对应、单次消费；成员串行处理：uploader 内部
 // 已按 UPLOAD_THREADS 并发分片，再按成员并发放大会显著提高 FLOOD_WAIT
 // 概率（与 worker 相册打开并发上限=2 同理）。caption 逐成员绑定（Limited
@@ -117,9 +119,9 @@ func (c *BotClient) SendAlbum(ctx context.Context, chatID int64, medias []messag
 
 	multi := make([]tg.InputSingleMedia, 0, len(medias))
 	for i, m := range medias {
-		if m.Kind != message.KindPhoto && m.Kind != message.KindVideo {
+		if m.Kind != message.KindPhoto && m.Kind != message.KindVideo && m.Kind != message.KindDocument {
 			return nil, apperr.New(apperr.CodeInternal,
-				fmt.Sprintf("整组直传仅支持 photo/video，第 %d 项为 %v", i, m.Kind))
+				fmt.Sprintf("整组直传仅支持 photo/video/document，第 %d 项为 %v", i, m.Kind))
 		}
 		if readers[i] == nil {
 			return nil, apperr.New(apperr.CodeInternal,

@@ -406,7 +406,7 @@
 | `status` | string | `queued \| processing \| succeeded \| failed \| cancelled` |
 | `channel` | string | 频道标识 |
 | `media_type` | string | 媒体类型；多成员 Telegram 相册统一为 `album` |
-| `delivery_mode` | string | 投递方式：`upload \| mixed \| text \| cloud \| reuse \| dump`（`mixed` 为历史遗留值，仅旧记录使用；`reference`（源引用直发）机制已移除，仅历史记录可能保留该值） |
+| `delivery_mode` | string | 投递方式：`upload \| mixed \| text \| cloud \| reuse \| dump \| split`（`mixed` 为历史遗留值，仅旧记录使用；`reference`（源引用直发）机制已移除，仅历史记录可能保留该值；`split` 为分卷拆分投递） |
 | `error_code` | string | 错误码 |
 | `since` / `until` | string | 运营时区 `YYYY-MM-DD` |
 | `page` / `page_size` | int | 分页 |
@@ -428,7 +428,7 @@
 | `media_type` | string | 空串 = 未记录（失败于消息转换前）；多成员相册为 `album` |
 | `media_types` | string[] | 请求包含的去重媒体类型；相册用于区分 `photo`、`video` 或二者组合，caption 不参与；旧记录为空数组 |
 | `source_media_dc_ids` | int[] | 源媒体所在 Telegram DC ID 去重列表；文本、旧记录或未知时为空数组；不表示消息或用户地理位置 |
-| `delivery_mode` | string | `upload \| mixed \| text \| cloud \| reuse \| dump`（`mixed` 为历史遗留值；`reference`（源引用直发）已移除，仅历史记录可能保留；`cloud` 为云盘下载：`/download` 指令或管理端补存创建；`reuse` 为缓存频道干净副本复用命中；`dump` 为管理端缓存补写创建） |
+| `delivery_mode` | string | `upload \| mixed \| text \| cloud \| reuse \| dump \| split`（`mixed` 为历史遗留值；`reference`（源引用直发）已移除，仅历史记录可能保留；`cloud` 为云盘下载：`/download` 指令或管理端补存创建；`reuse` 为缓存频道干净副本复用命中；`dump` 为管理端缓存补写创建；`split` 为分卷拆分投递：超过单文件上限的媒体切段后经相册整组送达） |
 | `bot_id` | int64 | 受理 bot 的 Telegram 账号 ID（多机器人池归属）；`0` = 存量行/非 Bot 通道创建，前端显示"—" |
 | `bot_username` | string \| 缺省 | 受理时的 bot 用户名快照（不含 `@`）；空串省略 |
 | `requested_at` | int64 | 请求时间 |

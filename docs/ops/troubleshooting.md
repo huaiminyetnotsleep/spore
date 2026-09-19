@@ -3,6 +3,34 @@
 > 开发过程中实际踩过的坑及其修复，按时间倒序排列。新条目加在最上面。
 > 排查线上问题时先查这里，再查各库版本的适配注意事项（见文末）。
 
+## 2026-09-19 超过 2000MB 的文件 FILE_TOO_LARGE 失败 → 分卷拆分投递（split）
+
+**现象**：受保护频道的 2GB+ 视频走到下载完成才以 `FILE_TOO_LARGE` 失败
+（`media.Open` 大小预检），白耗流量与磁盘；Bot 身份的 2000MB 是服务器端
+硬限制（4000 part × 512KB，Bot 无 Premium、本地 Bot API 服务器同样 2000MB），
+任何代码层面都无法突破。
+
+**方案**：**分卷拆分投递**（`internal/queue/split.go`）——超过单文件上限的
+媒体按 `SplitSegmentSize`（1900MB，距 4000 分片边界留 margin）切段，完整
+落盘后以全 document 相册整组直传为**同一条消息**（相册 10 成员上限 →
+单条消息约 19GB，超出仍 `FILE_TOO_LARGE`）。`media.Open` 对可拆分媒体不再
+拒绝，但强制临时文件路径；`Handle` 新增 `Path/WaitDownloaded/OpenSection`
+（区间读取与 ffmpeg 定位抽帧的前提是完整落盘）。分段是纯字节切割、不可
+独立播放，以普通 document 发送（**不要挂 video 属性**——假播放器点了必败）；
+逐段封面第 2 段起不能对分段字节直接抽帧（无容器头），按
+"段起始字节 / 总大小 × 总时长"换算时间戳对完整文件 `ffmpeg -ss` 抽帧
+（`media.ExtractFrameAtJPEG`）。`delivery_mode` 新增 `split`（仅成功时；
+失败回落 upload 由错误码记录原因）。
+
+**要点（防复发）**：
+- 相册规则：Telegram 不允许 document 与 photo/video 混组，但全 document 组
+  合法——router 的 `SendAlbum` 只对拆分路径放开 document 成员，
+  worker 相册预检（`AlbumGroupable`）不感知，普通相册 document 成员仍逐条；
+- 拆分放弃了"边下边传"交叠（`WaitDownloaded` 先行）——抽帧与区间读取都
+  依赖完整落盘；2h 任务硬超时对慢链路超大文件仍是风险边界；
+- caption 与来源脚注只挂首段，`message.Caption.WithNote` 尾部追加纯文本
+  不平移既有实体偏移。
+
 ## 2026-09-11 并发传输内存打满 → 进程级内存预算闸门（降级临时文件路径）
 
 **现象**：同时传多个记录（多任务并发、或相册多成员）时 CPU/内存接近打满，

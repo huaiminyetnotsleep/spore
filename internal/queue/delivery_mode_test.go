@@ -38,6 +38,11 @@ func TestMergeDeliveryMode(t *testing.T) {
 			track: deliveryTrack{converted: true, hasMedia: true},
 			want:  store.DeliveryModeUpload,
 		},
+		{
+			name:  "分卷拆分送达：split",
+			track: deliveryTrack{converted: true, hasMedia: true, uploadOK: 1, split: true},
+			want:  store.DeliveryModeSplit,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

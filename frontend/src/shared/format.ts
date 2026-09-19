@@ -45,6 +45,7 @@ export const DELIVERY_MODE_LABELS: Record<string, string> = {
   reuse: "缓存直发",
   cloud: "网盘转存",
   dump: "缓存补写",
+  split: "分卷投递",
 };
 
 /**
@@ -95,6 +96,7 @@ export const DELIVERY_MODE_TAG_COLORS: Record<string, string> = {
   reuse: "cyan",
   cloud: "purple",
   dump: "geekblue",
+  split: "orange",
 };
 
 /**

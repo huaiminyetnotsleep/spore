@@ -361,6 +361,9 @@ https://<你的域名>/admin/login
 媒体自动经 Bot 身份 MTProto 会话直传（`data/bot-session.json`，用 `BOT_TOKEN`
 自动登录），上限 2000MB（`MAX_FILE_SIZE` 默认值）；Bot 会话不可用时仅大文件
 发送失败，小文件不受影响。`/status` 的"大文件直传通道"可查看其可用性。
+超过 2000MB 的媒体自动**分卷拆分**：切段后以同一条相册消息送达（约 19GB 上限，
+首段附合并提示），无需任何配置；本地 Bot API 备选路线不承载拆分（其上限同为
+2000MB）。
 
 仓库另附一条**备选路线**：自建官方 telegram-bot-api 服务器（`bigfile` profile，
 默认不启动），配置 `BOT_API_URL` 后全部上传改走它、不再使用 MTProto 直传，

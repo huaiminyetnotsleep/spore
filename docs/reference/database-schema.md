@@ -114,7 +114,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `started_at` | INTEGER | 可空 | 开始处理时间 |
 | `finished_at` | INTEGER | 可空 | 终态时间 |
 | `duration_ms` | INTEGER | 可空 | 总耗时（毫秒） |
-| `delivery_mode` | TEXT | NOT NULL DEFAULT 'upload' | 投递方式（v2）：`upload` 下载上传 / `text` 纯文本 / `cloud` 云盘下载（`/download` 或补存）/ `reuse` 缓存频道复用命中 / `dump` 缓存补写 / `mixed`（历史遗留，仅旧记录）/ `reference`（历史遗留，机制已移除） |
+| `delivery_mode` | TEXT | NOT NULL DEFAULT 'upload' | 投递方式（v2）：`upload` 下载上传 / `text` 纯文本 / `cloud` 云盘下载（`/download` 或补存）/ `reuse` 缓存频道复用命中 / `dump` 缓存补写 / `split` 分卷拆分（超限媒体切段整组投递）/ `mixed`（历史遗留，仅旧记录）/ `reference`（历史遗留，机制已移除） |
 | `source_media_dc_ids_json` | TEXT | 可空 | 源媒体所在 Telegram DC ID 去重数组（v8）；文本、旧记录为 NULL |
 | `media_types_json` | TEXT | 可空 | 请求实际包含的去重媒体类型数组（v9）；相册用它区分纯图片/纯视频/混合 |
 | `parent_request_id` | INTEGER | 可空，**无外键** | 补存链路指向的原请求 ID（v10）；普通请求为 NULL |
