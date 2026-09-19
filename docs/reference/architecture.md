@@ -391,7 +391,7 @@ worker 主流程（`internal/queue/worker.go`）：
 
 ```text
 process(job)（取数固定 15min 窗口；发送窗口按媒体总量自适应，封顶 2h）:
-  msgs, err := fetcher.Fetch(job.Ref)        // 失败 → SendMessage(UserText) 并返回
+  msgs, err := fetcher.Fetch(job.Ref)        // 失败 → SendMessage(UserText+来源链接) 并返回
   items := message.Convert(msgs)
   单条文本 → delivery.SendMessage(item.RenderHTML())
   单条媒体 → sendMediaItem → openAndSend → media.Open
@@ -448,7 +448,7 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `STORE_UNAVAILABLE` / `STORE_MIGRATION_FAILED` / `STORE_CONSTRAINT` | SQLite 不可用 / 迁移失败 / 约束冲突（含停用 owner、重复添加等管理操作拒绝） | 存储类中文提示（见 `apperr.UserText`）。 |
 | `WEB_AUTH_FAILED` / `WEB_LOGIN_LOCKED` / `WEB_CSRF_INVALID` / `OAUTH_STATE_INVALID` / `OAUTH_EXCHANGE_FAILED` | 管理端登录与 CSRF/OAuth 边界（`internal/web`） | 管理端页面中文提示（见 `apperr.UserText`）。 |
 
-用户永远看到 `UserText`，原始异常只进日志（对齐旧 `errors.ts` 的边界设计）。
+用户看到 `UserText`（任务失败提示附来源消息链接），原始异常只进日志（对齐旧 `errors.ts` 的边界设计）。
 
 ## 6. 配置参考
 
@@ -706,7 +706,7 @@ update 到达
  │          其他 → sendMediaItem → openAndSend：media.Open 下载 →
  │            SendMedia(reader=句柄)（routerSender 按 Size 路由 Bot API /
  │            大文件直传；下载过期错误刷新后重试一次）
- ├─ 4. 失败路径：apperr.From(err) → SendMessage(UserText(code))
+ ├─ 4. 失败路径：apperr.From(err) → SendMessage(UserText(code)+来源链接)
  │     用外层 ctx 发送（超时窗口不影响错误提示送达）
  └─ 5. cleanupStatusMsg：删除"正在获取消息..."（尽力而为，失败仅 debug 日志）
 ```
@@ -748,7 +748,7 @@ media.Open(ctx, api, media, jobID, opt, log)
 ### 11.6 错误与清理的统一路径
 
 - gotd 与 Bot API 的错误分别在 `classifyTgError` / `classifyBotError` 处归类为 `AppError`。
-- worker 只消费 `apperr.From(err).Code`：用户看到 `UserText` 中文提示，原始错误只进日志。
+- worker 只消费 `apperr.From(err).Code`：用户看到 `UserText` 中文提示（失败提示附来源消息链接），原始错误只进日志。
 - 清理三处兜底：worker defer 清理临时文件句柄、handler 入队失败删占位提示、
   main 启动时清空 TempDir。
 
@@ -788,6 +788,6 @@ SIGINT / SIGTERM
     文本 → RenderHTML → SendMessage
     媒体 → media.Open（流式 / 内存 / 临时文件 / 拒绝）→ SendMedia / SendAlbum
     成功 → 删除占位、写缓存频道干净副本、复制到用户绑定频道
-    失败 → UserText 中文提示；最后删除占位提示
+    失败 → UserText 中文提示（附来源链接）；最后删除占位提示
   → 用户收到一条全新消息，可正常转发 ✅
 ```

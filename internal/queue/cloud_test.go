@@ -390,8 +390,8 @@ func TestCloudJobVerifyUnavailable(t *testing.T) {
 	}
 	sender := d.Sender.(*fakeSender)
 	texts := sender.texts()
-	if len(texts) != 1 || texts[0] != apperr.UserText(apperr.CodeCloudVerifyFailed) {
-		t.Fatalf("应回复核验不可用文案: %v", texts)
+	if len(texts) != 1 || texts[0] != failureNoticeHTML(apperr.CodeCloudVerifyFailed, job.Ref) {
+		t.Fatalf("应回复核验不可用文案（含来源链接）: %v", texts)
 	}
 }
 
@@ -428,8 +428,8 @@ func TestCloudJobPartialFailure(t *testing.T) {
 	}
 	sender := d.Sender.(*fakeSender)
 	texts := sender.texts()
-	if len(texts) != 1 || texts[0] != apperr.UserText(apperr.CodeCloudQuota) {
-		t.Fatalf("失败应回复用户文案: %v", texts)
+	if len(texts) != 1 || texts[0] != failureNoticeHTML(apperr.CodeCloudQuota, job.Ref) {
+		t.Fatalf("失败应回复用户文案（含来源链接）: %v", texts)
 	}
 }
 
@@ -456,8 +456,8 @@ func TestCloudJobUploadTimeout(t *testing.T) {
 	}
 	sender := d.Sender.(*fakeSender)
 	texts := sender.texts()
-	if len(texts) != 1 || texts[0] != apperr.UserText(apperr.CodeCloudUploadTimeout) {
-		t.Fatalf("应回复云盘上传超时文案: %v", texts)
+	if len(texts) != 1 || texts[0] != failureNoticeHTML(apperr.CodeCloudUploadTimeout, job.Ref) {
+		t.Fatalf("应回复云盘上传超时文案（含来源链接）: %v", texts)
 	}
 	if strings.Contains(strings.Join(texts, "\n"), "已上传到网盘") {
 		t.Fatalf("失败不应发送上传成功确认: %v", texts)
@@ -486,8 +486,8 @@ func TestCloudJobTextOnly(t *testing.T) {
 		t.Fatalf("不应调用上传: %+v", calls)
 	}
 	sender := d.Sender.(*fakeSender)
-	if texts := sender.texts(); len(texts) != 1 || texts[0] != apperr.UserText(apperr.CodeCloudTextOnly) {
-		t.Fatalf("应回复纯文本不支持文案: %v", texts)
+	if texts := sender.texts(); len(texts) != 1 || texts[0] != failureNoticeHTML(apperr.CodeCloudTextOnly, job.Ref) {
+		t.Fatalf("应回复纯文本不支持文案（含来源链接）: %v", texts)
 	}
 }
 

@@ -227,7 +227,7 @@ func Process(d Deps) Processor {
 				// 避免把关停信号记成 INTERNAL_ERROR；该类请求可在 Web 重试
 				ae = apperr.New(apperr.CodeInterrupted, "进程退出中断任务")
 			}
-			d.Log.Error("任务失败", "job_id", j.ID, "code", ae.Code, "error", err.Error())
+			d.Log.Error("任务失败", "job_id", j.ID, "ref", j.Ref.String(), "code", ae.Code, "error", err.Error())
 			if finishErr := finishRequest(d, ctx, j, store.RequestResult{
 				Status:           store.RequestFailed,
 				ErrorCode:        string(ae.Code),
@@ -251,7 +251,7 @@ func Process(d Deps) Processor {
 					// 原因与错误码），不发错误提示
 					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 				} else {
-					if _, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, apperr.UserText(ae.Code)); sendErr != nil {
+					if _, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
 						d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
 					}
 					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
@@ -593,6 +593,18 @@ func CancelledStatusHTML(ref tmeurl.SourceRef) string {
 		return fmt.Sprintf("%s\n<s><a href=\"%s\">%s</a></s>", StatusCancelledHTML, url, url)
 	}
 	return StatusCancelledHTML
+}
+
+// failureNoticeHTML 渲染任务失败的用户提示：错误码文案 + 来源消息链接，
+// 多条链接并发处理时用户可据此区分是哪条任务失败。URL 由服务端受控生成
+// （频道键为用户名或 -100 数字 ID），无 HTML 注入面；链接不可重建时
+// （如私有频道键数据异常）退化为纯错误文案。
+func failureNoticeHTML(code apperr.Code, ref tmeurl.SourceRef) string {
+	text := apperr.UserText(code)
+	if url, ok := ref.URL(); ok {
+		return fmt.Sprintf("%s\n<a href=\"%s\">%s</a>", text, url, url)
+	}
+	return text
 }
 
 // markStatusCancelled 把占位消息编辑为取消终态文案（尽力而为，独立时间窗）。

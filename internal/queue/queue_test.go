@@ -438,13 +438,26 @@ func TestProcessEarlyFailLifecycle(t *testing.T) {
 	if got.DurationMs < 0 || got.FinishedAt == 0 {
 		t.Errorf("早失败也应写 finished_at/duration（回退 queued_at 起算）: %+v", got)
 	}
-	// 用户收到分类后的中文提示，状态提示被删除
+	// 用户收到分类后的中文提示（附来源链接），状态提示被删除
 	texts := sender.texts()
-	if len(texts) != 1 || texts[0] != apperr.UserText(apperr.CodeChannelInaccessible) {
-		t.Errorf("失败应回复用户文案: %v", texts)
+	if len(texts) != 1 || texts[0] != failureNoticeHTML(apperr.CodeChannelInaccessible, job.Ref) {
+		t.Errorf("失败应回复用户文案（含来源链接）: %v", texts)
 	}
 	if ids := sender.deletedIDs(); len(ids) != 1 || ids[0] != 55 {
 		t.Errorf("失败后应删除状态提示，得到 %v", ids)
+	}
+}
+
+func TestFailureNoticeHTML(t *testing.T) {
+	text := apperr.UserText(apperr.CodeFileTooLarge)
+	ref := tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "example", MessageID: 7}
+	want := text + "\n" + `<a href="https://t.me/example/7">https://t.me/example/7</a>`
+	if got := failureNoticeHTML(apperr.CodeFileTooLarge, ref); got != want {
+		t.Fatalf("失败提示应为文案+可点击链接\nwant: %q\ngot:  %q", want, got)
+	}
+	// 链接不可重建（如私有频道键数据异常）：退化为纯错误文案
+	if got := failureNoticeHTML(apperr.CodeFileTooLarge, tmeurl.SourceRef{}); got != text {
+		t.Fatalf("链接不可重建应退化为纯文案: %q", got)
 	}
 }
 
