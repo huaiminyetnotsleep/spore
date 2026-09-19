@@ -9,8 +9,9 @@ package dumpcache
 // 干净副本构造（给用户的投递 caption 织有脚注，副本必须剥离）：
 //   - 单媒体：copyMessage 带 caption 覆盖（干净 caption：引用正文+原链接）；
 //   - 单文本：SendMessage 干净渲染（无脚注）；
-//   - 多条：copyMessages 整批复制（保组）后逐条 editMessageCaption /
-//     editMessageText 清洗（首条带原消息链接，全条不带脚注）。
+//   - 多条：copyMessages 整批复制（保组）后按源条目分组清洗——每条源条目
+//     （分卷拆分会展开为连续多条分段消息）仅首条 editMessageCaption /
+//     editMessageText（首条带原消息链接；拆分段非首条 caption 本为空）。
 //
 // 全部步骤尽力而为：任一失败只记日志、不落条目（下次成功投递自愈），
 // 不影响任务结果。首次失败以 Warn 提示检查 DUMP_CHANNEL_ID 与 bot 频道
@@ -150,49 +151,68 @@ func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, dumpIDs []in
 
 // WriteClean 在任务成功投递后写干净副本并落 dump_entries（尽力而为）。
 // botID 为任务的受理 bot：已发送消息坐标是该 bot 私有的，必须由同一 bot
-// 复制。items 与 sentIDs 按序对应（worker 发送顺序）；复用命中（Reused）
-// 的任务不再重写（条目即复制来源）。sourceURL 为原消息链接（首条织入）。
+// 复制。items 与 sentSpans 按序对应（worker 发送顺序）：每个 span 是一条
+// 源条目展开的消息 ID 组——常规成员 1 条，分卷拆分段连续多条。单条目任务
+// 走 copyMessage 带 caption 覆盖（一步到位）；多条任务整批 CopyMessages
+// （保组）后按 span 清洗首条 caption（拆分段非首条 caption 本就为空）。
+// 复用命中（Reused）的任务不再重写（条目即复制来源）。sourceURL 为原消息
+// 链接（首条织入）。
 func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKey string, messageID int,
-	items []message.Item, sentIDs []int, sourceURL string) {
+	items []message.Item, sentSpans [][]int, sourceURL string) {
 	if !s.Enabled() {
 		return
 	}
 	snd := s.senderFor(botID)
-	if len(items) == 0 || len(items) != len(sentIDs) {
-		s.log.Debug("缓存频道副本跳过：条目与已发送消息数不一致",
+	if len(items) == 0 || len(items) != len(sentSpans) {
+		s.log.Debug("缓存频道副本跳过：条目与已发送消息分组数不一致",
 			"channel_key", channelKey, "message_id", messageID,
-			"items", len(items), "sent", len(sentIDs))
+			"items", len(items), "spans", len(sentSpans))
+		return
+	}
+	total := 0
+	for _, span := range sentSpans {
+		total += len(span)
+	}
+	if total == 0 {
 		return
 	}
 	// 一次写入全程使用同一频道 ID：中途经 Web 改配置不影响本批一致性
 	channel := s.channelID()
 
 	var dumpIDs []int
-	if len(sentIDs) == 1 {
-		id, err := s.writeSingle(ctx, snd, channel, chatID, items[0], sentIDs[0], sourceURL)
+	if total == 1 {
+		id, err := s.writeSingle(ctx, snd, channel, chatID, items[0], sentSpans[0][0], sourceURL, true)
 		if err != nil {
 			s.failHint(ctx, err)
 			return
 		}
 		dumpIDs = []int{id}
 	} else {
-		ids, err := snd.CopyMessages(ctx, chatID, channel, sentIDs)
+		flat := make([]int, 0, total)
+		for _, span := range sentSpans {
+			flat = append(flat, span...)
+		}
+		ids, err := snd.CopyMessages(ctx, chatID, channel, flat)
 		if err != nil {
 			s.failHint(ctx, err)
 			return
 		}
-		// 整批复制保留相册分组；caption 带着原用户的脚注，逐条清洗
-		for i, it := range items {
-			var err error
-			if it.Media != nil {
-				err = snd.EditMessageCaption(ctx, channel, ids[i], CleanCaption(it, i == 0, sourceURL, nil))
+		// 按 span 清洗首条 caption：常规成员各自清洗；拆分段仅首条带
+		// 脚注需清洗，其余段 caption 为空不处理。来源链接只织入首条目。
+		pos := 0
+		for i, span := range sentSpans {
+			first := i == 0
+			var cerr error
+			if items[i].Media != nil {
+				cerr = snd.EditMessageCaption(ctx, channel, ids[pos], CleanCaption(items[i], first, sourceURL, nil))
 			} else {
-				err = snd.EditMessageText(ctx, channel, ids[i], it.RenderHTMLWithSource(sourceURL, nil))
+				cerr = snd.EditMessageText(ctx, channel, ids[pos], items[i].RenderHTMLWithSource(sourceURL, nil))
 			}
-			if err != nil {
-				s.failHint(ctx, err)
+			if cerr != nil {
+				s.failHint(ctx, cerr)
 				return
 			}
+			pos += len(span)
 		}
 		dumpIDs = ids
 	}
@@ -207,13 +227,13 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 }
 
 // writeSingle 写单条副本：媒体走 copyMessage 带 caption 覆盖（一步到位），
-// 文本直接干净渲染发送。
+// 文本直接干净渲染发送。first 控制是否织入原消息链接（整批中仅首条目）。
 func (s *Service) writeSingle(ctx context.Context, snd delivery.Sender, channel, fromChatID int64,
-	it message.Item, sentID int, sourceURL string) (int, error) {
+	it message.Item, sentID int, sourceURL string, first bool) (int, error) {
 	if it.Media == nil {
 		return snd.SendMessage(ctx, channel, it.RenderHTMLWithSource(sourceURL, nil))
 	}
-	return snd.CopyMessage(ctx, fromChatID, channel, sentID, CleanCaption(it, true, sourceURL, nil))
+	return snd.CopyMessage(ctx, fromChatID, channel, sentID, CleanCaption(it, first, sourceURL, nil))
 }
 
 // CleanCaption 构造干净 caption：引用正文 +（首条）原消息链接，不织频道

@@ -229,18 +229,30 @@ SourceRef
                通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
-上限（2000MB）的媒体不再失败——按 SplitSegmentSize（1900MB，距 4000 分片
-服务器硬边界留 margin）切为 N 个分段 document（⌈Size/1900MB⌉，相册 10 成员
-上限 → 单条消息总量约 19GB，超出仍 FILE_TOO_LARGE），完整落盘后经相册整组
-直传为同一条消息。分段是纯字节切割、不可独立播放，以普通 document 发送
-（不挂 video 属性，避免客户端给出播放必败的假播放器），文件名
-`<原名>.part<i>of<N>`；caption 只挂首段并追加合并提示（cat / copy /b）。
-逐段封面：首段沿用源缩略图优先 → ffmpeg 首帧兜底；第 2 段起分段字节流
-没有容器头不可解码，按"段起始字节 / 总大小 × 总时长"换算时间戳对完整
-文件 `ffmpeg -ss` 定位抽帧（`media.ExtractFrameAtJPEG`，VBR 按平均码率
-近似）；缺时长 / ffmpeg 不可用 / 抽帧失败 → 该段降级无封面。拆分放弃
-"边下边传"交叠（抽帧与区间读取依赖完整落盘），先 WaitDownloaded 再发送；
-delivery_mode 记 `split`（仅成功时，失败回落 upload 由错误码记录原因）。
+上限（2000MB）的媒体不再失败——完整落盘后切为 N 个分段（⌈Size/1800MB⌉，
+相册 10 成员上限 → 单条消息总量约 17.6GB，超出仍 FILE_TOO_LARGE），经相册
+整组直传为同一条消息。两种切段形态：
+  - **可播放视频分段（视频首选）**：ffmpeg 流复制（`-c copy` 不转码，秒级、
+    无损）切出 N 个真实视频文件，以 video 形态上传（挂
+    DocumentAttributeVideo，SupportsStreaming），每段点开即播、无需下载
+    合并；切段点按字节占比换算时间（平均码率近似），实际边界对齐关键帧
+    （-ss 输入快定位，首帧可解码），段长有 ±GOP 级偏差；段大小 1800MB 留
+    200MB margin 防关键帧偏移使单段超 2000MB；逐段封面 = 首段源缩略图
+    优先 → 段文件 0 秒抽帧，其余段段文件 0 秒抽帧（段本身可解码）。
+  - **字节分段 document（兜底）**：非视频 / 缺时长 / ffmpeg 不可用或切段
+    失败——纯字节切割为普通 document（不挂 video 属性，避免假播放器），
+    文件名 `<原名>.part<i>of<N>`，caption 只挂首段并附合并提示
+    （cat / copy /b）；第 2 段起按"段起始字节 / 总大小 × 总时长"换算时间戳
+    对完整文件 `ffmpeg -ss` 定位抽帧。
+相册原子化：混合相册（图片 + 超限视频）经 planAlbumSend 预检（纯元数据）
+走**拆分整组**——图片与大视频的分段合成同一条相册 `[图片, 段1, 段2]` 整组
+直传，任务级原子（任何成员失败整组失败、零字节发出）；展开后超相册 10 成员
+上限或 ffmpeg 缺失时回退逐条（超大成员在单媒体路径各自拆分）。拆分放弃
+"边下边传"交叠（流复制与区间读取依赖完整落盘），先 WaitDownloaded 再切再传，
+磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。缓存频道干净副本按
+源条目分组（sentSpans）复制清洗——修复拆分投递 items 与消息数不一致导致
+副本被跳过的问题。delivery_mode 记 `split`（仅成功时，失败回落 upload 由
+错误码记录原因）。
 
 默认 MaxFileSize 为 2000MB（MTProto 上传硬上限：4000 part × 512KB）；
 默认 InMemoryLimit 为 512MB（单文件常驻内存上限）；内存路径另受进程级

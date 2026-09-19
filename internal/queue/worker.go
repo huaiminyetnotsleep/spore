@@ -337,7 +337,7 @@ func (d Deps) writeCleanDump(ctx context.Context, j Job, meta mediaMeta) {
 	defer cancel()
 	sourceURL, _ := j.Ref.URL()
 	d.Dump.WriteClean(cctx, j.BotID, j.ChatID, refChannelKey(j.Ref), j.Ref.MessageID,
-		meta.Items, meta.SentIDs, sourceURL)
+		meta.Items, meta.SentSpans, sourceURL)
 }
 
 // channelLinks 读取该用户绑定频道的脚注链接（尽力而为：失败降级为空，
@@ -357,18 +357,29 @@ func (d Deps) channelLinks(ctx context.Context, j Job) []message.ChannelLink {
 // sentIDs 收集已成功发送给用户的消息 ID（按发送顺序），任务成功后由频道
 // 副本经 Bot API copyMessages 定位复制；发送中途失败时已收集的部分 ID
 // 随任务失败自然作废（副本只对整体成功的任务投递）。
-type sentIDs struct{ items []int }
+// sentIDs 累计任务已发送的消息 ID：items 是按发送顺序的摊平列表（频道
+// 副本整批复制用）；spans 按源条目分组（一条源条目对应的消息 ID 连续成组
+// ——分卷拆分会把一个条目展开为多条），供缓存频道干净副本按条目清洗 caption。
+type sentIDs struct {
+	items []int
+	spans [][]int
+}
 
-func (s *sentIDs) add(id int) {
-	if id != 0 {
-		s.items = append(s.items, id)
+func (s *sentIDs) addSpan(ids []int) {
+	span := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			s.items = append(s.items, id)
+			span = append(span, id)
+		}
+	}
+	if len(span) > 0 {
+		s.spans = append(s.spans, span)
 	}
 }
 
-func (s *sentIDs) addAll(ids []int) {
-	for _, id := range ids {
-		s.add(id)
-	}
+func (s *sentIDs) add(id int) {
+	s.addSpan([]int{id})
 }
 
 // runJob 执行提取与回传，返回转换阶段得到的媒体诊断元数据与错误。
@@ -408,7 +419,10 @@ func sendConverted(ctx context.Context, d Deps, j Job, target int64, msgs []*tg.
 	meta = mediaMetaOf(items)
 	meta.Items = items
 	sent := &sentIDs{}
-	defer func() { meta.SentIDs = sent.items }()
+	defer func() {
+		meta.SentIDs = sent.items
+		meta.SentSpans = sent.spans
+	}()
 	// 进度总量 = 全部媒体大小之和（相册为成员累加）；未注册 ID（无持久化
 	// 记录）经 Registry 的 no-op 语义自动跳过
 	d.Progress.AddTotal(j.RequestID, meta.FileSize)
@@ -455,9 +469,12 @@ type mediaMeta struct {
 	// deliveryMode 据此返回 reuse，且收尾不再重写缓存频道副本；Track
 	// 观测不参与该路径。
 	Reused bool
-	// SentIDs 是已成功发送给用户的消息 ID（按发送顺序），任务成功后经
+	// SentIDs 是已成功发送给用户的消息 ID（按发送顺序，摊平），任务成功后经
 	// 频道副本复制到该用户绑定的频道；失败任务收集的部分 ID 自然作废。
-	SentIDs []int
+	// SentSpans 是按源条目分组的同一批 ID（与 Items 按序对应，一条源条目
+	// 展开的拆分段连续成组），供缓存频道按条目清洗 caption。
+	SentIDs   []int
+	SentSpans [][]int
 	// Items 是转换后的标准化条目（内存传递，不落库）：成功收尾时供
 	// dumpcache.WriteClean 构造无脚注干净副本。复用与云盘路径为零值。
 	Items []message.Item
@@ -671,15 +688,57 @@ func Discard(d Deps) Processor {
 // 解耦——若按成员数×下载线程放大 invoke 并发，会显著提高 FLOOD_WAIT 概率。
 const albumOpenConcurrency = 2
 
+// albumMemberPlan 是相册单成员的整组规划：普通成员占 1 个相册槽位；可拆
+// 视频成员 split=true 并展开为 count 个分段槽位。
+type albumMemberPlan struct {
+	split bool
+	count int
+}
+
+// planAlbumSend 纯元数据预检相册的整组可行性（不发起下载，与 SendAlbum
+// 分流判定同源）：
+//   - 全员可整组（Sender.AlbumGroupable，photo/video 且超限成员 ≤2000MB）
+//     → 常规整组；
+//   - 不可整组成员全部是"可拆视频"（超过 2000MB 但有时长、ffmpeg 可用）且
+//     展开后总成员数 ≤ 相册上限 → 拆分整组：大视频成员切段为可播放分段，
+//     与其余成员合成同一条相册（如 [图片, 段1, 段2]），任务级原子——任何
+//     成员失败整组失败，一个字节都不发出；
+//   - 其余（存在既不可整组也不可拆的成员，或展开超相册上限）→ nil，调用方
+//     逐条降级（超大成员在单媒体路径内各自拆分）。
+func planAlbumSend(d Deps, j Job, items []message.Item) []albumMemberPlan {
+	plans := make([]albumMemberPlan, len(items))
+	total := 0
+	for i, it := range items {
+		m := *it.Media
+		switch {
+		case d.senderFor(j).AlbumGroupable(m):
+			plans[i] = albumMemberPlan{count: 1}
+		case splittableVideo(d.Media, m):
+			n, err := splitSegmentCount(m.Size, d.Media.SplitSegmentSize)
+			if err != nil {
+				return nil
+			}
+			plans[i] = albumMemberPlan{split: true, count: n}
+		default:
+			return nil
+		}
+		total += plans[i].count
+	}
+	if total > message.AlbumMaxItems {
+		return nil
+	}
+	return plans
+}
+
 // sendAlbumGroup 相册整组发送到 target 聊天（普通投递为用户私聊，仅缓存
 // 补写为缓存频道；links 为 nil 时成员 caption 无脚注）：
-// 发送前先按元数据预检能否整组（Sender.AlbumGroupable，与 SendAlbum 分流
-// 判定同源；全员 photo/video 且超限成员 ≤2000MB——含大视频的混合相册经
-// Bot 号 MTProto 整组直传统一成一组的相册），不可整组时直接走逐条路径，
-// 避免先整组下载再作废的浪费。预检通过后并发打开全部句柄（上限
-// albumOpenConcurrency，成员下载重叠；file reference 过期时经 RefreshMedia
-// 刷新后重试一次），任一失败即整组失败并取消其余打开，defer 统一清理；
-// 最后整组原子发送。
+// 发送前先按元数据做整组规划（planAlbumSend：常规整组 / 含可拆视频的拆分
+// 整组 / 逐条降级），不可整组也不可拆时直接走逐条路径，避免先整组下载再
+// 作废的浪费。规划通过后并发打开全部句柄（上限 albumOpenConcurrency，成员
+// 下载重叠；file reference 过期时经 RefreshMedia 刷新后重试一次），任一失败
+// 即整组失败并取消其余打开，defer 统一清理；可拆视频成员在完整落盘后切段
+// 展开为 N 个分段条目；最后整组原子发送——图片与大视频的分段出现在同一条
+// 相册里，不存在"图片先发、视频后到"的部分投递。
 //
 // 下载 ctx（openCtx）独立于 errgroup：errgroup 的 ctx 在 Wait 返回——
 // 含全员成功——时即被取消，而流式/内存管道成员的下载在句柄打开后仍在
@@ -687,24 +746,29 @@ const albumOpenConcurrency = 2
 // 全部被取消，上传读源时以 MEDIA_DOWNLOAD_FAILED(context canceled) 失败
 // （真机结论 2026-09-03）。openCtx 覆盖整组发送全程；任一成员失败时
 // 显式取消以停止其余在途下载（含分钟级 ToPath），函数返回时兜底取消。
+// 可拆成员的切段等待（WaitDownloaded）同样挂在 openCtx 下——其余成员失败
+// 时下载 ctx 被取消，切段等待随之返回错误，整组原子失败。
 func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
-	for _, it := range items {
-		if !d.senderFor(j).AlbumGroupable(*it.Media) {
-			d.Log.Info("相册含不可整组项，直接逐条发送", "job_id", j.ID, "items", len(items))
-			return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
-		}
+	plans := planAlbumSend(d, j, items)
+	if plans == nil {
+		d.Log.Info("相册含不可整组项，直接逐条发送", "job_id", j.ID, "items", len(items))
+		return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
 	}
 
 	handles := make([]*media.Handle, len(items))
-	defer func() { // 无论成败都清理已打开句柄（失败中断时未打开的槽位为 nil）
-		for _, h := range handles {
+	segCleanups := make([]func(), len(items)) // 分段 reader/文件清理（发送消费完后执行）
+	defer func() {                            // 无论成败都清理已打开句柄与分段文件（未打开/未切段的槽位为 nil）
+		for i, h := range handles {
+			if segCleanups[i] != nil {
+				segCleanups[i]()
+			}
 			if h != nil && h.Cleanup != nil {
 				h.Cleanup()
 			}
 		}
 	}()
 
-	entries := make([]delivery.AlbumEntry, len(items))
+	memberEntries := make([][]delivery.AlbumEntry, len(items))
 	openCtx, cancelOpen := context.WithCancel(ctx)
 	defer cancelOpen()
 	g, gctx := errgroup.WithContext(ctx)
@@ -723,6 +787,20 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 				return err
 			}
 			handles[i] = h // 槽位固定，无需额外同步
+			if plans[i].split {
+				// 可拆视频成员：完整落盘 → ffmpeg 切段 → 展开为 N 个分段
+				// 条目（不经过 prepareVideoThumb——其 reader 会被切段路径
+				// 的区间读取取代，头部字节不能被消费）
+				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
+					sourceURL, links, i == 0)
+				if err != nil {
+					cancelOpen() // 切段失败：整组失败（未发出任何字节）
+					return err
+				}
+				memberEntries[i] = ents
+				segCleanups[i] = cleanup
+				return nil
+			}
 			m := *it.Media
 			src, err := prepareVideoThumb(openCtx, d, &m, h.Reader, tempKey(j, it)+"-thumb")
 			if err != nil {
@@ -733,23 +811,39 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 			if i == 0 {
 				caption = caption.WithSourceLink(sourceURL).WithChannels(links)
 			}
-			entries[i] = delivery.AlbumEntry{
+			memberEntries[i] = []delivery.AlbumEntry{{
 				Media:   m,
 				Reader:  uploadReader(d, j, src),
 				Caption: caption, // 逐成员绑定；来源链接只置于相册首项
-			}
+			}}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return err
 	}
+	// 展开摊平（按成员顺序，拆分段跟在其源成员位置）
+	entries := make([]delivery.AlbumEntry, 0, len(items))
+	for _, me := range memberEntries {
+		entries = append(entries, me...)
+	}
 	// 全员打开成功：openCtx 仍存活，SendAlbum 消费期间后台下载持续推进
 	ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)
 	if err != nil {
 		return err
 	}
-	sent.addAll(ids)
+	// 按成员分组记录 spans：返回 ID 与 entries 同序（sentMessageIDs 按发送
+	// 顺序提取），拆分段跟在其源成员位置连续成组；ID 数不符（发送器契约
+	// 违约）时整体记一组兜底，不丢坐标也不越界
+	if len(ids) == len(entries) {
+		off := 0
+		for _, me := range memberEntries {
+			sent.addSpan(ids[off : off+len(me)])
+			off += len(me)
+		}
+	} else {
+		sent.addSpan(ids)
+	}
 	track.delivered() // 整组成功按一次送达计
 	return nil
 }

@@ -221,7 +221,7 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 
 	// 超出内存上限的大文件：临时文件 + 就绪水位门控（多线程并行落盘，
 	// 上传侧顺序读就绪前缀——下载落盘与上传读盘重叠，不再"先下完再传"）
-	if err := checkTempDir(opt, m.Size, log); err != nil {
+	if err := CheckTempDir(opt, m.Size, log); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(opt.TmpDir, TempName(jobID, m.FileName))
@@ -284,12 +284,14 @@ func (c *countWriterAt) WriteAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// checkTempDir 下载前检查临时目录占用：已用 + 即将落盘大小超过 MaxDirSize 时拒绝。
+// CheckTempDir 检查临时目录占用：已用 + 即将落盘大小超过 MaxDirSize 时拒绝。
+// 下载前由 Open 调用；拆分投递切段前由队列再次调用（分段文件近似
+// 再落一份，峰值 ≈ 2× 文件大小）。
 // MaxDirSize <= 0 表示未配置上限，跳过；占用统计经 globalUsageCache 做 30s TTL
 // 缓存（相册逐成员触发预检，避免每次全树遍历）；目录查询失败按 fail-open
 // 处理（跳过预检），交由后续 ToPath 自然失败——预检只是把"磁盘写满"提前为
 // 明确拒绝。
-func checkTempDir(opt Options, size int64, log *slog.Logger) error {
+func CheckTempDir(opt Options, size int64, log *slog.Logger) error {
 	if opt.MaxDirSize <= 0 {
 		return nil
 	}

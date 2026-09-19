@@ -24,7 +24,7 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, nil))
 }
 
-// checkTempDir 的确定性测试：注入 DirUsage，不依赖真实分区大小。
+// CheckTempDir 的确定性测试：注入 DirUsage，不依赖真实分区大小。
 // 每个用例使用独立临时目录——占用统计有 30s TTL 缓存（按目录键），
 // 同目录换注入函数会命中旧缓存。
 func TestCheckTempDir(t *testing.T) {
@@ -33,26 +33,26 @@ func TestCheckTempDir(t *testing.T) {
 	// 已用 + 即将落盘 > 上限 → 拒绝
 	opt := Options{TmpDir: t.TempDir(), MaxDirSize: 5 << 30}
 	opt.DirUsage = func(string) (int64, error) { return int64(5) << 30, nil }
-	if err := checkTempDir(opt, 1<<20, log); apperr.From(err).Code != apperr.CodeTempDirFull {
+	if err := CheckTempDir(opt, 1<<20, log); apperr.From(err).Code != apperr.CodeTempDirFull {
 		t.Fatalf("超限应返回 CodeTempDirFull，得到 %v", err)
 	}
 
 	// 未超限 → 放行
 	opt = Options{TmpDir: t.TempDir(), MaxDirSize: 5 << 30}
 	opt.DirUsage = func(string) (int64, error) { return int64(1) << 30, nil }
-	if err := checkTempDir(opt, 1<<30, log); err != nil {
+	if err := CheckTempDir(opt, 1<<30, log); err != nil {
 		t.Fatalf("未超限应放行，得到 %v", err)
 	}
 
 	// 未配置上限（<=0）→ 跳过
-	if err := checkTempDir(Options{TmpDir: t.TempDir()}, 1<<40, log); err != nil {
+	if err := CheckTempDir(Options{TmpDir: t.TempDir()}, 1<<40, log); err != nil {
 		t.Fatalf("未配置上限应跳过，得到 %v", err)
 	}
 
 	// 目录查询失败 → fail-open 放行
 	opt = Options{TmpDir: t.TempDir(), MaxDirSize: 5 << 30}
 	opt.DirUsage = func(string) (int64, error) { return 0, errors.New("stat failed") }
-	if err := checkTempDir(opt, 1<<20, log); err != nil {
+	if err := CheckTempDir(opt, 1<<20, log); err != nil {
 		t.Fatalf("查询失败应跳过，得到 %v", err)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// dirUsageTTL 是临时目录占用统计的缓存时长：checkTempDir 在每次下载前调用
+// dirUsageTTL 是临时目录占用统计的缓存时长：CheckTempDir 在每次下载前调用
 // （相册逐成员触发），全树遍历的成本在相册场景成倍放大。预检本就是
 // best-effort（fail-open），≤TTL 的占用漂移不改变其"把磁盘写满提前为明确
 // 拒绝"的定位——真正的兜底仍是写盘失败。

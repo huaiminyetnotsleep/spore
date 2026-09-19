@@ -60,12 +60,16 @@ const (
 	OfficialMaxFileSize = int64(50) << 20 // 官方 Bot API 服务器的上传硬上限
 
 	// 分卷拆分投递（split）：超过 MaxMediaFileSize 的媒体不再失败，切为 N 个
-	// 分段 document 经相册整组直传为同一条消息。
-	// SplitSegmentSize 取 1900MB 而非贴 2000MB 上限：单段 part 数（1900MB ÷
-	// 512KB = 3800）距服务器 4000 分片硬边界留出 margin，防止满配额边界失败。
-	SplitSegmentSize = int64(1900) << 20
+	// 分段经相册整组直传为同一条消息。视频走 ffmpeg 流复制（-c copy，不转码）
+	// 切出可独立播放的分段视频；非视频/无时长/ffmpeg 不可用回退字节分段
+	// document。
+	// SplitSegmentSize 取 1800MB 而非贴 2000MB 上限：流复制边界对齐关键帧会使
+	// 分段略微超前（最多一个 GOP 的字节量），1800MB 留足 200MB margin 防单段
+	// 超 2000MB 被服务器拒；单段 part 数（1800MB ÷ 512KB = 3600）同样距
+	// 4000 分片硬边界有余量（字节分段兜底路径受益）。
+	SplitSegmentSize = int64(1800) << 20
 	// MaxSplitTotalSize 是拆分投递的单条消息总上限：相册成员上限 10 × 单段
-	// 1900MB。超过即 FILE_TOO_LARGE（当前技术极限，任何身份都无法承载）。
+	// 1800MB。超过即 FILE_TOO_LARGE（当前技术极限，任何身份都无法承载）。
 	MaxSplitTotalSize = 10 * SplitSegmentSize
 	MinTempDirMaxSize = int64(1) << 20 // 1MB，临时目录上限最小
 	MaxTempDirMaxSize = int64(1) << 40 // 1TB，临时目录上限最大
