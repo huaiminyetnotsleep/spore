@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.17.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.6...v1.17.0) (2026-09-20)
+
+
+### Features
+
+* **deploy:** 一键脚本支持安装/切换指定镜像版本 ([4f1964b](https://github.com/huaiminyetnotsleep/spore/commit/4f1964b17e96153e5575492ca3be9e3f66ed71b3))
+
 ## [1.16.6](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.5...v1.16.6) (2026-09-20)
 
 
