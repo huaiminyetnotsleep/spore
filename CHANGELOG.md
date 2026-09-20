@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.16.3](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.2...v1.16.3) (2026-09-20)
+
+
+### Bug Fixes
+
+* **media:** 拆分相册 caption 重写覆盖 Bot API 分支并补记 split 投递方式 ([63d641c](https://github.com/huaiminyetnotsleep/spore/commit/63d641cfc2451844cddcb35966805addb0386a24))
+
 ## [1.16.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.1...v1.16.2) (2026-09-20)
 
 
