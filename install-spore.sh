@@ -430,6 +430,22 @@ print_running_version() {
   fi
 }
 
+# prune_dangling_images：回收升级/切换版本后失去 tag 的悬空镜像（<none>）。
+# 只删无 tag 镜像，固定版本留作回滚底档的带 tag 镜像不受影响；失败仅告警不阻断
+prune_dangling_images() {
+  local out
+  if ! out="$(docker image prune -f 2>/dev/null)"; then
+    warn "悬空镜像回收失败，可手动执行：docker image prune -f"
+    return 0
+  fi
+  local reclaimed
+  reclaimed="$(printf '%s\n' "$out" | tail -n 1)"
+  # 末行形如 "Total reclaimed space: 412MB"；无悬空镜像时为 0B，不刷屏
+  if [ -n "$reclaimed" ] && [ "$reclaimed" != "Total reclaimed space: 0B" ]; then
+    info "已回收悬空镜像（${reclaimed#Total reclaimed space: }）"
+  fi
+}
+
 # ---------- 菜单动作 ----------
 
 do_install() {
@@ -497,6 +513,7 @@ do_install() {
       wait_healthy || true
       docker compose ps
       print_running_version
+      prune_dangling_images
     elif [ "$PORT_CHANGED" = "1" ]; then
       info "端口已变更，重建容器以应用 ..."
       docker compose up -d
@@ -572,8 +589,13 @@ do_upgrade() {
   docker compose ${pf[@]+"${pf[@]}"} up -d
   wait_healthy || true
   docker compose ps
+  prune_dangling_images
   (install_cmd) || warn "spore 命令刷新失败（不影响本次升级），可重新运行 upgrade 重试"
-  info "升级完成（配置未改动；如需回滚见 docs/ops/operations.md §3.3）"
+  if [ -n "$pinned" ]; then
+    info "升级完成（已解除版本固定 ${pinned}；如需回滚见 docs/ops/operations.md §2.5）"
+  else
+    info "升级完成（配置未改动；如需回滚见 docs/ops/operations.md §2.5）"
+  fi
   echo
   # 升级后自动验证；失败时本函数返回非零，脚本化调用可据此感知升级异常
   do_verify
@@ -770,6 +792,17 @@ do_diskcheck() {
 
   if as_root ls data/spore.db.rollback-* >/dev/null 2>&1; then
     warn "存在 Web 导入留下的回滚底档 data/spore.db.rollback-*；确认运行正常后可手动清理释放空间"
+  fi
+
+  echo
+  info "悬空镜像检查（升级/切换版本后失去 tag 的 <none> 镜像）："
+  local dangling_ids
+  dangling_ids="$(docker images -f dangling=true -q 2>/dev/null || true)"
+  if [ -n "$dangling_ids" ]; then
+    docker images -f dangling=true
+    warn "共 $(printf '%s\n' "$dangling_ids" | wc -l | tr -d ' ') 个；执行 docker image prune -f 可回收（只删无 tag 镜像，带 tag 的版本底档不受影响）"
+  else
+    info "无悬空镜像"
   fi
 
   if find .env -maxdepth 0 -perm 600 >/dev/null 2>&1; then

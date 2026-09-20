@@ -56,14 +56,14 @@
 | 子命令 | 作用 | 等价的原始操作 |
 | --- | --- | --- |
 | `spore install [版本]` | 安装服务：交互选择镜像版本（留空 = latest）、填写凭据、选择端口、授权数据目录；已安装环境下改变版本即切换/回滚（如 `spore install 1.16.4`） | [deployment.md §4.2](../guide/deployment.md)、[§2.5](#_2-5-回滚到已知可用版本) |
-| `spore upgrade` | 升级服务：拉取新镜像并滚动更新（不改配置），完成后自动执行升级验证 | `docker compose pull && docker compose up -d` |
+| `spore upgrade` | 升级服务：拉取新镜像并滚动更新（固定过版本时先解除固定），升级验证后回收悬空镜像 | `docker compose pull && docker compose up -d` |
 | `spore verify` | 升级验证：探针、容器健康、MTProto 通道（已并入 upgrade 自动执行，也可单独调用） | §2.4 |
 | `spore status` | 查看状态：容器列表与 `/healthz` 探活 | `docker compose ps` |
 | `spore logs` | 查看日志：跟踪 bot 输出（Ctrl-C 返回） | `docker compose logs -f --tail 100 bot` |
 | `spore show-key` | 查看密钥：从日志检索首启密钥 | `docker compose logs bot \| grep -F '访问密钥'` |
 | `spore reset-key` | 重设密钥：生成新密钥（仅打印一次，旧的立即失效） | `docker compose exec bot spore admin reset-key` |
 | `spore clean-tmp` | 清理临时：停机清空 `data/tmp` | §6.5 |
-| `spore diskcheck` | 磁盘检查：容量、数据文件、`.env` 权限 | §3.1 |
+| `spore diskcheck` | 磁盘检查：容量、数据文件、悬空镜像、`.env` 权限 | §3.1 |
 | `spore restart` | 重启服务：未运行时直接启动（不重建容器） | `docker compose restart bot` |
 | `spore recreate` | 完整重启：重建容器以加载最新 `.env` 环境变量 | `docker compose stop bot && docker compose up -d --force-recreate bot` |
 | `spore stop` | 停止服务：保留容器与数据 | `docker compose stop` |
@@ -137,9 +137,10 @@ Compose 按新镜像重新创建需要更新的容器。
 适用于 [deployment.md §4.2](../guide/deployment.md) 的 GHCR 镜像部署。
 
 **一键脚本部署**：直接执行 `spore upgrade`（服务器任意目录可用）。它自动拉取新镜像、
-滚动更新并做容器健康检查；`.env` 启用了 `bigfile` profile 时会连带更新 `bot-api` 服务，
-同时刷新 `spore` 命令自身。若 `.env` 固定过版本（`SPORE_IMAGE_TAG`），升级会先解除
-固定回到 `latest`——要更新到指定版本请用 `spore install <版本>`。
+滚动更新、回收悬空镜像（`<none>`；只删无 tag 镜像，带 tag 的回滚底档不受影响）并做
+容器健康检查；`.env` 启用了 `bigfile` profile 时会连带更新 `bot-api` 服务，同时刷新
+`spore` 命令自身。若 `.env` 固定过版本（`SPORE_IMAGE_TAG`），升级会先解除固定回到
+`latest`——要更新到指定版本请用 `spore install <版本>`。
 
 **手动命令**：在部署目录执行：
 

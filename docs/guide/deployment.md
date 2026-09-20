@@ -174,8 +174,8 @@ curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/insta
 - 安装结束询问**是否立即启动**：选择「否」只完成配置与 `spore` 命令注册，之后运行
   `spore restart`（未运行时会直接启动）完成首次启动；
 - Docker 未安装时脚本会询问是否用 get.docker.com 官方脚本自动安装；
-- 菜单「升级」仅拉取新镜像并滚动更新（若 `.env` 固定过版本会先解除固定回到 latest）；
-  「卸载」默认保留 `.env` 与
+- 菜单「升级」仅拉取新镜像并滚动更新（若 `.env` 固定过版本会先解除固定回到 latest），
+  完成后自动回收悬空镜像（`<none>`，不碰带 tag 的回滚底档）；「卸载」默认保留 `.env` 与
   `data/`，按提示二次确认后才删除；
 - 也可用子命令直接调用（便于脚本化）：`install-spore.sh install [版本] | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | recreate | stop | uninstall | exit`（`install` 带版本参数时不追问，如 `spore install 1.16.4`）；安装或升级后脚本会把自己注册为系统的 `spore` 命令（软链到 `/usr/local/bin/spore`），之后直接输入 `spore` 打开菜单或 `spore <子命令>` 调用，子命令说明见 [operations.md §1.1](../ops/operations.md)；
 - 首次扫码登录是固有人工环节：启动后按 §4.4 在管理端「MTProto」页面完成。
