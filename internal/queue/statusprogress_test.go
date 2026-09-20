@@ -173,3 +173,44 @@ func TestProgressEditorStopsWithContextCancel(t *testing.T) {
 		t.Fatal("ctx 取消后 stop 应及时返回（goroutine 不残留）")
 	}
 }
+
+// 重试任务（NeedsStatusPrompt）认领后补发占位提示：占位先于内容发出，
+// 终态删除落在补发的新占位上（修复前 StatusMsgID=0 全程无进度展示，
+// 中断场景还会在聊天里遗留一条冻结的旧进度消息）。
+func TestWorkerRetryResendsStatusPrompt(t *testing.T) {
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 0)
+	job.NeedsStatusPrompt = true
+	sender := &fakeSender{}
+	d := uploadDeps(t, s, fetcherWith(errInvoker{}), sender)
+
+	runOneMedia(t, d, job, docMsg(7, 1201))
+
+	texts := sender.texts()
+	if len(texts) != 1 || texts[0] != StatusPromptHTML {
+		t.Fatalf("应补发恰好一条占位提示，得到 %v", texts)
+	}
+	deleted := sender.deletedIDs()
+	// fakeSender 首条 SendMessage 返回消息 ID 101，终态删除应落在它身上
+	if len(deleted) != 1 || deleted[0] != 101 {
+		t.Fatalf("终态应删除补发的占位消息，得到 %v", deleted)
+	}
+}
+
+// 无补发标记的任务不补发占位：botapi 提交自带占位、Web 补存保持静默，
+// 行为与补发逻辑引入前一致。
+func TestWorkerNoPromptResendWithoutFlag(t *testing.T) {
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 0)
+	sender := &fakeSender{}
+	d := uploadDeps(t, s, fetcherWith(errInvoker{}), sender)
+
+	runOneMedia(t, d, job, docMsg(7, 1202))
+
+	if texts := sender.texts(); len(texts) != 0 {
+		t.Fatalf("无标记不应补发占位提示，得到 %v", texts)
+	}
+	if deleted := sender.deletedIDs(); len(deleted) != 0 {
+		t.Fatalf("无占位时终态不应删除消息，得到 %v", deleted)
+	}
+}

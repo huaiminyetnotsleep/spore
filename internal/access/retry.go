@@ -68,8 +68,7 @@ func (s *Service) Retry(ctx context.Context, actor string, requestID int64) erro
 	}
 
 	// 事务提交后重新入队（复用 Submit 的提交后入队模式）：
-	// 私聊回传目标即用户本人（Bot 私聊 chat ID 与 User ID 相同），
-	// 原状态提示消息已随上次执行删除，无需再传。
+	// 私聊回传目标即用户本人（Bot 私聊 chat ID 与 User ID 相同）。
 	// 云盘请求的目的地名称在 requests 行上，重试时据此恢复任务路由
 	// （裸链接行为零值不变）；缓存补写行（delivery_mode=dump，如队列满
 	// 标记 QUEUE_FULL 后的重试）必须保留 DumpOnly 路由，否则会误走普通
@@ -77,6 +76,15 @@ func (s *Service) Retry(ctx context.Context, actor string, requestID int64) erro
 	job := queue.NewJob(req.UserID, req.UserID, ref, 0, requestID)
 	job.CloudDest = req.CloudDestination
 	job.DumpOnly = req.DeliveryMode == store.DeliveryModeDump
+	// 重试任务带不上原占位提示（原占位在失败收尾时已删除，进程中断场景则
+	// 遗留为冻结的旧进度）：标记补发，worker 认领后向用户补一条占位，重试
+	// 进度才能在 Bot 里实时展示。仅缓存补写任务保持静默（全程不打扰用户，
+	// 与首次执行一致）。
+	job.NeedsStatusPrompt = !job.DumpOnly
+	// 受理 bot 归属随行恢复：保持 0 会让重试回退主 bot 投递——受理自池 bot
+	// 的任务重试后媒体与提示会改由主 bot 发出（用户未 /start 主 bot 时投递
+	// 直接失败），频道副本与脚注同样错归。
+	job.BotID = req.BotID
 	if err := s.queue.Enqueue(job); err != nil {
 		// 队列满竞态：与 Submit 同款收尾，行标 failed(QUEUE_FULL)，
 		// 本次 attempt 已递增（额度口径不受影响——重试本就不扣减）

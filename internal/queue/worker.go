@@ -176,6 +176,20 @@ func Process(d Deps) Processor {
 			d.Progress.Register(j.RequestID)
 			defer d.Progress.Done(j.RequestID)
 		}
+		// 重试入队的任务没有占位提示（原占位已随上次失败消失，或遗留为冻结
+		// 的旧进度）：认领成功后按任务形态补发一条，让重试执行在 Bot 里恢复
+		// 实时进度展示，终态删除/取消文案也随之落在新占位上。发送失败只记
+		// 日志不阻断任务——本轮无进度展示，与补发逻辑引入前的行为一致。
+		if j.NeedsStatusPrompt && j.StatusMsgID == 0 {
+			if id, serr := d.senderFor(j).SendMessage(ctx, j.ChatID, statusPromptHTML(j)); serr != nil {
+				d.Log.Warn("重试任务补发占位提示失败，本轮无进度展示",
+					"job_id", j.ID, "request_id", j.RequestID, "error", serr.Error())
+			} else {
+				j.StatusMsgID = id
+				d.Log.Info("重试任务已补发占位提示",
+					"job_id", j.ID, "request_id", j.RequestID, "status_msg_id", id)
+			}
+		}
 		// 占位消息实时进度编辑：与进度注册同步启停（无占位时为 no-op），
 		// stop 等待编辑 goroutine 退出，避免收尾删除占位后仍有一次在途编辑
 		stopProgressEditor := startProgressEditor(ctx, d, j)

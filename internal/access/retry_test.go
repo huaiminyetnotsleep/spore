@@ -311,6 +311,51 @@ func TestRetryConcurrentSingleEnqueue(t *testing.T) {
 	}
 }
 
+// 重试任务的占位补发与受理 bot 路由：普通任务标记补发占位（重试进度才能
+// 回到 Bot 实时展示），仅缓存补写任务保持静默；受理 bot 归属随行恢复，
+// 不再回退主 bot。
+func TestRetryJobPromptAndBotRouting(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 8, clock.Now)
+	jobs := startWorkers(t, q)
+	mustEnabledUser(t, st, 1)
+
+	// 受理自池 bot 的普通任务失败后重试：标记补发占位并恢复受理 bot 归属
+	d := mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(7), BotID: 777, BotUsername: "poolbot"})
+	waitJob(t, jobs)
+	if err := st.FinishRequest(context.Background(), d.RequestID, store.RequestResult{
+		Status: store.RequestFailed, ErrorCode: "CHANNEL_NOT_ACCESSIBLE"}); err != nil {
+		t.Fatalf("置为失败失败: %v", err)
+	}
+	if err := svc.Retry(context.Background(), "admin", d.RequestID); err != nil {
+		t.Fatalf("重试不应失败: %v", err)
+	}
+	job := waitJob(t, jobs)
+	if !job.NeedsStatusPrompt {
+		t.Errorf("普通任务重试应标记补发占位提示: %+v", job)
+	}
+	if job.BotID != 777 {
+		t.Errorf("重试任务应恢复受理 bot 归属，得到 %d", job.BotID)
+	}
+	if job.StatusMsgID != 0 {
+		t.Errorf("重试任务不应携带旧占位消息 ID: %+v", job)
+	}
+
+	// 仅缓存补写任务（delivery_mode=dump 的失败行）重试保持静默
+	if err := st.FinishRequest(context.Background(), d.RequestID, store.RequestResult{
+		Status: store.RequestFailed, ErrorCode: "CHANNEL_NOT_ACCESSIBLE",
+		DeliveryMode: store.DeliveryModeDump}); err != nil {
+		t.Fatalf("置为失败(dump)失败: %v", err)
+	}
+	if err := svc.Retry(context.Background(), "admin", d.RequestID); err != nil {
+		t.Fatalf("补写任务重试不应失败: %v", err)
+	}
+	job2 := waitJob(t, jobs)
+	if !job2.DumpOnly || job2.NeedsStatusPrompt {
+		t.Errorf("补写任务重试应保持 DumpOnly 且不补发占位: %+v", job2)
+	}
+}
+
 // 云盘请求重试：目的地名称从 requests 行恢复到 Job.CloudDest（重试仍走云盘
 // 上传路径），普通请求重试保持零值不变。
 func TestRetryRestoresCloudDest(t *testing.T) {

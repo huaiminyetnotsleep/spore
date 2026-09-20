@@ -37,16 +37,21 @@ func startProgressEditor(ctx context.Context, d Deps, j Job) func() {
 	return startProgressEditorWithInterval(ctx, d, j, progressEditInterval)
 }
 
+// statusPromptHTML 按任务形态返回占位提示初始文案：云盘任务用云盘文案，
+// 其余用普通任务文案（worker 补发占位与进度编辑共用，保证前缀一致）。
+func statusPromptHTML(j Job) string {
+	if j.CloudDest != "" {
+		return StatusCloudPromptHTML
+	}
+	return StatusPromptHTML
+}
+
 // startProgressEditorWithInterval 是可注入间隔的实现形态（测试用短间隔）。
 func startProgressEditorWithInterval(ctx context.Context, d Deps, j Job, interval time.Duration) func() {
 	if j.RequestID == 0 || j.StatusMsgID == 0 || d.Progress == nil {
 		return func() {}
 	}
-	// 占位前缀 job 感知：云盘任务用云盘文案，进度编辑不把占位改回普通任务措辞
-	prompt := StatusPromptHTML
-	if j.CloudDest != "" {
-		prompt = StatusCloudPromptHTML
-	}
+	prompt := statusPromptHTML(j)
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	done := make(chan struct{})
