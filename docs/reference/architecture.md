@@ -198,8 +198,11 @@ SourceRef
    │     Document.Size / photo size 预检查
    │     ├─ Size > MaxFileSize 且不可拆分（未启用拆分或
    │     │     > MaxSplitTotalSize≈19GB）→ FILE_TOO_LARGE，直接拒绝
-   │     ├─ Size > MaxFileSize 且可拆分 → 强制临时文件路径（拆分需要
-   │     │     完整落盘后按区间切分，流式/内存管道不可回放）
+   │     ├─ Size > MaxFileSize 且可拆分 → 视频走流式切段句柄（多线程
+   │     │     Parallel 写入有界窗口重排序缓冲 windowBuffer，内存封顶 128MB、
+   │     │     经进程级预算记账，消费侧顺序读喂 ffmpeg stdin——源不落盘；
+   │     │     预算不足降级临时文件）；非视频强制临时文件路径（字节分段
+   │     │     依赖完整落盘后按区间切分）
    │     ├─ Size ≤ StreamLimit  → 流式：goroutine 内 downloader.Stream(ctx, pw)
    │     │                        错误经 pw.CloseWithError 传出；pr 交给
    │     │                        models.InputFileUpload{Data}（chunked 上传）
@@ -238,19 +241,32 @@ SourceRef
                同样按 split 记 delivery_mode（与单媒体拆分同语义）
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
-上限（2000MB）的媒体不再失败——完整落盘后切为 N 个分段（⌈Size/1800MB⌉，
+上限（2000MB）的媒体不再失败——切为 N 个分段（⌈Size/1800MB⌉，
 相册 10 成员上限 → 单条消息总量约 17.6GB，超出仍 FILE_TOO_LARGE），经相册
 整组直传为同一条消息。两种切段形态：
-  - **可播放视频分段（视频首选）**：ffmpeg 流复制（`-c copy` 不转码，秒级、
-    无损）切出 N 个真实视频文件（输出容器显式 `-f matroska`，段名 `.mkv`；镜像精简 ffmpeg 已含
+  - **可播放视频分段（视频首选，双模式按 moov 位置判定）**：下载流头部
+    缓冲 64KB 解析 MP4 顶层 box 头（`media.SniffMoovPosition`，确定性预判
+    非试错；判定字节经 io.MultiReader 接回消费流）——
+    头 moov → **单遍流式切段**：下载流（有界窗口并行，保持
+    DOWNLOAD_THREADS）直接喂 ffmpeg stdin（`-f mp4 -i pipe:0 -c copy
+    -f segment -segment_format matroska -segment_time T`，T 按字节占比
+    换算，与落盘路径切点公式同源），源文件全程不落盘、盘上只产生分段
+    （峰值磁盘 1×，TEMP_DIR_MAX_SIZE 5GB 默认下有效切段上限 ~5GB）；
+    产出段数以关键帧实际切点为准（±1 偏差），逐段防御大小上限。
+    尾 moov / 非 MP4 / 无法判定 → **回退完整落盘**：立即取消在途流式下载
+    （浪费带宽上限 ≈ 窗口 128MB），显式按 2× 预检 TEMP_DIR（装不下立即
+    TEMP_DIR_FULL、不重新下载），经 `media.OpenSplitFile` 重新完整落盘后
+    逐段 `-ss/-t` 流复制切段；切段完成立即删源（上传阶段盘上只剩分段）。
+    落盘路径：ffmpeg 流复制（`-c copy` 不转码，秒级、无损）切出 N 个真实
+    视频文件（输出容器显式 `-f matroska`，段名 `.mkv`；镜像精简 ffmpeg 已含
     matroska 封装器，启动期探测缺失即告警），
     以 video 形态上传（挂 DocumentAttributeVideo，SupportsStreaming），每段
     点开即播、无需下载合并；切段点按字节占比换算时间（平均码率近似），实际
     边界对齐关键帧（-ss 输入快定位，首帧可解码），段长有 ±GOP 级偏差；段
     大小 1800MB 留 200MB margin 防关键帧偏移使单段超 2000MB；逐段封面 =
     首段源缩略图优先 → 段文件 0 秒抽帧，其余段段文件 0 秒抽帧（段本身可
-    解码）。切段阶段失败（errSegmentCut）单媒体回退字节分段、整组回退逐条
-    （切段在任何字节发出之前，回退仍原子）；下载类失败不回退。
+    解码；流式路径段落定后同样逐段抽帧）。任一环失败（下载断/ffmpeg 死/
+    stdin EPIPE/段超限）清全部段、零字节已发、整组原子，不降级。
   - **字节分段 document（兜底）**：非视频 / 缺时长 / ffmpeg 不可用或切段
     失败——纯字节切割为普通 document（不挂 video 属性，避免假播放器），
     文件名 `<原名>.part<i>of<N>`，caption 只挂首段并附合并提示
@@ -267,9 +283,10 @@ SourceRef
 相册原子化：混合相册（图片 + 超限视频）经 planAlbumSend 预检（纯元数据）
 走**拆分整组**——图片与大视频的分段合成同一条相册 `[图片, 段1, 段2]` 整组
 直传，任务级原子（任何成员失败整组失败、零字节发出）；展开后超相册 10 成员
-上限时回退逐条（非视频成员走字节分段）。拆分放弃
-"边下边传"交叠（流复制与区间读取依赖完整落盘），先 WaitDownloaded 再切再传，
-磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。缓存频道干净副本与
+上限时回退逐条（非视频成员走字节分段）。拆分放弃"边下边传"交叠（相册整组
+发送需全段落定）：头 moov 走流式切段（源不落盘，峰值磁盘 1×）；回退路径
+先 WaitDownloaded 再切再传，磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE
+需覆盖，切段完成即删源——上传阶段回落 1×）。缓存频道干净副本与
 投递同为"恰好组首一条合并 caption"：worker 从实际展开条目以同一合并语义
 生成 canonical clean caption（剥离频道脚注），副本只重写组首。
 delivery_mode 记 `split`（仅成功时，失败回落 upload 由错误码记录原因）。
@@ -772,8 +789,9 @@ update 到达
 ```text
 media.Open(ctx, api, media, jobID, opt, log)
  ├─ Size > MaxFileSize 且不可拆分 → FILE_TOO_LARGE（不发起下载）
- ├─ Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）→ 强制临时文件路径
- │      （拆分需要完整落盘后按区间切分，见 §3.4 分卷拆分投递）
+ ├─ Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）→ 视频走流式窗口
+ │      句柄（源不落盘，见 §3.4 分卷拆分投递）；非视频强制临时文件路径
+ │      （字节分段依赖区间读取）
  ├─ Size ≤ StreamLimit → 流式：io.Pipe + 协程 downloader.Stream
  │      上传端直接消费读端，全程不落盘（Cleanup 关闭 Pipe 读端）
  ├─ StreamLimit < Size ≤ InMemoryLimit → 内存管道：协程 downloader.Parallel

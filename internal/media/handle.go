@@ -135,8 +135,10 @@ type Options struct {
 //
 //   - Size > MaxFileSize 且不可拆分（未配置拆分上限或超 MaxSplitTotalSize）：
 //     拒绝（不发起下载）
-//   - Size > MaxFileSize 但可拆分：强制走临时文件路径（拆分需要完整落盘后
-//     按区间切分，流式/内存管道不可回放）
+//   - Size > MaxFileSize 但可拆分：视频走流式切段路径（下载多线程并行写入
+//     有界窗口重排序缓冲，消费侧顺序读——源不落盘，切段层经头部缓冲预判
+//     moov 位置后单遍流式切段；尾 moov 回退由切段层经 OpenSplitFile 重新
+//     落盘）；非视频依赖区间读取，强制走临时文件路径
 //   - Size <= StreamLimit：goroutine 中流式写入 io.Pipe，与 Bot API 上传背压串联
 //   - StreamLimit < Size <= MemoryLimit：多线程并行下载到内存重排序缓冲
 //     （reorderBuffer），上传侧顺序阻塞读——下载与上传完全重叠、零磁盘写入
@@ -145,12 +147,25 @@ type Options struct {
 //
 // 内存路径在 MemoryLimit 之外还受进程级预算闸门（Options.Memory）约束：
 // 预算不足时同区间媒体自动降级临时文件路径（非阻塞），使常驻 RAM 被额度
-// 封顶而不随并发任务数线性放大；预算在 Handle.Cleanup 时归还。
+// 封顶而不随并发任务数线性放大；预算在 Handle.Cleanup 时归还。流式切段
+// 路径同理：窗口分配（封顶 streamWindowBytes）记账后仍不足预算时降级
+// 临时文件路径（磁盘峰值回到 2×，行为等同尾 moov 回退）。
 //
 // onDownload 在每段字节落位时收到增量字节数（下载进度观测，可为 nil）：
-// 内存管道路径下分片乱序落位，计数代表"已落位字节"而非顺序前缀。
+// 内存管道/流式切段路径下分片乱序落位，计数代表"已落位字节"而非顺序前缀。
 func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, opt Options, log *slog.Logger, onDownload func(int64)) (*Handle, error) {
-	// 拆分投递：超过单文件上限但落在拆分总上限内的媒体放行，强制完整落盘
+	return open(ctx, api, m, jobID, opt, log, onDownload, false)
+}
+
+// OpenSplitFile 强制可拆分媒体走临时文件完整落盘路径：流式切段的尾 moov
+// 回退使用（流式下载在判定阶段即被取消，重新完整下载；浪费上限 ≈ 窗口
+// 大小）。非拆分媒体与 Open 行为一致。
+func OpenSplitFile(ctx context.Context, api *tg.Client, m message.Media, jobID string, opt Options, log *slog.Logger, onDownload func(int64)) (*Handle, error) {
+	return open(ctx, api, m, jobID, opt, log, onDownload, true)
+}
+
+func open(ctx context.Context, api *tg.Client, m message.Media, jobID string, opt Options, log *slog.Logger, onDownload func(int64), forceFile bool) (*Handle, error) {
+	// 拆分投递：超过单文件上限但落在拆分总上限内的媒体放行
 	splittable := opt.MaxSplitTotalSize > 0 && m.Size > opt.MaxFileSize &&
 		m.Size <= opt.MaxSplitTotalSize
 	if m.Size > opt.MaxFileSize && !splittable {
@@ -164,6 +179,44 @@ func Open(ctx context.Context, api *tg.Client, m message.Media, jobID string, op
 	}
 
 	dl := downloader.NewDownloader().WithPartSize(downloadPartSize)
+
+	// 超限可拆分视频：单遍流式切段路径——多线程并行下载写入有界窗口
+	//（保持 DOWNLOAD_THREADS 并行，内存封顶窗口大小），消费侧顺序读喂
+	// ffmpeg stdin（切段在队列层，见 split.go）。分段总量 ≈ 1× 文件大小
+	//（源不落盘），磁盘预检按 1×；内存预算不足时降级临时文件路径（2×）。
+	if splittable && m.Kind == message.KindVideo && !forceFile {
+		if alloc := streamWindowAlloc(m.Size); tryAcquireMemory(opt.Memory, alloc) {
+			if err := CheckTempDir(opt, m.Size, log); err != nil {
+				releaseMemory(opt.Memory, alloc)
+				return nil, err
+			}
+			win := newWindowBuffer(m.Size, alloc)
+			var releaseOnce sync.Once
+			dctx, cancel := context.WithCancel(ctx)
+			go func() {
+				_, err := dl.Download(api, m.Location).WithThreads(opt.DownloadThreads).Parallel(dctx, &countWriterAt{w: win, on: onDownload})
+				if err != nil {
+					log.Debug("流式切段下载结束", "file", m.FileName, "error", err.Error())
+					err = apperr.Wrap(downloadErrorCode(err), err)
+				}
+				win.CloseWithError(err) // 成功时为 nil；短读在窗口内升级为错误
+			}()
+			log.Info("超大视频走流式切段路径（有界窗口，源不落盘）",
+				"file", m.FileName, "size", m.Size, "threads", opt.DownloadThreads, "window", alloc)
+			return &Handle{
+				Reader: win,
+				Cleanup: func() {
+					releaseOnce.Do(func() { releaseMemory(opt.Memory, alloc) })
+					win.CloseWithError(errConsumerClosed)
+					cancel()
+				},
+			}, nil
+		}
+		// 预算不足：降级下方临时文件路径（与内存管道降级同语义），磁盘
+		// 峰值回到 2×，由 TEMP_DIR_MAX_SIZE 兜底
+		log.Debug("内存预算不足，超大视频流式切段降级临时文件路径",
+			"file", m.FileName, "size", m.Size, "held", heldMemory(opt.Memory))
+	}
 
 	if !splittable && m.Size <= opt.StreamLimit {
 		log.Debug("媒体走流式路径", "file", m.FileName, "size", m.Size)
