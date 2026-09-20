@@ -2,6 +2,18 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.19.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.18.0...v1.19.0) (2026-09-20)
+
+
+### Features
+
+* **frontend:** 路由级懒加载与 vendor 稳定分包，发布重下量降至约 160KB gzip ([683289e](https://github.com/huaiminyetnotsleep/spore/commit/683289ea3bb19e36775b01597b4854e21c736b8e))
+
+
+### Bug Fixes
+
+* **queue:** 分段封面绿红条纹，抽帧只取段内首个 I 帧并停止 mkv 虚标流式 ([f086080](https://github.com/huaiminyetnotsleep/spore/commit/f0860806be67c2f8e24da4b5d8452148e62d7631))
+
 ## [1.18.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.17.1...v1.18.0) (2026-09-20)
 
 
