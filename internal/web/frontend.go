@@ -2,10 +2,14 @@ package web
 
 import (
 	"bytes"
+	"compress/gzip"
 	"embed"
 	"errors"
 	"io/fs"
 	"net/http"
+	"path"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
@@ -166,15 +170,88 @@ func validCSPNonce(nonce string) bool {
 
 // handleFrontendAssets 提供 Vite 产出的同源静态资源。构建产物不存在时返回 404，
 // 不把资源请求错误地回退成 SPA HTML。
+//
+// 加载性能两条约定：
+//   - Vite 产物文件名内嵌内容哈希（index-Ab3xK9pQ.js），此类文件直接返回
+//     一年 immutable 缓存；无哈希文件（.vite/manifest.json 等）不缓存。
+//   - 文本类资源（JS/CSS/SVG/JSON）在客户端声明 gzip 时动态压缩；embed FS
+//     无 modtime，条件请求不可用，压缩可把入口 JS 传输量降到约三分之一。
 func handleFrontendAssets() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assets, err := fs.Sub(frontendFiles, "frontend-dist/assets")
+		name := strings.TrimPrefix(r.URL.Path, "/assets/")
+		if !fs.ValidPath(name) {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := fs.ReadFile(frontendFiles, "frontend-dist/assets/"+name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		http.StripPrefix("/assets/", http.FileServer(http.FS(assets))).ServeHTTP(w, r)
+
+		contentType, ok := assetContentType(name)
+		if !ok {
+			// 未知扩展名不放行：embed 内容固定为构建产物，白名单避免把
+			// 意外文件以猜测的 Content-Type 暴露出去。
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+
+		if hashedAssetName.MatchString(path.Base(name)) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+
+		body := data
+		if assetGzipCompressible(name) && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Vary", "Accept-Encoding")
+			var buf bytes.Buffer
+			gz := gzip.NewWriter(&buf)
+			if _, err := gz.Write(data); err == nil && gz.Close() == nil {
+				w.Header().Set("Content-Encoding", "gzip")
+				body = buf.Bytes()
+			}
+		} else if assetGzipCompressible(name) {
+			// 未压缩响应同样声明 Vary，避免共享缓存把 gzip 版本发给不支持的客户端。
+			w.Header().Set("Vary", "Accept-Encoding")
+		}
+
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
 	})
+}
+
+// hashedAssetName 匹配 Vite 默认产物命名：basename-<8 位 base64url 哈希>.<ext>。
+var hashedAssetName = regexp.MustCompile(`-[A-Za-z0-9_-]{8}\.[a-z0-9]+$`)
+
+// assetContentType 限定静态资源可服务的扩展名与对应 MIME。
+func assetContentType(name string) (string, bool) {
+	switch strings.ToLower(strings.TrimPrefix(path.Ext(name), ".")) {
+	case "js", "mjs":
+		return "text/javascript; charset=utf-8", true
+	case "css":
+		return "text/css; charset=utf-8", true
+	case "svg":
+		return "image/svg+xml", true
+	case "json":
+		return "application/json", true
+	case "txt":
+		return "text/plain; charset=utf-8", true
+	case "woff2":
+		return "font/woff2", true
+	default:
+		return "", false
+	}
+}
+
+// assetGzipCompressible 只压缩文本类资源；woff2/图片等已压缩格式压缩无收益。
+func assetGzipCompressible(name string) bool {
+	switch strings.ToLower(strings.TrimPrefix(path.Ext(name), ".")) {
+	case "js", "mjs", "css", "svg", "json", "txt":
+		return true
+	default:
+		return false
+	}
 }
 
 // handleFrontendRootAsset 提供构建产物根目录中的品牌资源。只允许由路由显式注册的文件名，

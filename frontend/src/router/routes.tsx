@@ -2,6 +2,11 @@
  * SPA 路由表统一维护：页面路径、导航配置与 404 都注册在本模块，
  * App.tsx 只负责 Provider 与布局组装。basename /admin 由 App.tsx 的
  * BrowserRouter 提供；保持既有路径与行为不变（含 404 兜底）。
+ *
+ * 页面组件全部经 React.lazy 路由级分包：每个页面（及其独占的 antd/rc-*
+ * 组件）拆成独立 chunk，按导航按需加载；AppRoutes 内的 Suspense 提供
+ * 统一的加载兜底。路由元数据（routeMeta）本身保持同步加载，菜单渲染
+ * 不受影响。
  */
 import {
   ApiOutlined,
@@ -26,33 +31,91 @@ import {
 } from "@ant-design/icons";
 import { Result, Spin, Button } from "antd";
 import type { ReactNode } from "react";
-import { Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { matchPath, Route, Routes, useNavigate } from "react-router-dom";
 
-import { AuditPage } from "../features/audit/AuditPage";
-import { BackupPage } from "../features/backup/BackupPage";
-import { BotsPage } from "../features/bots/BotsPage";
-import { BindingsPage } from "../features/bindings/BindingsPage";
-import { CloudDrivePage } from "../features/cloud-drive/CloudDrivePage";
-import { ChannelSettingsPage } from "../features/channel-settings/ChannelSettingsPage";
-import { JoinApprovalsPage } from "../features/channel-join/JoinApprovalsPage";
-import { JoinedChannelsPage } from "../features/channel-join/JoinedChannelsPage";
-import { JoinSettingsPage } from "../features/channel-join/JoinSettingsPage";
-import { ChannelDetailPage } from "../features/channels/ChannelDetailPage";
-import { ChannelsListPage } from "../features/channels/ChannelsListPage";
-import { EventsPage } from "../features/events/EventsPage";
-import { MTProtoPage } from "../features/mtproto/MTProtoPage";
-import { NotificationSettingsPage } from "../features/notification/NotificationSettingsPage";
-import { OAuthSettingsPage } from "../features/oauth/OAuthSettingsPage";
-import { OverviewPage } from "../features/overview/OverviewPage";
-import { RequestDetailPage } from "../features/requests/RequestDetailPage";
-import { RequestsListPage } from "../features/requests/RequestsListPage";
-import { SettingsPage } from "../features/settings/SettingsPage";
-import { StatsPage } from "../features/stats/StatsPage";
-import { SystemConfigPage } from "../features/system/SystemConfigPage";
-import { ApplicationsPage } from "../features/users/ApplicationsPage";
-import { UserDetailPage } from "../features/users/UserDetailPage";
-import { UsersListPage } from "../features/users/UsersListPage";
+const OverviewPage = lazy(() =>
+  import("../features/overview/OverviewPage").then((m) => ({ default: m.OverviewPage })),
+);
+const StatsPage = lazy(() =>
+  import("../features/stats/StatsPage").then((m) => ({ default: m.StatsPage })),
+);
+const ApplicationsPage = lazy(() =>
+  import("../features/users/ApplicationsPage").then((m) => ({ default: m.ApplicationsPage })),
+);
+const UsersListPage = lazy(() =>
+  import("../features/users/UsersListPage").then((m) => ({ default: m.UsersListPage })),
+);
+const UserDetailPage = lazy(() =>
+  import("../features/users/UserDetailPage").then((m) => ({ default: m.UserDetailPage })),
+);
+const RequestsListPage = lazy(() =>
+  import("../features/requests/RequestsListPage").then((m) => ({ default: m.RequestsListPage })),
+);
+const RequestDetailPage = lazy(() =>
+  import("../features/requests/RequestDetailPage").then((m) => ({ default: m.RequestDetailPage })),
+);
+const ChannelsListPage = lazy(() =>
+  import("../features/channels/ChannelsListPage").then((m) => ({ default: m.ChannelsListPage })),
+);
+const ChannelDetailPage = lazy(() =>
+  import("../features/channels/ChannelDetailPage").then((m) => ({ default: m.ChannelDetailPage })),
+);
+const BindingsPage = lazy(() =>
+  import("../features/bindings/BindingsPage").then((m) => ({ default: m.BindingsPage })),
+);
+const ChannelSettingsPage = lazy(() =>
+  import("../features/channel-settings/ChannelSettingsPage").then((m) => ({
+    default: m.ChannelSettingsPage,
+  })),
+);
+const CloudDrivePage = lazy(() =>
+  import("../features/cloud-drive/CloudDrivePage").then((m) => ({ default: m.CloudDrivePage })),
+);
+const JoinApprovalsPage = lazy(() =>
+  import("../features/channel-join/JoinApprovalsPage").then((m) => ({
+    default: m.JoinApprovalsPage,
+  })),
+);
+const JoinedChannelsPage = lazy(() =>
+  import("../features/channel-join/JoinedChannelsPage").then((m) => ({
+    default: m.JoinedChannelsPage,
+  })),
+);
+const JoinSettingsPage = lazy(() =>
+  import("../features/channel-join/JoinSettingsPage").then((m) => ({
+    default: m.JoinSettingsPage,
+  })),
+);
+const EventsPage = lazy(() =>
+  import("../features/events/EventsPage").then((m) => ({ default: m.EventsPage })),
+);
+const SettingsPage = lazy(() =>
+  import("../features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+const SystemConfigPage = lazy(() =>
+  import("../features/system/SystemConfigPage").then((m) => ({ default: m.SystemConfigPage })),
+);
+const NotificationSettingsPage = lazy(() =>
+  import("../features/notification/NotificationSettingsPage").then((m) => ({
+    default: m.NotificationSettingsPage,
+  })),
+);
+const OAuthSettingsPage = lazy(() =>
+  import("../features/oauth/OAuthSettingsPage").then((m) => ({ default: m.OAuthSettingsPage })),
+);
+const BackupPage = lazy(() =>
+  import("../features/backup/BackupPage").then((m) => ({ default: m.BackupPage })),
+);
+const BotsPage = lazy(() =>
+  import("../features/bots/BotsPage").then((m) => ({ default: m.BotsPage })),
+);
+const MTProtoPage = lazy(() =>
+  import("../features/mtproto/MTProtoPage").then((m) => ({ default: m.MTProtoPage })),
+);
+const AuditPage = lazy(() =>
+  import("../features/audit/AuditPage").then((m) => ({ default: m.AuditPage })),
+);
 
 export type NavigationRoute = {
   key: string;

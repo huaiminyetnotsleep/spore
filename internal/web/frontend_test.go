@@ -4,7 +4,10 @@ package web
 // 会话保护（302 到登录壳）；SPA 壳不含业务数据，认证与数据均走 /api/v1。
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -156,5 +159,120 @@ func TestFrontendRootBrandAssets(t *testing.T) {
 		if body := bodyOf(t, resp); !strings.HasPrefix(body, "<svg") {
 			t.Errorf("品牌资源 %s 应返回 SVG，得到 %q", path, body[:min(len(body), 40)])
 		}
+	}
+}
+
+// firstHashedAsset 从嵌入产物中取一个内容哈希命名的 JS 文件用于断言。
+func firstHashedAsset(t *testing.T) (string, []byte) {
+	t.Helper()
+	entries, err := fs.ReadDir(frontendFiles, "frontend-dist/assets")
+	if err != nil {
+		t.Skip("frontend build output is not present")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".js") {
+			continue
+		}
+		if !hashedAssetName.MatchString(entry.Name()) {
+			continue
+		}
+		data, err := fs.ReadFile(frontendFiles, "frontend-dist/assets/"+entry.Name())
+		if err != nil {
+			t.Fatalf("读取嵌入产物失败: %v", err)
+		}
+		return entry.Name(), data
+	}
+	t.Skip("no hashed asset present")
+	return "", nil
+}
+
+func TestFrontendAssetsGzipAndImmutableCache(t *testing.T) {
+	name, data := firstHashedAsset(t)
+	e := newTestEnv(t, nil)
+
+	// 客户端支持 gzip：正文压缩且解压后与源文件一致。
+	req, err := http.NewRequest(http.MethodGet, e.ts.URL+"/assets/"+name, nil)
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := e.ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("哈希产物应返回 200，得到 %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Errorf("支持 gzip 时应返回 Content-Encoding: gzip，得到 %q", got)
+	}
+	if got := resp.Header.Get("Vary"); got != "Accept-Encoding" {
+		t.Errorf("压缩响应应声明 Vary: Accept-Encoding，得到 %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("哈希产物应返回一年 immutable 缓存，得到 %q", got)
+	}
+	gunzipped, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatalf("解压响应失败: %v", err)
+	}
+	decoded, err := io.ReadAll(gunzipped)
+	if err != nil {
+		t.Fatalf("读取解压内容失败: %v", err)
+	}
+	if !bytes.Equal(decoded, data) {
+		t.Errorf("gzip 解压后内容应与源文件一致（%d vs %d 字节）", len(decoded), len(data))
+	}
+
+	// 客户端不支持 gzip：返回原文，同样带缓存与 Vary 头。
+	resp2, err := e.ts.Client().Get(e.ts.URL + "/assets/" + name)
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.Header.Get("Content-Encoding") != "" {
+		t.Errorf("未声明 gzip 时不应压缩，得到 %q", resp2.Header.Get("Content-Encoding"))
+	}
+	if got := resp2.Header.Get("Vary"); got != "Accept-Encoding" {
+		t.Errorf("未压缩响应也应声明 Vary: Accept-Encoding，得到 %q", got)
+	}
+	raw, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatalf("读取内容失败: %v", err)
+	}
+	if !bytes.Equal(raw, data) {
+		t.Errorf("未压缩响应内容应与源文件一致（%d vs %d 字节）", len(raw), len(data))
+	}
+}
+
+func TestFrontendAssetsUnhashedNotCachedAndUnknown404(t *testing.T) {
+	if _, err := fs.Stat(frontendFiles, "frontend-dist/.vite/manifest.json"); err != nil {
+		t.Skip("frontend build output is not present")
+	}
+	e := newTestEnv(t, nil)
+
+	resp, err := e.ts.Client().Get(e.ts.URL + "/assets/.vite/manifest.json")
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("manifest 应返回 200，得到 %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("manifest Content-Type 应为 application/json，得到 %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Errorf("无哈希文件名不应返回长缓存，得到 %q", got)
+	}
+
+	resp404, err := e.ts.Client().Get(e.ts.URL + "/assets/not-exist.js")
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	defer resp404.Body.Close()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Errorf("不存在的资源应返回 404，得到 %d", resp404.StatusCode)
 	}
 }

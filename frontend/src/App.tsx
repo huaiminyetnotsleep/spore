@@ -20,16 +20,16 @@ import {
   Layout,
   Menu,
   Result,
+  Spin,
   Typography,
 } from "antd";
 import type { MenuProps } from "antd";
-import { Component, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { BrowserRouter, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError } from "./api/client";
 import { logout } from "./api/mutations";
 import { fetchSessionBootstrap } from "./api/session";
-import { LoginPage } from "./features/login/LoginPage";
 import { NotificationBell } from "./features/notification/NotificationBell";
 import { useRestartAction } from "./features/settings/restartAction";
 import { useAdminAction } from "./features/shared/actions";
@@ -42,6 +42,11 @@ import {
   routeMeta,
   type RouteKey,
 } from "./router/routes";
+
+// 登录页独立分包：未认证访客首屏只加载壳 + 登录 chunk，不携带管理端页面。
+const LoginPage = lazy(() =>
+  import("./features/login/LoginPage").then((m) => ({ default: m.LoginPage })),
+);
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -290,7 +295,11 @@ class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
 function AppShellByRoute() {
   const location = useLocation();
   if (location.pathname === "/login") {
-    return <LoginPage />;
+    return (
+      <Suspense fallback={<Spin className="page-loading" />}>
+        <LoginPage />
+      </Suspense>
+    );
   }
   return <AppLayout />;
 }
