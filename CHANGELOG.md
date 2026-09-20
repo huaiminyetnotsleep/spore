@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.16.5](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.4...v1.16.5) (2026-09-20)
+
+
+### Bug Fixes
+
+* **media:** 拆分相册强制"恰好组首一条 caption"修复组级展示抑制 ([f2d0477](https://github.com/huaiminyetnotsleep/spore/commit/f2d0477988a895c80c0c7465c0fe180e0bd6aa97))
+
 ## [1.16.4](https://github.com/huaiminyetnotsleep/spore/compare/v1.16.3...v1.16.4) (2026-09-20)
 
 
