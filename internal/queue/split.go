@@ -344,10 +344,11 @@ func videoSegmentEntries(d Deps, j Job, it message.Item, m message.Media, segs [
 
 // createVideoSegments 用 ffmpeg 流复制把完整视频切为 N 段（不转码）：
 // 切段点按字节占比换算时间（t_i = 总时长 × i×段大小 / 总大小，平均码率
-// 近似），实际切点对齐关键帧（-ss 输入快定位，保证首帧可解码）。段文件
-// 落 TempDir（TempName 约定，纳入孤儿清理）；任一段失败删除全部已切段
-// 文件后以 SPLIT_UNAVAILABLE 报错（不降级）。段实际大小超单文件上限同样
-// 报 FILE_TOO_LARGE——与其烧完上传再被服务器拒，不如提前失败。
+// 近似），实际切点对齐关键帧标志（-ss 输入快定位；open-GOP 流段首仍带
+// 参考缺失的前导 B 帧，封面由 media.ExtractSegmentCoverJPEG 规避）。
+// 段文件落 TempDir（TempName 约定，纳入孤儿清理）；任一段失败删除全部
+// 已切段文件后以 SPLIT_UNAVAILABLE 报错（不降级）。段实际大小超单文件上限
+// 同样报 FILE_TOO_LARGE——与其烧完上传再被服务器拒，不如提前失败。
 func createVideoSegments(ctx context.Context, d Deps, m message.Media, src string, n int, key string) ([]videoSegment, error) {
 	base := m.FileName
 	if base == "" {
@@ -412,8 +413,10 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 }
 
 // attachSegmentThumbs 逐段解析封面：每段本身是可解码视频——首段源缩略图
-// 优先（与原视频画面一致），回退对段文件 0 秒抽帧；其余段对段文件 0 秒
-// 抽帧。尽力而为，失败段无封面照常投递。流式与落盘两条切段路径共用。
+// 优先（与原视频画面一致），回退及其余段对段文件抽首个 I 帧作封面（open-
+// GOP 流段首带参考缺失的前导 B 帧，0 秒首帧可能是花屏，见
+// media.ExtractSegmentCoverJPEG）。尽力而为，失败段无封面照常投递。
+// 流式与落盘两条切段路径共用。
 func attachSegmentThumbs(ctx context.Context, d Deps, m message.Media, segs []videoSegment, key string) {
 	ffmpegOK := false
 	if d.Media.FFmpegPath != "" {
@@ -436,7 +439,7 @@ func attachSegmentThumbs(ctx context.Context, d Deps, m message.Media, segs []vi
 			if !ffmpegOK {
 				continue
 			}
-			jpeg, err := media.ExtractFrameAtJPEG(ctx, d.Media.FFmpegPath, segs[i].path, 0)
+			jpeg, err := media.ExtractSegmentCoverJPEG(ctx, d.Media.FFmpegPath, segs[i].path)
 			if err != nil {
 				d.Log.Debug("分段抽帧失败，该段无封面发送",
 					"file", segs[i].media.FileName, "error", err.Error())
@@ -450,8 +453,8 @@ func attachSegmentThumbs(ctx context.Context, d Deps, m message.Media, segs []vi
 	}
 }
 
-// cutVideoSegment 执行单段流复制：-ss 输入快定位（对齐关键帧，首帧可解码）
-// + -c copy 不转码 + -avoid_negative_ts make_zero 修正复制切段的负时间戳。
+// cutVideoSegment 执行单段流复制：-ss 输入快定位（对齐关键帧标志）+ -c
+// copy 不转码 + -avoid_negative_ts make_zero 修正复制切段的负时间戳。
 // 输出 muxer 显式指定 matroska（镜像精简 ffmpeg 已含；不依赖输出扩展名
 // 猜测）。
 func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur float64, out string) error {
@@ -476,8 +479,8 @@ func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur flo
 // streamVideoSegments 单遍流式切段（头 moov 的 MP4）：下载流直接喂 ffmpeg
 // stdin，-c copy + segment muxer 边下边切——源文件全程不落盘，盘上只产生
 // 分段（峰值磁盘 1×）。切段时长按平均码率近似（与落盘路径的切点公式同
-// 源），实际切点对齐关键帧：产出段数以实际为准（可能有 ±1 偏差），逐段
-// 防御大小上限、段数超相册上限报 FILE_TOO_LARGE。
+// 源），实际切点对齐关键帧标志：产出段数以实际为准（可能有 ±1 偏差），
+// 逐段防御大小上限、段数超相册上限报 FILE_TOO_LARGE。
 //
 // 失败语义与落盘路径一致（整组原子）：任一环失败（下载断/ffmpeg 死/
 // stdin EPIPE/段超限）删除全部已产出段文件后报错，零字节已发。错误按

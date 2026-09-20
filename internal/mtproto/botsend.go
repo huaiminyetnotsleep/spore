@@ -293,7 +293,7 @@ func (c *BotClient) uploadThumb(ctx context.Context, up *uploader.Uploader, m me
 func uploadedMediaOf(file tg.InputFileClass, m message.Media, thumb tg.InputFileClass) tg.InputMediaClass {
 	doc := &tg.InputMediaUploadedDocument{
 		File:     file,
-		MimeType: mimeOf(m.Kind),
+		MimeType: mimeOf(m.Kind, m.FileName),
 		Attributes: []tg.DocumentAttributeClass{
 			&tg.DocumentAttributeFilename{FileName: m.FileName},
 		},
@@ -303,7 +303,9 @@ func uploadedMediaOf(file tg.InputFileClass, m message.Media, thumb tg.InputFile
 	}
 	switch m.Kind {
 	case message.KindVideo:
-		attr := &tg.DocumentAttributeVideo{SupportsStreaming: true}
+		// 流式标志只给真正的 MP4：mkv（分段）不支持 Telegram 流式播放，
+		// 虚标会诱导服务端按 MP4 重新处理并自行生成预览，覆盖已上传封面
+		attr := &tg.DocumentAttributeVideo{SupportsStreaming: !isMatroska(m.FileName)}
 		if m.Video != nil {
 			attr.W = m.Video.Width
 			attr.H = m.Video.Height
@@ -328,12 +330,17 @@ func uploadedMediaOf(file tg.InputFileClass, m message.Media, thumb tg.InputFile
 	return doc
 }
 
-// mimeOf 按 Kind 映射上传 MIME 类型（Telegram 只作展示与客户端预处理提示）。
-func mimeOf(k message.ItemKind) string {
+// mimeOf 按 Kind 与文件名映射上传 MIME 类型（Telegram 只作展示与客户端
+// 预处理提示）。mkv 必须如实标注：分段以 matroska 封装，谎报 video/mp4
+// 同样会诱导服务端按流式 MP4 处理（覆盖已上传封面）。
+func mimeOf(k message.ItemKind, fileName string) string {
 	switch k {
 	case message.KindPhoto:
 		return "image/jpeg"
 	case message.KindVideo:
+		if isMatroska(fileName) {
+			return "video/x-matroska"
+		}
 		return "video/mp4"
 	case message.KindVoice:
 		return "audio/ogg"
@@ -342,6 +349,12 @@ func mimeOf(k message.ItemKind) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// isMatroska 按扩展名判断 matroska 封装（大小写不敏感）。mkv 不能被
+// Telegram 流式播放，也不应触发服务端的流式 MP4 视频处理。
+func isMatroska(fileName string) bool {
+	return strings.HasSuffix(strings.ToLower(fileName), ".mkv")
 }
 
 // resolvePeer 解析目标聊天为 InputPeer：chatID > 0 为私聊用户，< 0 为

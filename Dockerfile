@@ -30,12 +30,13 @@ RUN case "${TARGETARCH}" in \
 
 # 精简 ffmpeg：编译大视频可播放切段（internal/queue/split.go，-c copy 流复制
 # 需 matroska 封装器）与视频封面兜底抽帧（internal/media/thumb.go）所需的
-# 容器/解析器/解析器与 mjpeg/matroska 封装器，二进制约 5MB。alpine 仓库的
-# ffmpeg 会连带 110MB+ 的编码器依赖链（x265/aom/SVT-AV1 等，切段用 -c copy
-# 不转码用不上），全功能静态构建单文件也普遍 100MB+；这里全部用 ffmpeg
-# 内置解码器，无需第三方编码库。冷门编码（theora 等）解码/切段失败时自动
-# 降级（抽帧无封面 / 字节分段投递），与 ffmpeg 缺失同语义；特殊视频可经
-# FFMPEG_PATH 指向宿主全功能 ffmpeg。
+# 容器/解析器与 mjpeg/matroska 封装器、scale/select 滤镜（select 供分段
+# 封面按画面类型筛首个 I 帧，缺失时抽帧自动回退旧路径），二进制约 5MB。
+# alpine 仓库的 ffmpeg 会连带 110MB+ 的编码器依赖链（x265/aom/SVT-AV1 等，
+# 切段用 -c copy 不转码用不上），全功能静态构建单文件也普遍 100MB+；这里
+# 全部用 ffmpeg 内置解码器，无需第三方编码库。冷门编码（theora 等）解码/
+# 切段失败时自动降级（抽帧无封面 / 字节分段投递），与 ffmpeg 缺失同语义；
+# 特殊视频可经 FFMPEG_PATH 指向宿主全功能 ffmpeg。
 FROM alpine:3.20 AS ffmpeg-build
 # 抽帧/切段功能对版本不敏感，升级时只改这里的版本号（https://ffmpeg.org/releases/）。
 ARG FFMPEG_RELEASE=7.1.2
@@ -53,7 +54,7 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_RELEASE}.tar.xz" -O /tm
       --enable-parser=h264,hevc,mpeg4video,mpegvideo,vp8,vp9,av1,h263,mjpeg \
       --enable-decoder=h264,hevc,mpeg1video,mpeg2video,mpeg4,h263,vp8,vp9,av1,mjpeg,flv,wmv1,wmv2,wmv3,vc1 \
       --enable-encoder=mjpeg --enable-muxer=mjpeg,matroska \
-      --enable-filter=scale \
+      --enable-filter=scale,select \
     && make -j"$(nproc)" ffmpeg \
     && strip ffmpeg \
     && ./ffmpeg -version \

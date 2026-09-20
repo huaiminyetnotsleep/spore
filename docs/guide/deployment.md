@@ -373,7 +373,9 @@ https://<你的域名>/admin/login
 视频媒体回退字节分段（首段附合并提示）。镜像自带的精简
 ffmpeg 已含切段所需的 matroska 封装器（构建期自检）；自定义 FFMPEG_PATH
 指向的 ffmpeg 必须含 matroska muxer（`ffmpeg -muxers | grep matroska`
-可验证），缺失时启动日志告警，超限视频任务会在下载前直接报错终止
+可验证）与 select 滤镜（`ffmpeg -filters | grep select`，分段封面按画面
+类型筛首个 I 帧用；缺失时封面自动回退 0 秒首帧抽取，open-GOP 视频可能
+花屏），缺 muxer 时启动日志告警，超限视频任务会在下载前直接报错终止
 （`SPLIT_UNAVAILABLE`，不降级字节分段）；拆分任务磁盘峰值 ≈
 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。
 本地 Bot API 备选路线不承载拆分（其上限同为 2000MB）。

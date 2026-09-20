@@ -3,6 +3,41 @@
 > 开发过程中实际踩过的坑及其修复，按时间倒序排列。新条目加在最上面。
 > 排查线上问题时先查这里，再查各库版本的适配注意事项（见文末）。
 
+## 2026-09-20 分段视频封面显示绿红条纹花屏 → 抽帧只取段内首个 I 帧 + mkv 不再虚标流式
+
+**现象（真机）**：超限视频分段投递后，分段消息的封面不是正常画面而是绿红
+条纹花屏（典型缺参考帧解码症状）。
+
+**根因（两层叠加）**：
+- 切段是 `-c copy` 按关键帧**标志**对齐，open-GOP 流的切点之后仍会带入
+  显示序在前、参考上一 GOP 的前导 B 帧（参考帧不在段内）。`-ss 0` 首帧
+  抽取落在这片坏前缀上，解码器以错误隐藏方式输出时就是花屏。本地 ffmpeg
+  9.0.2 / 7.1.2 会直接丢弃坏帧（抽帧结果反而干净），真机解码路径不同时
+  即暴露——此类问题本地无法稳定复现，修法必须不依赖解码器对坏帧的处理
+  方式。
+- 发送侧对 `.mkv` 分段也挂了 `SupportsStreaming: true` + MIME `video/mp4`。
+  mkv 不支持 Telegram 流式播放，虚标会诱导服务端按流式 MP4 重新处理并
+  自行生成预览，覆盖我们上传的封面 JPEG——封面质量脱离本端控制。
+
+**方案**：
+- `media.ExtractSegmentCoverJPEG`：封面抽取用 `-vf select='eq(pict_type,I)'`
+  只输出段内第一个画面类型为 I（帧内编码）的帧——I 帧独立可解码，无论
+  解码器是否输出坏前缀、关键帧标志是否如实，筛选结果必然干净；找不到
+  I 帧或精简 ffmpeg 缺 select 滤镜时回退 0 秒首帧（旧行为）。
+- `mtproto.uploadedMediaOf`：mkv（按文件名扩展判断）MIME 如实标
+  `video/x-matroska`、不设流式标志——MP4 视频行为不变。
+- Dockerfile 精简 ffmpeg 补 `--enable-filter=select`（原来只有 scale，
+  缺失时新抽帧命令会直接报"无此滤镜"回退旧路径，等于白修）。
+
+**要点（防复发）**：
+- 对 `-c copy` 切段的一切"段首干净可解码"假设都只对 IDR 闭合 GOP 成立；
+  封面类消费方一律按画面类型（pict_type）筛帧，别按 0 秒首帧或关键帧
+  标志取帧；
+- 修改 Dockerfile 编译开关时对照全部 ffmpeg 调用方（见下条"当前清单"，
+  抽帧清单已含 select filter）；
+- 验证方式：真机重投一个超限视频，分段消息封面应为正常画面；日志中
+  "分段抽帧失败"出现说明两级抽取都失败（该段无封面发送，非花屏）。
+
 ## 2026-09-20 切段失败 "Unable to choose an output format" / "'matroska' is not known"（exit 234）→ 镜像精简 ffmpeg 缺封装器
 
 **现象（真机，两轮）**：2.1GB 视频切段时 ffmpeg 先报
@@ -32,8 +67,8 @@ mjpeg raw 封装），可播放切段引入后需求变了，Dockerfile 没跟�
 **要点（防复发）**：
 - 给 ffmpeg 的能力做任何假设前先探测（启动期 `-muxers` 查询，秒级）；
 - 修改 Dockerfile 精简编译开关时，必须对照全部 ffmpeg 调用方所需能力
-  （当前清单：抽帧 = mov/matroska 等 demuxer + 解码器 + scale filter +
-  mjpeg 编码/封装；切段 = 同源 demuxer/parser + matroska muxer）；
+  （当前清单：抽帧 = mov/matroska 等 demuxer + 解码器 + scale/select
+  filter + mjpeg 编码/封装；切段 = 同源 demuxer/parser + matroska muxer）；
 - 切段不可用 = `SPLIT_UNAVAILABLE` 下载前报错，不降级——字节分段仅限
   非视频媒体，别给视频加回退。
 

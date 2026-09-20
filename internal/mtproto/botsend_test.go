@@ -60,6 +60,33 @@ func TestUploadedMediaOf(t *testing.T) {
 		}
 	})
 
+	t.Run("mkv 分段如实标注且不标流式", func(t *testing.T) {
+		media := uploadedMediaOf(file, message.Media{
+			Kind:     message.KindVideo,
+			FileName: "big.part1of2.mkv",
+			Video:    &message.VideoMeta{Width: 640, Height: 480, Duration: 30},
+		}, nil)
+		doc, ok := media.(*tg.InputMediaUploadedDocument)
+		if !ok {
+			t.Fatalf("形态应为 InputMediaUploadedDocument: %T", media)
+		}
+		if doc.MimeType != "video/x-matroska" {
+			t.Errorf("mkv MIME 应如实标注: %q", doc.MimeType)
+		}
+		var video *tg.DocumentAttributeVideo
+		for _, a := range doc.Attributes {
+			if attr, ok := a.(*tg.DocumentAttributeVideo); ok {
+				video = attr
+			}
+		}
+		if video == nil {
+			t.Fatal("应携带 video 属性")
+		}
+		if video.SupportsStreaming {
+			t.Error("mkv 不支持 Telegram 流式播放，虚标会触发服务端重生成预览覆盖已上传封面")
+		}
+	})
+
 	t.Run("voice 属性", func(t *testing.T) {
 		media := uploadedMediaOf(file, message.Media{
 			Kind:     message.KindVoice,

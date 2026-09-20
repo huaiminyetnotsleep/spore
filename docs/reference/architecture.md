@@ -260,12 +260,16 @@ SourceRef
     落盘路径：ffmpeg 流复制（`-c copy` 不转码，秒级、无损）切出 N 个真实
     视频文件（输出容器显式 `-f matroska`，段名 `.mkv`；镜像精简 ffmpeg 已含
     matroska 封装器，启动期探测缺失即告警），
-    以 video 形态上传（挂 DocumentAttributeVideo，SupportsStreaming），每段
+    以 video 形态上传（挂 DocumentAttributeVideo；mkv 不标 SupportsStreaming
+    且 MIME 如实 video/x-matroska——虚标流式会诱导服务端重生成预览，覆盖
+    已上传封面），每段
     点开即播、无需下载合并；切段点按字节占比换算时间（平均码率近似），实际
-    边界对齐关键帧（-ss 输入快定位，首帧可解码），段长有 ±GOP 级偏差；段
+    边界对齐关键帧标志（-ss 输入快定位；open-GOP 流段首仍带参考缺失的
+    前导 B 帧，首帧未必干净），段长有 ±GOP 级偏差；段
     大小 1800MB 留 200MB margin 防关键帧偏移使单段超 2000MB；逐段封面 =
-    首段源缩略图优先 → 段文件 0 秒抽帧，其余段段文件 0 秒抽帧（段本身可
-    解码；流式路径段落定后同样逐段抽帧）。任一环失败（下载断/ffmpeg 死/
+    首段源缩略图优先 → 段文件抽首个 I 帧，其余段段文件抽首个 I 帧
+    （`media.ExtractSegmentCoverJPEG`，按画面类型筛帧规避坏前缀；流式路径
+    段落定后同样逐段抽帧）。任一环失败（下载断/ffmpeg 死/
     stdin EPIPE/段超限）清全部段、零字节已发、整组原子，不降级。
   - **字节分段 document（兜底）**：非视频 / 缺时长 / ffmpeg 不可用或切段
     失败——纯字节切割为普通 document（不挂 video 属性，避免假播放器），

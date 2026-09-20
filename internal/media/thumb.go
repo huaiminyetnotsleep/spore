@@ -48,12 +48,11 @@ func ExtractFrameJPEG(ctx context.Context, ffmpegPath, tmpDir string, head []byt
 	)
 }
 
-// ExtractFrameAtJPEG 用 ffmpeg 从完整视频文件的指定时间点提取单帧 JPEG。
-// 分卷拆投的逐段封面用：分段字节流没有容器头不可解码，改为按"段起始
-// 字节 / 总大小 × 总时长"换算时间戳，对已完整落盘的文件用 -ss 输入快速
-// 定位抽帧（定位到目标时间最近的解码关键帧）。VBR 视频按平均码率近似，
-// 画面与段边界可能有小偏移；文件不完整或容器无法解析时返回错误，调用方
-// 降级为无封面。
+// ExtractFrameAtJPEG 用 ffmpeg 从视频文件的指定时间点提取单帧 JPEG：
+// 输入侧 -ss 定位到目标时间之前最近的关键帧再解码。作为分段封面的回退
+// 路径（ExtractSegmentCoverJPEG 失败时取 0 秒首帧）与独立定位抽帧使用。
+// VBR 视频按时间定位与切段边界可能有小偏移；文件不完整或容器无法解析时
+// 返回错误，调用方降级为无封面。
 func ExtractFrameAtJPEG(ctx context.Context, ffmpegPath, videoPath string, sec float64) ([]byte, error) {
 	return runFFmpegFrame(ctx, ffmpegPath,
 		"-ss", strconv.FormatFloat(sec, 'f', 3, 64),
@@ -63,19 +62,43 @@ func ExtractFrameAtJPEG(ctx context.Context, ffmpegPath, videoPath string, sec f
 	)
 }
 
+// ExtractSegmentCoverJPEG 用 ffmpeg 从分段视频文件提取封面 JPEG：只输出
+// 段内第一个画面类型为 I（帧内编码）的帧。分段以 -c copy 按关键帧标志
+// 对齐切割，open-GOP 流的切点之后仍会带入显示序在前、参考上一 GOP 的
+// 前导 B 帧——参考帧不在段内，解码器若以错误隐藏方式输出这些帧，封面
+// 就是绿红条纹花屏；而 I 帧独立可解码，按画面类型筛选后必然干净。
+// 找不到 I 帧（流内无帧内帧）或 select 滤镜缺失（精简 ffmpeg 未编译）
+// 时回退 0 秒首帧抽取（与旧行为一致），两级错误合并返回供调用方降级。
+func ExtractSegmentCoverJPEG(ctx context.Context, ffmpegPath, segPath string) ([]byte, error) {
+	if jpeg, keyErr := runFFmpegFrameFiltered(ctx, ffmpegPath, "select='eq(pict_type,I)',",
+		"-i", segPath,
+		"-frames:v", "1",
+		"-an", "-sn", "-dn",
+	); keyErr == nil {
+		return jpeg, nil
+	} else if jpeg, err := ExtractFrameAtJPEG(ctx, ffmpegPath, segPath, 0); err != nil {
+		return nil, fmt.Errorf("分段封面抽取失败（首 I 帧: %v；0 秒首帧回退: %v）", keyErr, err)
+	} else {
+		return jpeg, nil
+	}
+}
+
 // runFFmpegFrame 执行 ffmpeg 单帧抽取并把 stdout 收为 JPEG 字节；输出帧
 // 公共参数（缩放框、质量、mjpeg 管道输出）在此统一，args 为输入侧参数
 // （-i 之前与之后的部分）。
 func runFFmpegFrame(ctx context.Context, ffmpegPath string, args ...string) ([]byte, error) {
+	return runFFmpegFrameFiltered(ctx, ffmpegPath, "", args...)
+}
+
+// runFFmpegFrameFiltered 是 runFFmpegFrame 的变体：preFilter 拼在公共缩放
+// 链之前（分段封面用它先按画面类型筛帧），空串即无前置滤镜。
+func runFFmpegFrameFiltered(ctx context.Context, ffmpegPath, preFilter string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, ffmpegTimeout)
 	defer cancel()
 
+	vf := preFilter + fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", thumbMaxDimension, thumbMaxDimension)
 	full := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, args...)
-	full = append(full,
-		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", thumbMaxDimension, thumbMaxDimension),
-		"-q:v", "5",
-		"-f", "mjpeg", "pipe:1",
-	)
+	full = append(full, "-vf", vf, "-q:v", "5", "-f", "mjpeg", "pipe:1")
 	cmd := exec.CommandContext(ctx, ffmpegPath, full...)
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
