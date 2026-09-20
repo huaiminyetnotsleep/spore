@@ -28,14 +28,16 @@ RUN case "${TARGETARCH}" in \
     && make build-linux GOARCH="${go_arch}" SPORE_VERSION="${SPORE_VERSION}" \
     && mkdir -p /out && mv spore-linux /out/spore
 
-# 精简 ffmpeg：只编译视频封面兜底抽帧（internal/media/thumb.go）所需的
-# 容器/解析器/解码器与 mjpeg 编码，二进制约 5MB。alpine 仓库的 ffmpeg 会
-# 连带 110MB+ 的编码器依赖链（x265/aom/SVT-AV1 等，抽帧用不上），全功能
-# 静态构建单文件也普遍 100MB+；这里全部用 ffmpeg 内置解码器，无需第三方
-# 编码库。冷门编码（theora 等）解码失败时抽帧自动降级为无封面，与 ffmpeg
-# 缺失同语义；特殊视频可经 FFMPEG_PATH 指向宿主全功能 ffmpeg。
+# 精简 ffmpeg：编译大视频可播放切段（internal/queue/split.go，-c copy 流复制
+# 需 matroska 封装器）与视频封面兜底抽帧（internal/media/thumb.go）所需的
+# 容器/解析器/解析器与 mjpeg/matroska 封装器，二进制约 5MB。alpine 仓库的
+# ffmpeg 会连带 110MB+ 的编码器依赖链（x265/aom/SVT-AV1 等，切段用 -c copy
+# 不转码用不上），全功能静态构建单文件也普遍 100MB+；这里全部用 ffmpeg
+# 内置解码器，无需第三方编码库。冷门编码（theora 等）解码/切段失败时自动
+# 降级（抽帧无封面 / 字节分段投递），与 ffmpeg 缺失同语义；特殊视频可经
+# FFMPEG_PATH 指向宿主全功能 ffmpeg。
 FROM alpine:3.20 AS ffmpeg-build
-# 抽帧功能对版本不敏感，升级时只改这里的版本号（https://ffmpeg.org/releases/）。
+# 抽帧/切段功能对版本不敏感，升级时只改这里的版本号（https://ffmpeg.org/releases/）。
 ARG FFMPEG_RELEASE=7.1.2
 RUN apk add --no-cache build-base xz zlib-dev
 RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_RELEASE}.tar.xz" -O /tmp/ffmpeg.tar.xz \
@@ -50,11 +52,12 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_RELEASE}.tar.xz" -O /tm
       --enable-demuxer=mov,matroska,avi,mpegts,flv,asf,ogg \
       --enable-parser=h264,hevc,mpeg4video,mpegvideo,vp8,vp9,av1,h263,mjpeg \
       --enable-decoder=h264,hevc,mpeg1video,mpeg2video,mpeg4,h263,vp8,vp9,av1,mjpeg,flv,wmv1,wmv2,wmv3,vc1 \
-      --enable-encoder=mjpeg --enable-muxer=mjpeg \
+      --enable-encoder=mjpeg --enable-muxer=mjpeg,matroska \
       --enable-filter=scale \
     && make -j"$(nproc)" ffmpeg \
     && strip ffmpeg \
     && ./ffmpeg -version \
+    && ./ffmpeg -hide_banner -muxers | grep -q matroska \
     && mv ffmpeg /usr/local/bin/ffmpeg
 
 FROM alpine:3.20
@@ -66,7 +69,8 @@ ARG RCLONE_RELEASE=1.75.1
 # 与上面 build-linux 当前固定 GOARCH=amd64 一致。
 ARG TARGETARCH
 # ffmpeg 用 ffmpeg-build 阶段编译的精简二进制（见该阶段注释），
-# 运行时只抽帧解码，无需发行版的全功能 ffmpeg 及其百 MB 依赖链。
+# 运行时做抽帧解码与切段流复制（-c copy 不转码），无需发行版的全功能
+# ffmpeg 及其百 MB 依赖链。
 RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -u 10001 spore
 # rclone 解压到 PATH；alpine 无 unzip，临时安装后移除。

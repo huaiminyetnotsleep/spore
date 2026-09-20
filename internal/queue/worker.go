@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -704,9 +703,13 @@ type albumMemberPlan struct {
 //     展开后总成员数 ≤ 相册上限 → 拆分整组：大视频成员切段为可播放分段，
 //     与其余成员合成同一条相册（如 [图片, 段1, 段2]），任务级原子——任何
 //     成员失败整组失败，一个字节都不发出；
-//   - 其余（存在既不可整组也不可拆的成员，或展开超相册上限）→ nil，调用方
-//     逐条降级（超大成员在单媒体路径内各自拆分）。
-func planAlbumSend(d Deps, j Job, items []message.Item) []albumMemberPlan {
+//   - 存在"超限视频但无法切段"（缺时长/ffmpeg 不可用）的成员 → 报
+//     SPLIT_UNAVAILABLE，整组原子失败——回退逐条会让图片先发出而视频
+//     失败，破坏原子性（设计决策 2026-09-20）；
+//   - 其余（存在既不可整组也不可拆的非视频成员，或展开超相册上限）→
+//     nil，调用方逐条发送（超大成员在单媒体路径内各自拆分，非视频走
+//     字节分段）。
+func planAlbumSend(d Deps, j Job, items []message.Item) ([]albumMemberPlan, error) {
 	plans := make([]albumMemberPlan, len(items))
 	total := 0
 	for i, it := range items {
@@ -717,18 +720,23 @@ func planAlbumSend(d Deps, j Job, items []message.Item) []albumMemberPlan {
 		case splittableVideo(d.Media, m):
 			n, err := splitSegmentCount(m.Size, d.Media.SplitSegmentSize)
 			if err != nil {
-				return nil
+				return nil, err
 			}
 			plans[i] = albumMemberPlan{split: true, count: n}
 		default:
-			return nil
+			if needsSplit(d.Media, m) && m.Kind == message.KindVideo {
+				reason := splitVideoSkipReason(d.Media, m)
+				return nil, apperr.New(apperr.CodeSplitUnavailable,
+					fmt.Sprintf("相册含超大视频且可播放切段不可用：%s", reason))
+			}
+			return nil, nil
 		}
 		total += plans[i].count
 	}
 	if total > message.AlbumMaxItems {
-		return nil
+		return nil, nil
 	}
-	return plans
+	return plans, nil
 }
 
 // sendAlbumGroup 相册整组发送到 target 聊天（普通投递为用户私聊，仅缓存
@@ -750,31 +758,40 @@ func planAlbumSend(d Deps, j Job, items []message.Item) []albumMemberPlan {
 // 可拆成员的切段等待（WaitDownloaded）同样挂在 openCtx 下——其余成员失败
 // 时下载 ctx 被取消，切段等待随之返回错误，整组原子失败。
 func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
-	plans := planAlbumSend(d, j, items)
+	plans, planErr := planAlbumSend(d, j, items)
+	if planErr != nil {
+		// 超限视频无法切段：整组原子失败（零下载零投递，图片不会先发出）
+		return planErr
+	}
 	if plans == nil {
 		d.Log.Info("相册含不可整组项，直接逐条发送", "job_id", j.ID, "items", len(items))
 		return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
 	}
+	// 拆分整组前置校验（下载开始前）：切段依赖 matroska 封装器，缺失直接
+	// 报错终止整组——不白下载、不降级，保持任务级原子（零投递）。探测一次
+	// 即可（同一 ffmpeg 二进制）。
+	for i := range items {
+		if plans[i].split {
+			if err := media.CheckMatroskaMuxer(ctx, d.Media.FFmpegPath); err != nil {
+				return apperr.New(apperr.CodeSplitUnavailable,
+					fmt.Sprintf("超大视频可播放切段不可用：%v", err))
+			}
+			break
+		}
+	}
 
 	handles := make([]*media.Handle, len(items))
 	segCleanups := make([]func(), len(items)) // 分段 reader/文件清理（发送消费完后执行）
-	// cleanupAll 幂等：既在函数返回时兜底执行，也在切段失败回退逐条前
-	// 显式调用（先行释放旧句柄与段文件，避免逐条重下期间磁盘双份占用）
-	cleanupAll := func() {
+	defer func() {                            // 无论成败都清理已打开句柄与分段文件（未打开/未切段的槽位为 nil）
 		for i, h := range handles {
 			if segCleanups[i] != nil {
 				segCleanups[i]()
-				segCleanups[i] = nil
 			}
 			if h != nil && h.Cleanup != nil {
 				h.Cleanup()
-				handles[i] = nil
 			}
 		}
-	}
-	defer cleanupAll()
-
-	var cutFailed atomic.Bool // 任一成员切段失败：整组回退逐条（见 g.Wait 之后）
+	}()
 
 	memberEntries := make([][]delivery.AlbumEntry, len(items))
 	openCtx, cancelOpen := context.WithCancel(ctx)
@@ -802,10 +819,7 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
 					sourceURL, links, i == 0)
 				if err != nil {
-					cancelOpen() // 切段失败：终止其余成员在途下载（未发出任何字节）
-					if errors.Is(err, errSegmentCut) {
-						cutFailed.Store(true)
-					}
+					cancelOpen() // 切段/下载失败：整组失败（未发出任何字节，不降级）
 					return err
 				}
 				memberEntries[i] = ents
@@ -831,17 +845,8 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 		})
 	}
 	if err := g.Wait(); err != nil {
-		// 切段失败（ffmpeg 执行/单段超限等，区别于下载失败）：此时尚未发出
-		// 任何字节，整组回退逐条投递仍是原子的——超大成员在单媒体路径自动
-		// 降级字节分段；其余成员的旧句柄先行释放，避免重下期间磁盘双份占用。
-		// 下载类失败不回退（整组失败不重下，维持既有语义）。
-		if cutFailed.Load() {
-			d.Log.Warn("视频切段失败，整组回退逐条投递（超大成员自动降级字节分段）",
-				"job_id", j.ID, "items", len(items), "error", err.Error())
-			cancelOpen()
-			cleanupAll()
-			return sendItemsIndividually(ctx, d, j, target, items, sourceURL, links, track, sent)
-		}
+		// 切段/下载失败：整组失败（未发出任何字节）。切段能力已在下载前
+		// 前置校验，此处失败属源数据异常（冷门编码等），不降级不重试。
 		return err
 	}
 	// 展开摊平（按成员顺序，拆分段跟在其源成员位置）
@@ -912,7 +917,13 @@ func sendMediaItem(ctx context.Context, d Deps, j Job, target int64, it message.
 // thumb.go）；超过单文件上限的媒体走分卷拆分（见 split.go）；上传路径的
 // 尝试与送达在此计入投递观测。
 func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
-	h, err := media.Open(ctx, d.Fetcher.API(), *it.Media, tempKey(j, it), d.Media, d.Log, downloadReporter(d, j))
+	m := *it.Media
+	// 前置校验（下载开始前）：超限视频必须具备可播放切段能力，不满足直接
+	// 报错——不白下载、不降级字节分段（设计决策 2026-09-20）
+	if err := ensurePlayableSplit(ctx, d.Media, m); err != nil {
+		return err
+	}
+	h, err := media.Open(ctx, d.Fetcher.API(), m, tempKey(j, it), d.Media, d.Log, downloadReporter(d, j))
 	if err != nil {
 		return err
 	}
@@ -921,7 +932,6 @@ func openAndSend(ctx context.Context, d Deps, j Job, target int64, it message.It
 			h.Cleanup()
 		}
 	}()
-	m := *it.Media
 	if needsSplit(d.Media, m) {
 		return sendSplitDocument(ctx, d, j, target, it, m, h, sourceURL, links, track, sent)
 	}

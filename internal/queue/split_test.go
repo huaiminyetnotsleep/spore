@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gotd/td/bin"
@@ -83,6 +84,43 @@ func oversizeMsg(id int, accessHash, size int) *tg.Message {
 	}
 }
 
+// oversizeDocMsg 构造超限的"纯文件"消息（无视频属性 → KindDocument，
+// 走字节分段路径，无需 ffmpeg）。
+func oversizeDocMsg(id int, accessHash, size int) *tg.Message {
+	return &tg.Message{
+		ID: id, Message: "大文件",
+		Media: &tg.MessageMediaDocument{Document: &tg.Document{
+			ID: 9000 + int64(id), AccessHash: int64(accessHash), DCID: 2,
+			FileReference: []byte{byte(accessHash)},
+			MimeType:      "application/octet-stream",
+			Size:          int64(size),
+			Attributes: []tg.DocumentAttributeClass{
+				&tg.DocumentAttributeFilename{FileName: "data.zip"},
+			},
+		}},
+	}
+}
+
+// countedInvoker 统计下载请求数（断言前置校验失败时零下载）。
+type countedInvoker struct {
+	inner splitChunkInvoker
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countedInvoker) Invoke(ctx context.Context, in bin.Encoder, out bin.Decoder) error {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return c.inner.Invoke(ctx, in, out)
+}
+
+func (c *countedInvoker) snapshot() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 func TestSplitSegmentCount(t *testing.T) {
 	n, err := splitSegmentCount(95, 40)
 	if err != nil || n != 3 {
@@ -122,7 +160,8 @@ func TestWorkerSplitDelivery(t *testing.T) {
 	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}), sender)
 	d.Media = splitMediaOptions(t)
 
-	runOneMedia(t, d, job, oversizeMsg(7, 1101, len(payload)))
+	// 纯文件（无视频属性）走字节分段：非视频媒体的唯一拆分路径
+	runOneMedia(t, d, job, oversizeDocMsg(7, 1101, len(payload)))
 
 	calls := sender.albumCallsSnapshot()
 	if len(calls) != 1 {
@@ -182,7 +221,7 @@ func TestWorkerSplitDeliveryFailure(t *testing.T) {
 	sender := &fakeSender{consumeAlbumReaders: true, albumErr: func([]delivery.AlbumEntry) error {
 		return apperr.New(apperr.CodeSendFailed, "split send boom")
 	}}
-	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}, oversizeMsg(7, 1101, len(payload))), sender)
+	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}, oversizeDocMsg(7, 1101, len(payload))), sender)
 	d.Media = splitMediaOptions(t)
 
 	Process(d)(context.Background(), job)
@@ -218,27 +257,19 @@ func TestVideoSegmentName(t *testing.T) {
 	}
 }
 
-// 混合相册整组切段失败（FFMPEG_PATH 指向必失败的可执行文件）→ 整组回退
-// 逐条：普通成员单发，超大成员在单媒体路径自动降级字节分段投递。切段发生
-// 在任何字节发出之前，回退仍是原子的；delivery_mode 仍为 split（字节分段
-// 兜底成功送达）。
-func TestWorkerSplitGroupCutFailureFallsBackIndividually(t *testing.T) {
+// 混合相册含"超限视频但无法切段"（无 ffmpeg）→ 整组原子失败（零下载、
+// 零投递）——不降级字节分段，图片也不会先发出。
+func TestWorkerSplitAlbumVideoPrecheckFailsAtomically(t *testing.T) {
 	s := openStore(t)
 	job, _ := newJobWithRequest(t, s, 0)
-	payload := make([]byte, 95) // 大成员声明 95B（落盘内容与分段读取按声明大小）
+	payload := make([]byte, 95)
 
+	inv := &countedInvoker{inner: splitChunkInvoker{payload: payload}}
 	sender := &fakeSender{consumeAlbumReaders: true,
 		groupable: func(m message.Media) bool { return m.Size <= 50 }}
-	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}), sender)
-	d.Media = media.Options{
-		TmpDir:            t.TempDir(),
-		MaxFileSize:       50,
-		MaxSplitTotalSize: 400,
-		SplitSegmentSize:  40,
-		FFmpegPath:        "/bin/false", // LookPath 成功（切段会执行），运行必失败
-	}
+	d := uploadDeps(t, s, fetcherWith(inv), sender)
+	d.Media = splitMediaOptions(t) // 无 FFmpegPath → 视频无法切段
 
-	// 相册：小成员（40B，≤50B 走常规）+ 大成员（95B，可拆视频 → 切段失败回退）
 	msgs := []*tg.Message{oversizeMsg(7, 1101, 40), oversizeMsg(8, 1102, 95)}
 	msgs[0].SetGroupedID(42)
 	msgs[1].SetGroupedID(42)
@@ -249,27 +280,44 @@ func TestWorkerSplitGroupCutFailureFallsBackIndividually(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取请求失败: %v", err)
 	}
-	if r.Status != store.RequestSucceeded {
-		t.Fatalf("切段失败回退后任务应成功: %s/%s", r.Status, r.ErrorCode)
+	if r.Status != store.RequestFailed || r.ErrorCode != string(apperr.CodeSplitUnavailable) {
+		t.Fatalf("任务应失败且错误码为 SPLIT_UNAVAILABLE: %s/%s", r.Status, r.ErrorCode)
 	}
-	// 普通成员单发（SendMedia）
-	if calls := sender.mediaCallsSnapshot(); len(calls) != 1 {
-		t.Fatalf("普通成员应单发一次: %+v", calls)
+	if inv.snapshot() != 0 {
+		t.Fatalf("前置校验失败应零下载: %d 次下载请求", inv.snapshot())
 	}
-	// 超大成员降级字节分段整组（95B/40B → 3 段 document）
-	calls := sender.albumCallsSnapshot()
-	if len(calls) != 1 || len(calls[0].Kinds) != 3 {
-		t.Fatalf("超大成员应降级为 3 段字节分段整组: %+v", calls)
+	if calls := sender.mediaCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("图片不应先发出: %+v", calls)
 	}
-	for i, k := range calls[0].Kinds {
-		if k != message.KindDocument {
-			t.Errorf("降级分段应为 document: [%d]=%v", i, k)
-		}
+	if calls := sender.albumCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("不应有任何整组投递: %+v", calls)
 	}
-	if !strings.Contains(calls[0].Captions[0].Text, "已分为 3 段") {
-		t.Errorf("降级后首段应附合并提示: %q", calls[0].Captions[0].Text)
+}
+
+// 单个超限视频无法切段 → 下载开始前直接报错（零下载、零投递、不降级）。
+func TestWorkerSplitVideoPrecheckFailsBeforeDownload(t *testing.T) {
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 0)
+	payload := make([]byte, 95)
+
+	inv := &countedInvoker{inner: splitChunkInvoker{payload: payload}}
+	sender := &fakeSender{consumeAlbumReaders: true}
+	d := uploadDeps(t, s, fetcherWith(inv), sender)
+	d.Media = splitMediaOptions(t)
+
+	runOneMedia(t, d, job, oversizeMsg(7, 1101, 95))
+
+	r, err := s.GetRequest(context.Background(), job.RequestID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
 	}
-	if r.DeliveryMode != store.DeliveryModeSplit {
-		t.Fatalf("delivery_mode 应为 split: %q", r.DeliveryMode)
+	if r.Status != store.RequestFailed || r.ErrorCode != string(apperr.CodeSplitUnavailable) {
+		t.Fatalf("任务应失败且错误码为 SPLIT_UNAVAILABLE: %s/%s", r.Status, r.ErrorCode)
+	}
+	if inv.snapshot() != 0 {
+		t.Fatalf("前置校验失败应零下载: %d 次下载请求", inv.snapshot())
+	}
+	if calls := sender.mediaCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("不应有任何投递: %+v", calls)
 	}
 }

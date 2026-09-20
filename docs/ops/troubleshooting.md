@@ -3,29 +3,39 @@
 > 开发过程中实际踩过的坑及其修复，按时间倒序排列。新条目加在最上面。
 > 排查线上问题时先查这里，再查各库版本的适配注意事项（见文末）。
 
-## 2026-09-20 切段失败 "Unable to choose an output format"（exit 234）→ 显式 matroska + 整组自动回退
+## 2026-09-20 切段失败 "Unable to choose an output format" / "'matroska' is not known"（exit 234）→ 镜像精简 ffmpeg 缺封装器
 
-**现象（真机）**：2.1GB 视频（相册成员）切段时 ffmpeg 报
-`Unable to choose an output format for '...part1of2.mp4'`（exit 234 = EINVAL），
+**现象（真机，两轮）**：2.1GB 视频切段时 ffmpeg 先报
+`Unable to choose an output format for '...part1of2.mp4'`，显式 `-f matroska`
+后又报 `Requested output format 'matroska' is not known`（exit 234 = EINVAL）。
 混合相册整组失败（INTERNAL_ERROR），白下了 6 分钟。
 
-**根因**：切段输出 muxer 依赖 ffmpeg 按**输出文件扩展名**猜测，而段名继承
-源文件名——源扩展名大写（`.MP4`）/尾部空白/特殊字符时 `av_guess_format`
-匹配失败。错误信息里明明是 `.mp4` 结尾仍失败，说明匹配对非常规扩展名
-（大小写/空白）不鲁棒。
+**根因（两轮后才定位准）**：项目 Dockerfile 为控制镜像体积，自行编译的
+**精简 ffmpeg 只启用了 `--enable-muxer=mjpeg`**（抽帧往管道输出单帧用的）
+——没有 matroska/mp4 等任何视频封装器。第一轮按扩展名猜输出格式自然失败；
+第二轮显式 `-f matroska` 直接点名要一个不存在的 muxer，同样失败。此前
+首轮诊断猜的"源扩展名大写/空白导致猜测失败"是错的——任何扩展名都猜不中，
+因为 muxer 根本没编译进去。历史包袱：该构建是为"抽帧封面"定制（只需要
+mjpeg raw 封装），可播放切段引入后需求变了，Dockerfile 没跟上。
 
 **方案**：
-- 输出 muxer **显式 `-f matroska`**（段名固定 `.mkv`）——mkv 接受几乎所有
-  编解码流，且完全摆脱对输出扩展名的依赖；
-- 混合相册整组路径的切段失败不再导致任务失败：切段发生在任何字节发出之前，
-  此时整组回退逐条投递**仍是原子的**（`errSegmentCut` 标记 + `atomic.Bool`
-  + 回退前显式 `cleanupAll` 释放旧句柄，避免重下期间磁盘双份占用）——超大
-  成员在单媒体路径自动降级字节分段，普通成员单发；
-- 单媒体路径的切段失败回退字节分段维持不变。
+- Dockerfile 精简构建追加 `--enable-muxer=matroska`（切段输出容器），并在
+  构建期自检 `ffmpeg -muxers | grep matroska`（缺了构建即失败，不再静默
+  带病出镜像）；muxer 显式 `-f matroska` 保留（不依赖扩展名猜测）；
+- 启动期能力探测 `media.CheckMatroskaMuxer`：自定义 FFMPEG_PATH 指向阉割
+  构建时启动即 Warn，不再等到第一个 2GB 任务失败才发现；
+- **切段能力前置校验、不降级**（第三轮,产品决策）：超限视频在下载开始前
+  校验切段条件（单媒体 `ensurePlayableSplit` / 相册 `planAlbumSend` 报
+  `SPLIT_UNAVAILABLE` 整组原子失败），不满足不发起下载、不降级字节分段；
+  运行期切段失败原样报错。字节分段只保留给非视频媒体（唯一路径而非降级）。
 
-**要点（防复发）**：凡是把外部文件名交给 ffmpeg 的场景，一律显式 `-f`/
-`-format`，不做扩展名猜测；`errors.Is(err, errSegmentCut)` 是"切段阶段
-失败"的唯一判定（下载失败不回退，维持整组失败不重下语义）。
+**要点（防复发）**：
+- 给 ffmpeg 的能力做任何假设前先探测（启动期 `-muxers` 查询，秒级）；
+- 修改 Dockerfile 精简编译开关时，必须对照全部 ffmpeg 调用方所需能力
+  （当前清单：抽帧 = mov/matroska 等 demuxer + 解码器 + scale filter +
+  mjpeg 编码/封装；切段 = 同源 demuxer/parser + matroska muxer）；
+- 切段不可用 = `SPLIT_UNAVAILABLE` 下载前报错，不降级——字节分段仅限
+  非视频媒体，别给视频加回退。
 
 ## 2026-09-20 拆分投递的两处修正 → 可播放视频分段 + 缓存频道副本按组修复
 
@@ -37,7 +47,8 @@
 - ①字节分段不可解码是切割方式的必然——改为 **ffmpeg 流复制切段**
   （`-c copy` 不转码、无损、秒级）：切出的是真实视频文件，以 video 形态
   上传（挂 DocumentAttributeVideo），每段点开即播；切段点对齐关键帧，段
-  大小 1900MB→1800MB（关键帧偏移 margin）。非视频/缺时长/ffmpeg 不可用
+  大小 1900MB→1800MB（关键帧偏移 margin）。非视频媒体走字节分段；视频
+  切段能力不足时直接报错（SPLIT_UNAVAILABLE，不降级）——
   或切段失败仍回退字节分段。
 - ②`dumpcache.WriteClean` 要求 items 与已发送消息**数量一致**，拆分把一个
   条目展开为多条，校验必然失败 → 副本整体跳过。改为 **sentSpans 按源条目
@@ -53,7 +64,7 @@
 - `sentIDs.spans` 与 `mediaMeta.SentSpans` 是"源条目 → 消息 ID 组"的唯一
   映射，SendAlbum 的返回 ID 与 entries 同序，按成员 plan 计数切分；
 - 拆分段以 video 形态发送的前提是 ffmpeg 流复制成功（真实可解码）；任何
-  回退字节分段的路径必须保持 document 形态（不挂 video 属性）；
+  字节分段路径只承载非视频媒体，必须保持 document 形态（不挂 video 属性）；
 - 拆分磁盘峰值 ≈ 2× 文件大小（完整落盘文件 + 分段文件），切段前经
   `media.CheckTempDir` 对"再落一份"做余量预检。
 

@@ -1,14 +1,15 @@
 // 大文件分卷拆分投递：超过单文件 MTProto 上传上限（MaxFileSize，2000MB 级）
 // 的媒体不再以 FILE_TOO_LARGE 失败，切段为 N 个 ≤1800MB 的分段，经相册整组
-// 直传为同一条消息（≤10 段，总量上限约 17.6GB）。两种切段形态：
+// 直传为同一条消息（≤10 段，总量上限约 17.6GB）。两种形态：
 //
-//  1. 可播放视频分段（首选）：视频且有时长且 ffmpeg 可用——完整落盘后用
-//     ffmpeg 流复制（-c copy，不转码、秒级、无损）切出 N 个真实视频文件，
-//     以 video 形态上传（挂 DocumentAttributeVideo），每段点开即播、无需
-//     下载合并；切段边界对齐关键帧，段长有 ±GOP 级偏差；
-//  2. 字节分段 document（兜底）：非视频、缺时长或 ffmpeg 不可用/切段失败
-//     ——纯字节切割为普通 document（不挂 video 属性，避免假播放器），用户
-//     按首段 caption 提示合并。
+//  1. 可播放视频分段（视频唯一路径）：完整落盘后用 ffmpeg 流复制（-c copy，
+//     不转码、秒级、无损）切出 N 个真实视频文件，以 video 形态上传（挂
+//     DocumentAttributeVideo），每段点开即播、无需下载合并；切段边界对齐
+//     关键帧，段长有 ±GOP 级偏差。切段能力（ffmpeg 含 matroska 封装器、
+//     源带时长）在下载开始前前置校验（ensurePlayableSplit），不满足直接
+//     报错终止任务——不降级字节分段（设计决策 2026-09-20，真机两轮教训）。
+//  2. 字节分段 document（非视频媒体的唯一路径，非"降级"）：压缩包等无法
+//     播放的媒体纯字节切割为普通 document，首段 caption 附合并提示。
 //
 // 两种形态都要求完整落盘（流复制需要读到完整文件——moov 在尾部的视频必须
 // 读到文件尾；字节分段依赖区间读取），先 WaitDownloaded 再切再传。
@@ -17,7 +18,6 @@ package queue
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +35,7 @@ import (
 )
 
 // splitCutTimeout 是单段流复制的时间上限：-c copy 为磁盘 IO 型（GB 级
-// 秒级~分钟级），正常远低于该值；超时视为该源无法切段（调用方回退字节分段）。
+// 秒级~分钟级），正常远低于该值；超时视为该源无法切段（任务失败，不降级）。
 const splitCutTimeout = 10 * time.Minute
 
 // needsSplit 判断媒体是否需要分卷拆分：超过单文件上传上限且配置允许拆分
@@ -45,22 +45,54 @@ func needsSplit(opt media.Options, m message.Media) bool {
 }
 
 // splittableVideo 判断媒体能否切为可播放的视频分段：视频、落在拆分上限内、
-// 源带时长属性（切段点按时间换算）、ffmpeg 可用。不满足时由字节分段兜底。
+// 源带时长属性（切段点按时间换算）、ffmpeg 可用。不含 matroska 封装器探测
+// （需要起进程）——由 ensurePlayableSplit 在下载前补充校验。
 func splittableVideo(opt media.Options, m message.Media) bool {
-	if m.Kind != message.KindVideo || opt.MaxSplitTotalSize <= 0 {
-		return false
+	return splitVideoSkipReason(opt, m) == ""
+}
+
+// splitVideoSkipReason 返回无法切为可播放分段的原因（前置校验与诊断日志
+// 共用）；空串表示可以切段（matroska 封装器探测除外）。
+func splitVideoSkipReason(opt media.Options, m message.Media) string {
+	switch {
+	case m.Kind != message.KindVideo:
+		return "非视频媒体"
+	case m.Size <= opt.MaxFileSize:
+		return "未超单文件上限"
+	case opt.MaxSplitTotalSize <= 0:
+		return "拆分投递未启用"
+	case m.Size > opt.MaxSplitTotalSize:
+		return "超出拆分总上限"
+	case m.Video == nil || m.Video.Duration <= 0:
+		return "源视频缺少时长属性"
+	case opt.FFmpegPath == "":
+		return "FFMPEG_PATH 未配置"
+	default:
+		if _, err := exec.LookPath(opt.FFmpegPath); err != nil {
+			return fmt.Sprintf("ffmpeg 不可用（%s）", opt.FFmpegPath)
+		}
+		return ""
 	}
-	if m.Size <= opt.MaxFileSize || m.Size > opt.MaxSplitTotalSize {
-		return false
+}
+
+// ensurePlayableSplit 下载前的前置校验：超限视频必须具备可播放切段条件
+// （ffmpeg 可用且含 matroska 封装器、源带时长），不满足立即以
+// SPLIT_UNAVAILABLE 报错终止任务——2GB 级文件下完才发现切段不可用，
+// 白耗流量与磁盘；校验通过后切段仍运行期失败则按原样报错，同样不降级。
+// 非视频媒体走字节分段，无前置能力需求。
+func ensurePlayableSplit(ctx context.Context, opt media.Options, m message.Media) error {
+	if !needsSplit(opt, m) || m.Kind != message.KindVideo {
+		return nil
 	}
-	if m.Video == nil || m.Video.Duration <= 0 {
-		return false
+	if reason := splitVideoSkipReason(opt, m); reason != "" {
+		return apperr.New(apperr.CodeSplitUnavailable,
+			fmt.Sprintf("超大视频可播放切段不可用：%s", reason))
 	}
-	if opt.FFmpegPath == "" {
-		return false
+	if err := media.CheckMatroskaMuxer(ctx, opt.FFmpegPath); err != nil {
+		return apperr.New(apperr.CodeSplitUnavailable,
+			fmt.Sprintf("超大视频可播放切段不可用：%v", err))
 	}
-	_, err := exec.LookPath(opt.FFmpegPath)
-	return err == nil
+	return nil
 }
 
 // splitSegmentCount 计算分段数：按段大小向上取整，防御性夹取到相册成员
@@ -80,17 +112,15 @@ func splitSegmentCount(size, seg int64) (int, error) {
 	return n, nil
 }
 
-// splitPartName 生成分段文件名：通用约定 <原名>.part<i>of<n>（字节分段），
-// 合并工具按该命名识别顺序。
+// splitPartName 生成字节分段文件名：通用约定 <原名>.part<i>of<n>，合并工具
+// 按该命名识别顺序。
 func splitPartName(base string, i, n int) string {
 	return fmt.Sprintf("%s.part%dof%d", base, i, n)
 }
 
 // videoSegmentName 生成可播放分段的名字：<去扩展名>.part<i>of<n>.mkv。
 // 输出容器固定 matroska（与 cutVideoSegment 的 -f matroska 一致）：mkv 接受
-// 几乎所有编解码流，且切段不依赖 ffmpeg 按输出扩展名猜 muxer——源文件名
-// 的大写/尾部空白/特殊字符扩展名会让猜测失败（真机 2026-09-20：
-// Unable to choose an output format）。
+// 几乎所有编解码流，且切段不依赖 ffmpeg 按输出扩展名猜 muxer。
 func videoSegmentName(base string, i, n int) string {
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
@@ -114,11 +144,6 @@ func splitVideoNote(n int) string {
 	return fmt.Sprintf("📦 原文件超过单文件上限，已切分为 %d 段视频，每段可直接播放，无需合并。", n)
 }
 
-// errSegmentCut 标记切段阶段失败（ffmpeg 执行/段文件落盘/单段超限），
-// 与下载失败区分：整组路径据此自动回退逐条投递——切段发生在任何字节发出
-// 之前，回退仍是原子的。errors.Is(err, errSegmentCut) 判定。
-var errSegmentCut = errors.New("视频切段失败")
-
 // videoSegment 是一个切好的可播放分段：真实视频文件 + 上传元数据。
 type videoSegment struct {
 	media message.Media // Kind=video，Video 带段时长与源宽高
@@ -126,26 +151,25 @@ type videoSegment struct {
 	thumb []byte        // 尽力而为解析的封面（可为 nil）
 }
 
-// sendSplitDocument 单媒体拆分投递入口（openAndSend 分派）：视频优先走
-// 可播放分段；不满足条件或 ffmpeg 切段失败时回退字节分段 document。切段
-// 成功后的整组发送失败不回退——重新以字节段上传只会重复传输且可能重复
-// 投递，任务失败由用户重试。成功按整组记一次送达，观测标记 split。
+// sendSplitDocument 单媒体拆分投递入口（openAndSend 分派，前置校验已在
+// openAndSend 完成）：视频切段为可播放分段、非视频字节分段 document，
+// 各自失败原样报错——没有"切段失败降级字节分段"的回退（设计决策
+// 2026-09-20）。成功按整组记一次送达，观测标记 split。
 func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
-	if splittableVideo(d.Media, m) {
+	if m.Kind == message.KindVideo {
 		entries, cleanup, err := openVideoSegmentEntries(ctx, d, j, it, m, h, sourceURL, links, true)
-		if err == nil {
-			defer cleanup()
-			ids, sendErr := d.senderFor(j).SendAlbum(ctx, target, entries)
-			if sendErr != nil {
-				return sendErr
-			}
-			sent.addSpan(ids)
-			track.split = true
-			track.delivered() // 整组按一次送达计（与相册同语义）
-			return nil
+		if err != nil {
+			return err
 		}
-		d.Log.Warn("视频切段失败，回退字节分段投递",
-			"job_id", j.ID, "file", m.FileName, "error", err.Error())
+		defer cleanup()
+		ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)
+		if err != nil {
+			return err
+		}
+		sent.addSpan(ids)
+		track.split = true
+		track.delivered() // 整组按一次送达计（与相册同语义）
+		return nil
 	}
 	return sendByteSectionDocument(ctx, d, j, target, it, m, h, sourceURL, links, track, sent)
 }
@@ -201,7 +225,7 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 		f, err := os.Open(seg.path)
 		if err != nil {
 			cleanup()
-			return nil, nil, errors.Join(errSegmentCut, apperr.Wrap(apperr.CodeMediaDownloadFailed, err))
+			return nil, nil, apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
 		}
 		readers = append(readers, f)
 		ec := message.Caption{}
@@ -221,9 +245,8 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 // 切段点按字节占比换算时间（t_i = 总时长 × i×段大小 / 总大小，平均码率
 // 近似），实际切点对齐关键帧（-ss 输入快定位，保证首帧可解码）。段文件
 // 落 TempDir（TempName 约定，纳入孤儿清理）；任一段失败删除全部已切段
-// 文件后返回错误（调用方回退字节分段）。段实际大小超单文件上限时报
-// FILE_TOO_LARGE——边界关键帧偏移理论上可能使单段超限，与其烧完上传再被
-// 服务器拒，不如提前失败。
+// 文件后以 SPLIT_UNAVAILABLE 报错（不降级）。段实际大小超单文件上限同样
+// 报 FILE_TOO_LARGE——与其烧完上传再被服务器拒，不如提前失败。
 func createVideoSegments(ctx context.Context, d Deps, m message.Media, src string, n int, key string) ([]videoSegment, error) {
 	base := m.FileName
 	if base == "" {
@@ -242,7 +265,7 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 		if keep {
 			return
 		}
-		for _, seg := range segs { // 失败回退：删除已切段文件
+		for _, seg := range segs { // 失败：删除已切段文件
 			if rmErr := os.Remove(seg.path); rmErr != nil && !os.IsNotExist(rmErr) {
 				d.Log.Warn("分段文件清理失败", "path", seg.path, "error", rmErr.Error())
 			}
@@ -253,15 +276,15 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 		name := media.TempName(fmt.Sprintf("%s-seg%d", key, i), videoSegmentName(base, i, n))
 		out := filepath.Join(d.Media.TmpDir, name)
 		if err := cutVideoSegment(ctx, d.Media.FFmpegPath, src, start, end-start, out); err != nil {
-			return nil, fmt.Errorf("%w: %w", errSegmentCut, err)
+			return nil, apperr.New(apperr.CodeSplitUnavailable, err.Error())
 		}
 		info, err := os.Stat(out)
 		if err != nil {
-			return nil, errors.Join(errSegmentCut, apperr.Wrap(apperr.CodeMediaDownloadFailed, err))
+			return nil, apperr.Wrap(apperr.CodeMediaDownloadFailed, err)
 		}
 		if info.Size() > config.MaxMediaFileSize {
-			return nil, errors.Join(errSegmentCut, apperr.New(apperr.CodeFileTooLarge,
-				fmt.Sprintf("分段 %s 实际大小 %d 超过单文件上限 %d（关键帧边界偏移）", name, info.Size(), config.MaxMediaFileSize)))
+			return nil, apperr.New(apperr.CodeFileTooLarge,
+				fmt.Sprintf("分段 %s 实际大小 %d 超过单文件上限 %d（关键帧边界偏移）", name, info.Size(), config.MaxMediaFileSize))
 		}
 		seg := videoSegment{
 			media: message.Media{
@@ -285,10 +308,10 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 	// 逐段封面：每段本身是可解码视频——首段源缩略图优先（与原视频画面
 	// 一致），回退对段文件 0 秒抽帧；其余段对段文件 0 秒抽帧。尽力而为，
 	// 失败段无封面照常投递。
-	ffmpegOK := d.Media.FFmpegPath != ""
-	if ffmpegOK {
-		if _, err := exec.LookPath(d.Media.FFmpegPath); err != nil {
-			ffmpegOK = false
+	ffmpegOK := false
+	if d.Media.FFmpegPath != "" {
+		if _, err := exec.LookPath(d.Media.FFmpegPath); err == nil {
+			ffmpegOK = true
 		}
 	}
 	for i := range segs {
@@ -324,8 +347,8 @@ func createVideoSegments(ctx context.Context, d Deps, m message.Media, src strin
 
 // cutVideoSegment 执行单段流复制：-ss 输入快定位（对齐关键帧，首帧可解码）
 // + -c copy 不转码 + -avoid_negative_ts make_zero 修正复制切段的负时间戳。
-// 输出 muxer 显式指定 matroska（不依赖输出扩展名猜测——真机 2026-09-20：
-// 源文件名的大写/空白扩展名导致 Unable to choose an output format）。
+// 输出 muxer 显式指定 matroska（镜像精简 ffmpeg 已含；不依赖输出扩展名
+// 猜测）。
 func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur float64, out string) error {
 	ctx, cancel := context.WithTimeout(ctx, splitCutTimeout)
 	defer cancel()
@@ -345,10 +368,9 @@ func cutVideoSegment(ctx context.Context, ffmpegPath, src string, start, dur flo
 	return nil
 }
 
-// sendByteSectionDocument 字节分段兜底：非视频、缺时长、ffmpeg 不可用或
-// 切段失败的媒体按字节切为 N 个普通 document（不可独立播放，首段 caption
-// 附合并提示）。逻辑与可播放分段同构：完整落盘 → 按段区间构造条目 →
-// 整组直传。
+// sendByteSectionDocument 字节分段投递（非视频媒体的唯一路径）：按字节切
+// 为 N 个普通 document（不可独立播放，首段 caption 附合并提示）。逻辑与
+// 可播放分段同构：完整落盘 → 按段区间构造条目 → 整组直传。非视频无封面。
 func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	if err := h.WaitDownloaded(ctx); err != nil {
 		return err
@@ -357,8 +379,6 @@ func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, i
 	if err != nil {
 		return err
 	}
-	// 封面在发送前统一解析（首段原逻辑、后续段按时间戳定位抽帧，见 splitThumbs）
-	thumbs := splitThumbs(ctx, d, m, h, d.Media.SplitSegmentSize, n, tempKey(j, it)+"-thumb")
 
 	caption := it.MediaCaption().WithQuotedBody().WithSourceLink(sourceURL)
 	if sourceURL != "" {
@@ -387,10 +407,9 @@ func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, i
 		}
 		sections = append(sections, sr)
 		pm := message.Media{
-			Kind:      message.KindDocument,
-			FileName:  splitPartName(base, i, n),
-			Size:      length,
-			ThumbJPEG: thumbs[i-1],
+			Kind:     message.KindDocument,
+			FileName: splitPartName(base, i, n),
+			Size:     length,
 		}
 		ec := message.Caption{}
 		if i == 1 {
@@ -410,60 +429,4 @@ func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, i
 	track.split = true
 	track.delivered() // 整组按一次送达计（与相册同语义）
 	return nil
-}
-
-// splitThumbs 为字节分段的 N 段解析封面字节（尽力而为，失败段无封面照常
-// 投递）：分段字节流没有容器头不可解码，第 2 段起按"段起始字节 / 总大小 ×
-// 总时长"换算时间戳，对完整落盘文件用 ffmpeg 定位抽帧。VBR 视频按平均
-// 码率近似，画面与段边界可能有小偏移；源缺时长属性、ffmpeg 不可用或抽帧
-// 失败 → 该段降级无封面。
-func splitThumbs(ctx context.Context, d Deps, m message.Media, h *media.Handle, seg int64, n int, key string) [][]byte {
-	thumbs := make([][]byte, n)
-	if m.Kind != message.KindVideo {
-		return thumbs
-	}
-	path, ok := h.Path()
-	if !ok {
-		return thumbs // 防御：拆分必然走临时文件路径
-	}
-	ffmpegOK := false
-	if d.Media.FFmpegPath != "" {
-		if _, err := exec.LookPath(d.Media.FFmpegPath); err == nil {
-			ffmpegOK = true
-		} else {
-			d.Log.Debug("ffmpeg 不可用，分段封面降级为无封面",
-				"file", m.FileName, "ffmpeg", d.Media.FFmpegPath)
-		}
-	}
-	if m.Thumb != nil {
-		if data, err := downloadThumb(ctx, d, m, key); err == nil {
-			thumbs[0] = data
-		} else {
-			d.Log.Warn("源缩略图下载失败，首段回退抽帧",
-				"file", m.FileName, "error", err.Error())
-		}
-	}
-	if thumbs[0] == nil && ffmpegOK {
-		if jpeg, err := media.ExtractFrameAtJPEG(ctx, d.Media.FFmpegPath, path, 0); err == nil {
-			thumbs[0] = jpeg
-		} else {
-			d.Log.Debug("首段抽帧失败，无封面发送",
-				"file", m.FileName, "error", err.Error())
-		}
-	}
-	if m.Video == nil || m.Video.Duration <= 0 || !ffmpegOK {
-		return thumbs
-	}
-	for i := 2; i <= n; i++ {
-		start := int64(i-1) * seg
-		sec := float64(m.Video.Duration) * float64(start) / float64(m.Size)
-		jpeg, err := media.ExtractFrameAtJPEG(ctx, d.Media.FFmpegPath, path, sec)
-		if err != nil {
-			d.Log.Debug("分段抽帧失败，该段无封面发送",
-				"file", m.FileName, "part", i, "sec", sec, "error", err.Error())
-			continue
-		}
-		thumbs[i-1] = jpeg
-	}
-	return thumbs
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -78,6 +79,23 @@ func main() {
 	if err := os.MkdirAll(cfg.TempDir, 0o755); err != nil {
 		logger.Error("创建临时目录失败", "temp_dir", cfg.TempDir, "error", err.Error())
 		os.Exit(1)
+	}
+
+	// ffmpeg 能力探测（尽力而为，不阻断启动）：大视频可播放切段依赖
+	// matroska 封装器——镜像自带的精简 ffmpeg 已包含；FFMPEG_PATH 指向
+	// 阉割构建时启动即告警（运行期切段自动回退字节分段，不影响抽帧）。
+	if cfg.FFmpegPath != "" {
+		if _, err := exec.LookPath(cfg.FFmpegPath); err == nil {
+			pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := media.CheckMatroskaMuxer(pctx, cfg.FFmpegPath); err != nil {
+				logger.Warn("ffmpeg 缺少 matroska 封装器，超大视频可播放切段不可用（运行期自动回退字节分段投递）",
+					"ffmpeg", cfg.FFmpegPath, "error", err.Error())
+			}
+			pcancel()
+		} else {
+			logger.Warn("ffmpeg 不可用，视频封面兜底与可播放切段停用（大视频回退字节分段投递）",
+				"ffmpeg", cfg.FFmpegPath, "error", err.Error())
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

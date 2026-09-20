@@ -123,6 +123,7 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   BOT_SEND_FAILED: "发送失败",
   SEND_TARGET_INVALID: "发送目标不可用",
   LARGE_CHANNEL_UNAVAILABLE: "大文件通道不可用",
+  SPLIT_UNAVAILABLE: "分段切割不可用",
   INTERNAL_ERROR: "内部错误",
   // 准入拒绝
   USER_NOT_AUTHORIZED: "未在白名单",

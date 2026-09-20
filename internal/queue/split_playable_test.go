@@ -11,11 +11,14 @@ package queue
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 
 	"github.com/huaiminyetnotsleep/spore/internal/media"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
@@ -135,6 +138,11 @@ func TestWorkerSplitPlayableVideoSegments(t *testing.T) {
 func TestPlanAlbumSend(t *testing.T) {
 	d := Deps{
 		Log: testLog(),
+		Media: media.Options{
+			MaxFileSize:       100,
+			MaxSplitTotalSize: 1000,
+			SplitSegmentSize:  400,
+		},
 		Sender: &fakeSender{groupable: func(m message.Media) bool {
 			return m.Size <= 100 && m.Kind == message.KindPhoto
 		}},
@@ -152,9 +160,9 @@ func TestPlanAlbumSend(t *testing.T) {
 
 	t.Run("全员可整组：常规规划", func(t *testing.T) {
 		items := []message.Item{photo(), photo()}
-		plans := planAlbumSend(d, job, items)
-		if plans == nil || len(plans) != 2 || plans[0].split || plans[1].split {
-			t.Fatalf("常规相册应全员占 1 槽: %+v", plans)
+		plans, planErr := planAlbumSend(d, job, items)
+		if planErr != nil || plans == nil || len(plans) != 2 || plans[0].split || plans[1].split {
+			t.Fatalf("常规相册应全员占 1 槽: %+v err=%v", plans, planErr)
 		}
 	})
 
@@ -163,9 +171,9 @@ func TestPlanAlbumSend(t *testing.T) {
 			t.Skip("ffmpeg 不可用")
 		}
 		items := []message.Item{photo(), bigVideo(900)} // 900/400 → 3 段
-		plans := planAlbumSend(d, job, items)
-		if plans == nil {
-			t.Fatal("可拆混合相册应可整组")
+		plans, planErr := planAlbumSend(d, job, items)
+		if planErr != nil || plans == nil {
+			t.Fatalf("可拆混合相册应可整组: %v", planErr)
 		}
 		if plans[0].split || plans[0].count != 1 || !plans[1].split || plans[1].count != 3 {
 			t.Fatalf("规划不符: %+v", plans)
@@ -175,8 +183,22 @@ func TestPlanAlbumSend(t *testing.T) {
 	t.Run("不可整组也不可拆：回退逐条", func(t *testing.T) {
 		audio := message.Media{Kind: message.KindAudio, Size: 500}
 		items := []message.Item{photo(), {ID: 2, Media: &audio}}
-		if plans := planAlbumSend(d, job, items); plans != nil {
-			t.Fatalf("含 audio 成员应回退逐条: %+v", plans)
+		plans, planErr := planAlbumSend(d, job, items)
+		if planErr != nil || plans != nil {
+			t.Fatalf("含 audio 成员应回退逐条: %+v err=%v", plans, planErr)
+		}
+	})
+
+	t.Run("超限视频无法切段：整组原子报错", func(t *testing.T) {
+		badVideo := message.Media{Kind: message.KindVideo, Size: 900} // 无 FFmpegPath
+		items := []message.Item{photo(), {ID: 2, Media: &badVideo}}
+		plans, planErr := planAlbumSend(d, job, items)
+		if plans != nil || planErr == nil {
+			t.Fatalf("无法切段的超限视频应整组报错: %+v err=%v", plans, planErr)
+		}
+		var ae *apperr.AppError
+		if !errors.As(planErr, &ae) || ae.Code != apperr.CodeSplitUnavailable {
+			t.Fatalf("应报 SPLIT_UNAVAILABLE: %v", planErr)
 		}
 	})
 
@@ -189,8 +211,8 @@ func TestPlanAlbumSend(t *testing.T) {
 			items = append(items, photo())
 		}
 		items = append(items, bigVideo(900))
-		if plans := planAlbumSend(d, job, items); plans != nil {
-			t.Fatalf("展开 13 槽超上限应回退逐条: %+v", plans)
+		if plans, planErr := planAlbumSend(d, job, items); planErr != nil || plans != nil {
+			t.Fatalf("展开 13 槽超上限应回退逐条: %+v err=%v", plans, planErr)
 		}
 	})
 }

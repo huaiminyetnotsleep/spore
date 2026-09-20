@@ -363,8 +363,12 @@ https://<你的域名>/admin/login
 发送失败，小文件不受影响。`/status` 的"大文件直传通道"可查看其可用性。
 超过 2000MB 的媒体自动**分卷拆分**：视频经 ffmpeg 流复制切为可直接播放的
 分段（无损、无需合并），与同组媒体合成一条相册送达（约 17.6GB 上限）；非
-视频媒体回退字节分段（首段附合并提示）。需宿主机安装 ffmpeg（FFMPEG_PATH
-可指定路径）；拆分任务磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。
+视频媒体回退字节分段（首段附合并提示）。镜像自带的精简
+ffmpeg 已含切段所需的 matroska 封装器（构建期自检）；自定义 FFMPEG_PATH
+指向的 ffmpeg 必须含 matroska muxer（`ffmpeg -muxers | grep matroska`
+可验证），缺失时启动日志告警，超限视频任务会在下载前直接报错终止
+（`SPLIT_UNAVAILABLE`，不降级字节分段）；拆分任务磁盘峰值 ≈
+2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。
 本地 Bot API 备选路线不承载拆分（其上限同为 2000MB）。
 
 仓库另附一条**备选路线**：自建官方 telegram-bot-api 服务器（`bigfile` profile，

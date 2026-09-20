@@ -233,8 +233,8 @@ SourceRef
 相册 10 成员上限 → 单条消息总量约 17.6GB，超出仍 FILE_TOO_LARGE），经相册
 整组直传为同一条消息。两种切段形态：
   - **可播放视频分段（视频首选）**：ffmpeg 流复制（`-c copy` 不转码，秒级、
-    无损）切出 N 个真实视频文件（输出容器显式 `-f matroska`，段名 `.mkv`
-    ——不依赖输出扩展名猜测，源文件名的大写/空白扩展名会让猜测失败），
+    无损）切出 N 个真实视频文件（输出容器显式 `-f matroska`，段名 `.mkv`；镜像精简 ffmpeg 已含
+    matroska 封装器，启动期探测缺失即告警），
     以 video 形态上传（挂 DocumentAttributeVideo，SupportsStreaming），每段
     点开即播、无需下载合并；切段点按字节占比换算时间（平均码率近似），实际
     边界对齐关键帧（-ss 输入快定位，首帧可解码），段长有 ±GOP 级偏差；段
@@ -247,15 +247,22 @@ SourceRef
     文件名 `<原名>.part<i>of<N>`，caption 只挂首段并附合并提示
     （cat / copy /b）；第 2 段起按"段起始字节 / 总大小 × 总时长"换算时间戳
     对完整文件 `ffmpeg -ss` 定位抽帧。
+**切段能力前置校验、不降级（设计决策 2026-09-20）**：超限视频在下载开始前
+校验切段条件（`ensurePlayableSplit`：ffmpeg 可用且含 matroska 封装器、源带
+时长属性），不满足直接以 `SPLIT_UNAVAILABLE` 报错终止任务——不发起下载、
+不降级字节分段；混合相册在打开任何成员前整组原子报错（图片不会先发出）；
+切段运行期失败（冷门编码等）同样原样报错。字节分段只用于非视频媒体
+（压缩包等，那是唯一路径而非降级）。启动期探测 ffmpeg 的 muxer 列表
+（`media.CheckMatroskaMuxer`），缺 matroska 即告警（镜像自带精简 ffmpeg
+已含，构建期亦自检）。
 相册原子化：混合相册（图片 + 超限视频）经 planAlbumSend 预检（纯元数据）
 走**拆分整组**——图片与大视频的分段合成同一条相册 `[图片, 段1, 段2]` 整组
 直传，任务级原子（任何成员失败整组失败、零字节发出）；展开后超相册 10 成员
-上限或 ffmpeg 缺失时回退逐条（超大成员在单媒体路径各自拆分）。拆分放弃
+上限时回退逐条（非视频成员走字节分段）。拆分放弃
 "边下边传"交叠（流复制与区间读取依赖完整落盘），先 WaitDownloaded 再切再传，
 磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。缓存频道干净副本按
-源条目分组（sentSpans）复制清洗——修复拆分投递 items 与消息数不一致导致
-副本被跳过的问题。delivery_mode 记 `split`（仅成功时，失败回落 upload 由
-错误码记录原因）。
+源条目分组（sentSpans）复制清洗。delivery_mode 记 `split`（仅成功时，失败
+回落 upload 由错误码记录原因）。
 
 默认 MaxFileSize 为 2000MB（MTProto 上传硬上限：4000 part × 512KB）；
 默认 InMemoryLimit 为 512MB（单文件常驻内存上限）；内存路径另受进程级
@@ -458,7 +465,8 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `CHANNEL_NOT_ACCESSIBLE` | `tg.ErrChannelPrivate`、`ErrChatAdminRequired`、AccessHash 拿不到 | 无法访问该频道，请确认用户账号已加入该频道。 |
 | `SERVICE_MESSAGE` | `*tg.MessageService` 或转换后无可提取内容 | 这是一条服务消息，没有可提取的内容。 |
 | `MEDIA_UNSUPPORTED` | 贴纸、webpage 等暂不支持类型 | 暂不支持这种消息类型。 |
-| `FILE_TOO_LARGE` | Size > MaxFileSize 且不可拆分（未启用拆分或 > MaxSplitTotalSize≈19GB） | 文件超过单条消息大小上限（约 19GB），暂无法发送。 |
+| `FILE_TOO_LARGE` | Size > MaxFileSize 且不可拆分（未启用拆分或 > MaxSplitTotalSize≈17.6GB） | 文件超过单条消息大小上限（约 17.6GB），暂无法发送。 |
+| `SPLIT_UNAVAILABLE` | 超限视频无法切段（ffmpeg 缺失/缺少 matroska 封装器/源缺时长属性），下载开始前前置校验 | 超大视频可播放切段暂不可用（服务器 ffmpeg 环境不满足），请联系管理员。 |
 | `MEDIA_DOWNLOAD_FAILED` | 下载流/临时文件失败（非网络、非引用类失败的兜底） | 媒体下载失败，请稍后重试。 |
 | `NETWORK_ERROR` | 连接失败/超时/连接重置等传输层故障（取数、下载、发送共用；ctx 取消不在此列，由 worker 改判 `INTERRUPTED`） | 网络连接失败或超时，请稍后重试。 |
 | `TELEGRAM_SERVER_ERROR` | Telegram RPC 5xx（INTERNAL_SERVER_ERROR、TIMEOUT 等） | Telegram 服务暂时故障，请稍后重试。 |

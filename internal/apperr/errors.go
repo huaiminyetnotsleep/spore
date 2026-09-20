@@ -38,10 +38,14 @@ const (
 	// CodeLargeChannelUnavailable 大文件直传通道（Bot 号 MTProto 会话）未就绪：
 	// 超过 Bot API 上限的媒体无法发送，小文件不受影响。
 	CodeLargeChannelUnavailable Code = "LARGE_CHANNEL_UNAVAILABLE"
-	CodeStoreUnavailable        Code = "STORE_UNAVAILABLE"
-	CodeStoreMigration          Code = "STORE_MIGRATION_FAILED"
-	CodeStoreConstraint         Code = "STORE_CONSTRAINT"
-	CodeInternal                Code = "INTERNAL_ERROR"
+	// CodeSplitUnavailable 超大视频可播放切段不可用（ffmpeg 缺失/缺少
+	// matroska 封装器/源缺时长属性）：在下载开始前前置校验，不满足直接
+	// 报错终止任务——不降级字节分段（设计决策 2026-09-20）。
+	CodeSplitUnavailable Code = "SPLIT_UNAVAILABLE"
+	CodeStoreUnavailable Code = "STORE_UNAVAILABLE"
+	CodeStoreMigration   Code = "STORE_MIGRATION_FAILED"
+	CodeStoreConstraint  Code = "STORE_CONSTRAINT"
+	CodeInternal         Code = "INTERNAL_ERROR"
 
 	// 访问控制拒绝码（internal/access 准入链的拒绝原因，供 UserText 转用户文案）。
 	// 注意与 CodeRateLimited（TELEGRAM 侧 429）区分：本组是用户提交频率超限。
@@ -104,6 +108,7 @@ var userTexts = map[Code]string{
 	CodeRateLimited:             "请求过于频繁，请稍后重试。",
 	CodeSendFailed:              "发送失败，请稍后重试。",
 	CodeLargeChannelUnavailable: "大文件发送通道暂不可用，请稍后重试。",
+	CodeSplitUnavailable:        "超大视频可播放切段暂不可用（服务器 ffmpeg 环境不满足），请联系管理员。",
 	CodeStoreUnavailable:        "存储服务暂时不可用，请稍后重试。",
 	CodeStoreMigration:          "存储初始化失败，请联系管理员。",
 	CodeStoreConstraint:         "操作与现有数据冲突，请检查后重试。",
