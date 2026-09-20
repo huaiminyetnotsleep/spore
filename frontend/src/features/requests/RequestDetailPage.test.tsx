@@ -6,7 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../../api/client";
 import { fetchRequestDetail, fetchSettings, type RequestDetail } from "../../api/admin";
-import { cancelRequest, dumpBackfillRequest, retryRequest } from "../../api/mutations";
+import {
+  cancelRequest,
+  dumpBackfillRequest,
+  resetRequestAttempts,
+  retryRequest,
+} from "../../api/mutations";
 import { RequestDetailPage } from "./RequestDetailPage";
 
 vi.mock("../../api/admin", async () => {
@@ -25,6 +30,7 @@ vi.mock("../../api/mutations", async () => {
     dumpBackfillRequest: vi.fn(),
     retryRequest: vi.fn(),
     cancelRequest: vi.fn(),
+    resetRequestAttempts: vi.fn(),
   };
 });
 
@@ -33,6 +39,7 @@ const fetchSettingsMock = vi.mocked(fetchSettings);
 const dumpBackfillRequestMock = vi.mocked(dumpBackfillRequest);
 const retryRequestMock = vi.mocked(retryRequest);
 const cancelRequestMock = vi.mocked(cancelRequest);
+const resetRequestAttemptsMock = vi.mocked(resetRequestAttempts);
 
 function detail(overrides: Partial<RequestDetail> = {}): RequestDetail {
   return {
@@ -93,6 +100,7 @@ describe("请求记录详情页", () => {
     dumpBackfillRequestMock.mockReset();
     retryRequestMock.mockReset();
     cancelRequestMock.mockReset();
+    resetRequestAttemptsMock.mockReset();
   });
 
   it("渲染唯一 H1「请求详情」，返回入口为按钮且取消/转存/重试集中在详情操作区", async () => {
@@ -253,5 +261,37 @@ describe("请求记录详情页", () => {
 
     expect(await screen.findByText("该请求仍在执行，可以取消")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "转存缓存频道" })).not.toBeInTheDocument();
+  });
+
+  it("已达上限的失败请求展示重置计数入口：warning 确认后提交并提示成功", async () => {
+    resetRequestAttemptsMock.mockResolvedValue({ ok: true } as never);
+    fetchRequestDetailMock.mockResolvedValue(
+      detail({ status: "failed", attempt: 3, attempt_max: 3 }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText(/已达最大尝试次数，无法重试；可重置尝试计数后再次重试/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重 试" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重置尝试计数" }));
+    expect(
+      await screen.findByText(/计数将清回 1（状态保持失败、不会自动重新执行）/),
+    ).toBeInTheDocument();
+    // 自定义 okText「重置」：确认按钮可访问名为「重 置」（antd 两字间隔）
+    fireEvent.click(screen.getByRole("button", { name: "重 置" }));
+
+    await waitFor(() => expect(resetRequestAttemptsMock).toHaveBeenCalledWith(1));
+    expect(await screen.findByText(/尝试计数已重置为 1/)).toBeInTheDocument();
+  });
+
+  it("未达上限的失败请求不展示重置计数入口", async () => {
+    fetchRequestDetailMock.mockResolvedValue(
+      detail({ status: "failed", attempt: 1, attempt_max: 3 }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: "重 试" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重置尝试计数" })).not.toBeInTheDocument();
   });
 });

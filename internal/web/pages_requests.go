@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
@@ -102,18 +101,29 @@ func requestLinkText(rq store.Request) string {
 	return rq.ChannelKey + "#" + strconv.Itoa(rq.MessageID)
 }
 
-// retryErrText 把重试拒绝码转为中文提示。
-func retryErrText(ae *apperr.AppError) string {
+// retryErrText 把重试拒绝码转为中文提示（maxAttempts 为当前配置的
+// 累计尝试上限，进文案前由调用方读取，保证与实际校验口径一致）。
+func retryErrText(ae *apperr.AppError, maxAttempts int) string {
 	switch ae.Code {
 	case apperr.CodeRetryExhausted:
 		return "该请求已达最大尝试次数（累计含首次最多 " +
-			strconv.Itoa(access.MaxRequestAttempts) + " 次）"
+			strconv.Itoa(maxAttempts) + " 次）"
 	case apperr.CodeUserDisabled:
 		return "请求所属用户未启用，无法重试"
 	case apperr.CodeQueueFull:
 		return "内存队列已满，请稍后重试"
 	case apperr.CodeStoreConstraint:
 		return "仅失败状态的请求可重试"
+	default:
+		return "操作未能完成，请稍后重试"
+	}
+}
+
+// resetErrText 把尝试计数重置的拒绝码转为中文提示。
+func resetErrText(ae *apperr.AppError) string {
+	switch ae.Code {
+	case apperr.CodeStoreConstraint:
+		return "仅失败状态的请求可重置尝试计数"
 	default:
 		return "操作未能完成，请稍后重试"
 	}

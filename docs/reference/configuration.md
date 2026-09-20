@@ -122,6 +122,7 @@ openssl rand -hex 32
 1. 以下设置在数据库中存在合法值时**覆盖环境默认**：
    - `worker_count`（合法范围 1–16）；
    - `max_links_per_message`（合法范围 1–50；管理端「运行设置」修改后即时生效）；
+   - `max_request_attempts`（合法范围 1–10，累计含首次；管理端「运行设置」修改后即时生效）；
    - 媒体三项 `max_file_size` / `stream_limit` / `temp_dir_max_size`：三项**整体校验**，任一非法则整套回退环境配置并产生 `media.config_invalid` 事件；
    - 传输四项 `download_threads` / `upload_threads` / `download_connections` / `upload_connections`：逐键覆盖，非法、越界或损坏的值被忽略并回退环境默认；
    - `dump_channel_id`：数据库键存在即优先，**包括显式 0（关闭）**；键缺失或非法时回落 `DUMP_CHANNEL_ID`；
@@ -138,7 +139,7 @@ openssl rand -hex 32
 | 修改 `.env` / 环境变量 | 重启进程（或重建容器） |
 | `queue_capacity`、`worker_count` | 重启生效 |
 | 媒体三项（`max_file_size` / `stream_limit` / `temp_dir_max_size`） | 重启生效；当前进程的媒体配置不会在线替换 |
-| `timezone`、`dedup_window_min`、`max_links_per_message`、`system_name` | 即时（每次提交、查询或文案渲染时读取） |
+| `timezone`、`dedup_window_min`、`max_links_per_message`、`max_request_attempts`、`system_name` | 即时（每次提交、查询或文案渲染时读取） |
 | `channel_copy_enabled`、`tg_reuse_enabled`、缓存频道 ID | 即时（每次任务成功副本、复用前读取，影响新任务） |
 | 受邀频道 `join_*` 六项 | 即时 |
 | 传输四项 | 即时发布；细节见下 |
@@ -170,6 +171,7 @@ openssl rand -hex 32
 | `tg_reuse_enabled` | `true` | 每次任务复用前读取，即时生效 |
 | `dump_channel_id` / `dump_channel_title` | 0 / 空 | 即时生效；显式 0 可覆盖环境变量；标题仅展示 |
 | `system_name` | `Spore` | 不缓存，每次读取；Bot 文案、事件标题、页面标题即时生效 |
+| `max_request_attempts` | 3；合法 1–10（累计含首次） | 即时生效（重试校验与详情展示直查）；已达上限的失败请求可在消息记录详情页重置尝试计数（attempt 清回 1，不入队） |
 | `join_enabled` 等 `join_*` 六项 | 关 / 关 / 需审核 / 20 / 开 / 开 | 即时生效（语义见[使用指南](../guide/usage.md)第 10 节） |
 | 传输四项（数据库覆盖值） | 各自环境默认（通常 4） | 事务内整体发布；线程/连接语义见第 3.2 节 |
 | `last_backup_at` | 0 | 数据库备份导出后写入 Unix 毫秒时间；仅页面状态展示 |
@@ -186,7 +188,7 @@ openssl rand -hex 32
 
 | 管理端页面 | 对应设置 |
 | --- | --- |
-| 运行设置（`/admin/settings`） | `timezone`、`queue_capacity`、`worker_count`、媒体三项、传输四项；展示配置值/运行值差异与待重启原因 |
+| 运行设置（`/admin/settings`） | `timezone`、`max_links_per_message`、`max_request_attempts`、`queue_capacity`、`worker_count`、媒体三项、传输四项；展示配置值/运行值差异与待重启原因 |
 | 系统设置（`/admin/settings/system`） | `system_name` |
 | GitHub 登录（`/admin/settings/oauth`） | `github_oauth_config`、`github_binding` |
 | 频道设置（`/admin/channel-settings`） | `channel_copy_enabled`、缓存频道（ID 与标题）、`tg_reuse_enabled`、`dedup_window_min` |

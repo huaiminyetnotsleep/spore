@@ -7,20 +7,18 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
 // 受控重试：把 failed 请求重置回 queued 并重新入队。
 // 放在本包而非 queue：重试需要读用户状态、写审计（store）并入队（queue），
 // access 已同时依赖两者，不产生新的循环。
 
-// MaxRequestAttempts 是单个请求的累计尝试上限（含首次）。
-const MaxRequestAttempts = 3
-
 // Retry 对失败请求执行受控重试（Web 管理端触发）。拒绝分支各自返回明确的
 // apperr 错误码：
 //   - 请求不存在：store.ErrNotFound（调用方转"目标不存在"）；
 //   - 状态非 failed：STORE_CONSTRAINT（与现有数据冲突）；
-//   - 累计尝试已达上限：RETRY_EXHAUSTED；
+//   - 累计尝试已达上限（syscfg 动态配置，管理端可调）：RETRY_EXHAUSTED；
 //   - 所属用户未启用：USER_DISABLED；
 //   - 内存队列已满：QUEUE_FULL（含事务提交后入队失败的竞态收尾）。
 //
@@ -102,16 +100,17 @@ func (s *Service) Retry(ctx context.Context, actor string, requestID int64) erro
 	return nil
 }
 
-// checkRetryable 校验重试前置条件（三条拒绝分支）。st 是当前执行视图：
+// checkRetryable 校验重试前置条件（四条拒绝分支）。st 是当前执行视图：
 // 事务内调用时必须传事务视图（tx），避免在单连接被事务占用时另起查询。
+// 尝试上限为 syscfg 动态配置（管理端可调、即时生效）。
 func checkRetryable(ctx context.Context, st *store.Store, r store.Request) error {
 	if r.Status != store.RequestFailed {
 		return apperr.Wrap(apperr.CodeStoreConstraint,
 			fmt.Errorf("请求 %d 状态为 %s，仅 failed 可重试", r.ID, r.Status))
 	}
-	if r.Attempt >= MaxRequestAttempts {
+	if max := syscfg.LoadMaxRequestAttempts(ctx, st); r.Attempt >= max {
 		return apperr.New(apperr.CodeRetryExhausted,
-			fmt.Sprintf("请求 %d 已尝试 %d 次（上限 %d）", r.ID, r.Attempt, MaxRequestAttempts))
+			fmt.Sprintf("请求 %d 已尝试 %d 次（上限 %d）", r.ID, r.Attempt, max))
 	}
 	u, err := st.GetUser(ctx, r.UserID)
 	if err != nil {
@@ -121,5 +120,46 @@ func checkRetryable(ctx context.Context, st *store.Store, r store.Request) error
 		return apperr.Wrap(apperr.CodeUserDisabled,
 			fmt.Errorf("请求 %d 所属用户 %d 状态为 %s", r.ID, u.ID, u.Status))
 	}
+	return nil
+}
+
+// ResetAttempts 把失败请求的累计尝试计数清回 1（管理端"重置尝试计数"
+// 动作）：给已达上限的请求定向放行——清零后管理员可再次重试，无需手改
+// 数据库或调高全局上限。仅 failed 状态可重置；不改状态、错误码与时间戳，
+// 不入队（清零后由管理员显式重试）。计数已在下限 1 时视为无变更，直接
+// 成功返回（幂等），不写库不留审计。
+func (s *Service) ResetAttempts(ctx context.Context, actor string, requestID int64) error {
+	var before store.Request
+	err := s.store.Tx(ctx, func(tx *store.Store) error {
+		// 事务内复核（单连接下事务即互斥），防止与并发的另一次重置、
+		// 重试或状态变更竞态导致重复写审计/误清计数
+		r, err := tx.GetRequest(ctx, requestID)
+		if err != nil {
+			return err
+		}
+		if r.Status != store.RequestFailed {
+			return apperr.Wrap(apperr.CodeStoreConstraint,
+				fmt.Errorf("请求 %d 状态为 %s，仅 failed 可重置尝试计数", r.ID, r.Status))
+		}
+		before = r
+		if r.Attempt == 1 {
+			return nil
+		}
+		if err := tx.ResetRequestAttempts(ctx, requestID, 1); err != nil {
+			return err
+		}
+		return tx.AppendAudit(ctx, store.AuditEntry{
+			Actor:      actor,
+			Action:     "request.reset_attempts",
+			Target:     fmt.Sprintf("request:%d", requestID),
+			BeforeJSON: mustJSON(map[string]any{"status": r.Status, "attempt": r.Attempt, "error_code": r.ErrorCode}),
+			AfterJSON:  mustJSON(map[string]any{"status": r.Status, "attempt": 1}),
+		})
+	})
+	if err != nil {
+		return err
+	}
+	s.log.Info("请求尝试计数已重置",
+		"request_id", requestID, "user_id", before.UserID, "attempt_before", before.Attempt, "attempt_after", 1)
 	return nil
 }

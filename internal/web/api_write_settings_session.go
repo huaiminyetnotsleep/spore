@@ -41,6 +41,7 @@ type apiSettingsView struct {
 	JoinMaxChannels               int    `json:"join_max_channels"` // 0 = 不限
 	JoinMuteEnabled               bool   `json:"join_mute_enabled"`
 	JoinArchiveEnabled            bool   `json:"join_archive_enabled"`
+	MaxRequestAttempts            int    `json:"max_request_attempts"` // 单个请求累计尝试上限（含首次；即时生效）
 	DownloadThreads               int    `json:"download_threads"`
 	DownloadThreadsEnv            int    `json:"download_threads_env"`
 	DownloadThreadsOverridden     bool   `json:"download_threads_overridden"`
@@ -102,6 +103,7 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 	view.JoinMaxChannels = joinCfg.MaxChannels
 	view.JoinMuteEnabled = joinCfg.MuteEnabled
 	view.JoinArchiveEnabled = joinCfg.ArchiveEnabled
+	view.MaxRequestAttempts = syscfg.LoadMaxRequestAttempts(ctx, s.st)
 	if s.transfer != nil {
 		transfer := s.transfer.View()
 		view.DownloadThreads = transfer.DownloadThreads.Effective
@@ -161,6 +163,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		JoinMaxChannels        *int     `json:"join_max_channels"`
 		JoinMuteEnabled        *bool    `json:"join_mute_enabled"`
 		JoinArchiveEnabled     *bool    `json:"join_archive_enabled"`
+		MaxRequestAttempts     *int     `json:"max_request_attempts"`
 		DownloadThreads        *int     `json:"download_threads"`
 		UploadThreads          *int     `json:"upload_threads"`
 		DownloadConnections    *int     `json:"download_connections"`
@@ -191,6 +194,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		JoinMaxChannels:        in.JoinMaxChannels,
 		JoinMuteEnabled:        in.JoinMuteEnabled,
 		JoinArchiveEnabled:     in.JoinArchiveEnabled,
+		MaxRequestAttempts:     in.MaxRequestAttempts,
 		DownloadThreads:        in.DownloadThreads,
 		UploadThreads:          in.UploadThreads,
 		DownloadConnections:    in.DownloadConnections,

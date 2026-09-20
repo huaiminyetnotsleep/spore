@@ -70,6 +70,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     join_max_channels: 20,
     join_mute_enabled: true,
     join_archive_enabled: true,
+    max_request_attempts: 3,
     download_threads: 4,
     upload_threads: 4,
     download_connections: 4,

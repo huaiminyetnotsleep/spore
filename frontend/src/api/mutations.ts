@@ -176,6 +176,10 @@ export const refreshUserProfile = (id: number): Promise<WriteOK> =>
 export const retryRequest = (id: number): Promise<WriteOK> =>
   postJSON<WriteOK>(`/api/v1/requests/${id}/retry`);
 
+/** 重置单条请求的尝试计数（仅 failed；attempt 清回 1，不入队）。 */
+export const resetRequestAttempts = (id: number): Promise<WriteOK> =>
+  postJSON<WriteOK>(`/api/v1/requests/${id}/reset_attempts`);
+
 export interface CancelResult {
   id: number;
   result: "cancelled" | "conflict" | "not_found" | "failed";
@@ -270,6 +274,8 @@ export interface SettingsSaveInput {
   join_max_channels?: number;
   join_mute_enabled?: boolean;
   join_archive_enabled?: boolean;
+  /** 单个请求累计尝试上限（1–10，含首次，即时生效）；缺省不变更。 */
+  max_request_attempts?: number;
   /** 文件分片传输配置；缺省不变更。 */
   download_threads?: number;
   upload_threads?: number;

@@ -3,10 +3,12 @@
  * 展示来源链接（message_url）、所属用户、状态、尝试次数、错误码与受控
  * 中文文案、媒体诊断元数据与各阶段时间；失败请求提供受控重试
  * （不扣额度，累计尝试 +1；attempt 上限/用户启用由服务端复核）。
- * 云盘请求（delivery_mode=cloud 或有 cloud_uploads 记录）追加「云盘上传」
- * 区块，逐文件列出远端路径/目的地/状态/字节/错误；补存行展示「补存自 #id」
- * 并链接到原请求详情。取消/转存/重试集中在「详情操作」分区，确认意图
- * 按共享契约分级（取消=warning，转存/重试=default），pending 期间防重复提交。
+ * 已达尝试上限的失败请求提供「重置尝试计数」（attempt 清回 1、不入队，
+ * 清零后再点重试即可放行）。云盘请求（delivery_mode=cloud 或有
+ * cloud_uploads 记录）追加「云盘上传」区块，逐文件列出远端路径/目的地/
+ * 状态/字节/错误；补存行展示「补存自 #id」并链接到原请求详情。取消/转存/
+ * 重试/重置集中在「详情操作」分区，确认意图按共享契约分级
+ * （取消/重置=warning，转存/重试=default），pending 期间防重复提交。
  */
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Descriptions, Space, Tag, Tooltip, Typography } from "antd";
@@ -14,7 +16,12 @@ import type { ColumnsType } from "antd/es/table";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { fetchRequestDetail, fetchSettings, type CloudUploadRow } from "../../api/admin";
-import { cancelRequest, dumpBackfillRequest, retryRequest } from "../../api/mutations";
+import {
+  cancelRequest,
+  dumpBackfillRequest,
+  resetRequestAttempts,
+  retryRequest,
+} from "../../api/mutations";
 import {
   CLOUD_UPLOAD_STATUS_LABELS,
   CLOUD_UPLOAD_STATUS_TAG_COLORS,
@@ -121,6 +128,13 @@ export function RequestDetailPage() {
     invalidate: [["requests"], ["overview"]],
     successText: "已重新入队（不扣减额度）",
   });
+  // 重置尝试计数：仅 failed 且已达上限的行展示；attempt 清回 1、不入队，
+  // 清零后由管理员显式重试。
+  const resetAttempts = useAdminAction({
+    action: (targetId: number) => resetRequestAttempts(targetId),
+    invalidate: [["requests"]],
+    successText: "尝试计数已重置为 1；需要重新执行请再点「重试」。",
+  });
   const cancel = useAdminAction({
     action: (targetId: number) => cancelRequest(targetId),
     invalidate: [["requests"], ["channels"], ["overview"]],
@@ -147,6 +161,11 @@ export function RequestDetailPage() {
     detail !== undefined &&
     detail.status === "failed" &&
     detail.attempt < detail.attempt_max;
+  // 已达上限的失败请求：重试入口被关闭，展示重置计数入口定向放行
+  const canResetAttempts =
+    detail !== undefined &&
+    detail.status === "failed" &&
+    detail.attempt >= detail.attempt_max;
   const canCancel =
     detail !== undefined &&
     (detail.status === "queued" || detail.status === "processing");
@@ -314,10 +333,12 @@ export function RequestDetailPage() {
                       </Text>
                     }
                   />
-                ) : (
+                ) : canResetAttempts ? (
                   <Text type="secondary">
-                    {detail.status === "failed" ? "已达最大尝试次数，无法重试。" : "仅失败请求可重试。"}
+                    已达最大尝试次数，无法重试；可重置尝试计数后再次重试。
                   </Text>
+                ) : (
+                  <Text type="secondary">仅失败请求可重试。</Text>
                 )}
                 <ResponsiveActionBar align="start">
                   {canRetry ? (
@@ -335,6 +356,24 @@ export function RequestDetailPage() {
                       }
                     >
                       重试
+                    </Button>
+                  ) : null}
+                  {canResetAttempts ? (
+                    <Button
+                      loading={resetAttempts.pending}
+                      disabled={resetAttempts.pending}
+                      onClick={() =>
+                        confirm({
+                          intent: "warning",
+                          title: "确认重置尝试计数",
+                          content:
+                            "确定重置该请求的尝试计数？计数将清回 1（状态保持失败、不会自动重新执行），需要重新执行请再点「重试」。",
+                          okText: "重置",
+                          action: () => resetAttempts.run(requestIdNum),
+                        })
+                      }
+                    >
+                      重置尝试计数
                     </Button>
                   ) : null}
                   {canCancel ? (

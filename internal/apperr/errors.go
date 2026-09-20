@@ -61,7 +61,7 @@ const (
 	// 任务生命周期码（internal/queue 阶段埋点与受控重试使用）。
 	CodeInterrupted      Code = "INTERRUPTED"       // 进程退出/重启中断的未完成任务
 	CodeRequestCancelled Code = "REQUEST_CANCELLED" // 管理员主动取消的请求
-	CodeRetryExhausted   Code = "RETRY_EXHAUSTED"   // 重试超上限（累计尝试含首次最多 3 次）
+	CodeRetryExhausted   Code = "RETRY_EXHAUSTED"   // 重试超当前配置的累计尝试上限（含首次；管理端可调）
 
 	// Web 管理端认证码（internal/web 登录、会话与 OAuth 边界使用；
 	// 文案面向管理员展示在登录/结果页面，不向 Telegram 用户发送）。

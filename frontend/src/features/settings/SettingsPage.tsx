@@ -40,6 +40,7 @@ const { Text } = Typography;
 interface SettingsFormValues {
   timezone?: string;
   max_links_per_message?: number;
+  max_request_attempts?: number;
   queue_capacity?: number;
   worker_count?: number;
   max_file_size?: string;
@@ -110,6 +111,7 @@ export function SettingsPage() {
     form.setFieldsValue({
       timezone: data.timezone,
       max_links_per_message: data.max_links_per_message,
+      max_request_attempts: data.max_request_attempts,
       queue_capacity: data.queue_capacity,
       worker_count: data.worker_count,
       download_threads: data.download_threads,
@@ -127,6 +129,9 @@ export function SettingsPage() {
       }
       if (dirtyFields.has("max_links_per_message") && values.max_links_per_message != null) {
         input.max_links_per_message = values.max_links_per_message;
+      }
+      if (dirtyFields.has("max_request_attempts") && values.max_request_attempts != null) {
+        input.max_request_attempts = values.max_request_attempts;
       }
       if (dirtyFields.has("queue_capacity") && values.queue_capacity != null) {
         input.queue_capacity = values.queue_capacity;
@@ -234,6 +239,7 @@ export function SettingsPage() {
             initialValues={{
               timezone: data?.timezone,
               max_links_per_message: data?.max_links_per_message,
+              max_request_attempts: data?.max_request_attempts,
               queue_capacity: data?.queue_capacity,
               worker_count: data?.worker_count,
               download_threads: data?.download_threads,
@@ -274,6 +280,15 @@ export function SettingsPage() {
                   extra="一条普通消息或 /download 命令可提交的有效链接数；超过上限时整批拒绝。保存后即时生效。"
                 >
                   <InputNumber min={1} max={50} precision={0} className="field-width-160" />
+                </Form.Item>
+
+                <Form.Item
+                  name="max_request_attempts"
+                  label="最大尝试次数（1–10，累计含首次）"
+                  rules={[{ type: "integer", min: 1, max: 10, message: "最大尝试次数必须为 1–10 的整数。" }]}
+                  extra="单个请求可重试的总次数上限（首次执行计 1 次），仅约束管理端重试；保存后即时生效。已达上限的请求可在消息记录详情页重置尝试计数。"
+                >
+                  <InputNumber min={1} max={10} precision={0} className="field-width-160" />
                 </Form.Item>
 
                 <Form.Item

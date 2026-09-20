@@ -235,3 +235,50 @@ func TestEffectiveDumpChannelIDSettingsOverrideEnv(t *testing.T) {
 		t.Fatalf("settings 显式 0 应覆盖 env，得到 %d", got)
 	}
 }
+
+func TestAPISettingsMaxRequestAttempts(t *testing.T) {
+	e := newTestEnv(t, nil)
+	j := e.login(t)
+	csrf := apiCSRFToken(t, e, j)
+	ctx := context.Background()
+
+	// 缺省值 3
+	var before apiSettingsView
+	getAPIJSON(t, e, j, "/api/v1/settings", &before)
+	if before.MaxRequestAttempts != syscfg.DefaultMaxRequestAttempts {
+		t.Fatalf("最大尝试次数缺省应为 %d: %+v", syscfg.DefaultMaxRequestAttempts, before)
+	}
+
+	// 修改为 5：即时生效并写审计
+	resp := e.apiPost(j, "/api/v1/settings", csrf, `{"max_request_attempts":5}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("保存应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	if got := syscfg.LoadMaxRequestAttempts(ctx, e.st); got != 5 {
+		t.Errorf("保存后 LoadMaxRequestAttempts 应为 5，得到 %d", got)
+	}
+	if !e.containsAction("settings.request_retry") {
+		t.Error("变更应写审计 settings.request_retry")
+	}
+
+	// 不变更（nil）保持原值
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dedup_window_min":15}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("不带字段的保存应 200，得到 %d", resp.StatusCode)
+	}
+	if got := syscfg.LoadMaxRequestAttempts(ctx, e.st); got != 5 {
+		t.Errorf("未携带字段的保存不应改动配置，得到 %d", got)
+	}
+
+	// 越界 → 400 且不写库（写操作后 token 轮换）
+	csrf = apiCSRFToken(t, e, j)
+	for _, bad := range []string{`{"max_request_attempts":0}`, `{"max_request_attempts":11}`} {
+		resp = e.apiPost(j, "/api/v1/settings", csrf, bad)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("越界值 %s 应 400，得到 %d", bad, resp.StatusCode)
+		}
+	}
+	if got := syscfg.LoadMaxRequestAttempts(ctx, e.st); got != 5 {
+		t.Errorf("校验失败后旧值应保留，得到 %d", got)
+	}
+}

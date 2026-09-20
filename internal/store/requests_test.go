@@ -802,3 +802,50 @@ func TestDumpEntriesFormatVersionFilter(t *testing.T) {
 		t.Fatalf("当前格式行应命中: %+v err=%v", got, err)
 	}
 }
+
+// TestResetRequestAttempts 只改 failed 行的 attempt，状态/错误码/时间戳
+// 不动；非 failed 行按状态冲突拒绝，不存在的行返回 ErrNotFound。
+func TestResetRequestAttempts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u := mustUser(t, s, 1)
+
+	r, err := s.CreateRequest(ctx, Request{UserID: u.ID, SourceKind: SourcePublic, ChannelKey: "example", MessageID: 9})
+	if err != nil {
+		t.Fatalf("创建请求失败: %v", err)
+	}
+	if err := s.RetryRequest(ctx, r.ID, 5000); err != nil {
+		t.Fatalf("抬升 attempt 失败: %v", err)
+	}
+	if err := s.FinishRequest(ctx, r.ID, RequestResult{Status: RequestFailed, ErrorCode: "MEDIA_DOWNLOAD_FAILED", At: 6000}); err != nil {
+		t.Fatalf("落库失败终态: %v", err)
+	}
+	before, _ := s.GetRequest(ctx, r.ID)
+	if before.Attempt != 2 || before.Status != RequestFailed {
+		t.Fatalf("前置：应为 failed/attempt=2: %+v", before)
+	}
+
+	if err := s.ResetRequestAttempts(ctx, r.ID, 1); err != nil {
+		t.Fatalf("重置失败: %v", err)
+	}
+	got, _ := s.GetRequest(ctx, r.ID)
+	if got.Attempt != 1 || got.Status != RequestFailed || got.ErrorCode != "MEDIA_DOWNLOAD_FAILED" {
+		t.Fatalf("重置后应保持 failed/attempt=1/错误码不动: %+v", got)
+	}
+	if got.FinishedAt != before.FinishedAt || got.QueuedAt != before.QueuedAt {
+		t.Errorf("重置不应改动时间戳: %+v → %+v", before, got)
+	}
+
+	// 非 failed → 状态冲突
+	if err := s.FinishRequest(ctx, r.ID, RequestResult{Status: RequestSucceeded, At: 7000}); err != nil {
+		t.Fatalf("落库成功终态失败: %v", err)
+	}
+	if err := s.ResetRequestAttempts(ctx, r.ID, 1); err == nil {
+		t.Fatal("succeeded 行重置应被拒")
+	}
+
+	// 不存在 → ErrNotFound
+	if err := s.ResetRequestAttempts(ctx, 999, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("应返回 ErrNotFound，得到 %v", err)
+	}
+}

@@ -107,6 +107,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/users/{id}/set-owner", s.handleAPIUserSetOwner)
 	s.mountAPIWrite(mux, "/api/v1/users/{id}/cloud-download", s.handleAPIUserSetCloudDownload)
 	s.mountAPIWrite(mux, "/api/v1/requests/{id}/retry", s.handleAPIRequestRetry)
+	// 尝试计数重置：仅 failed 可重置，attempt 清回 1，不入队（清零后由
+	// 管理员显式重试），配合 /retry 给已达上限的请求定向放行
+	s.mountAPIWrite(mux, "/api/v1/requests/{id}/reset_attempts", s.handleAPIRequestResetAttempts)
 	s.mountAPIWrite(mux, "/api/v1/requests/{id}/cancel", s.handleAPIRequestCancel)
 	s.mountAPIWrite(mux, "/api/v1/requests/cancel", s.handleAPIRequestsCancel)
 	s.mountAPIWrite(mux, "/api/v1/requests/delete", s.handleAPIRequestsDelete)

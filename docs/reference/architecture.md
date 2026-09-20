@@ -500,7 +500,7 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `CONCURRENT_LIMIT` | 未完成任务数超限 | 你还有未完成的任务，请等待完成后再提交。 |
 | `QUEUE_FULL` | 内存队列饱和 | 当前任务较多，请稍后再试。 |
 | `INTERRUPTED` | 进程退出/重启中断的未完成任务 | 任务因服务重启被中断，请稍后重新发送链接。 |
-| `RETRY_EXHAUSTED` | 受控重试超上限（累计含首次最多 3 次） | 该请求已达到最大尝试次数，无法再次重试。 |
+| `RETRY_EXHAUSTED` | 受控重试超上限（累计含首次，上限为动态配置 `max_request_attempts`） | 该请求已达到最大尝试次数，无法再次重试。 |
 | `STORE_UNAVAILABLE` / `STORE_MIGRATION_FAILED` / `STORE_CONSTRAINT` | SQLite 不可用 / 迁移失败 / 约束冲突（含停用 owner、重复添加等管理操作拒绝） | 存储类中文提示（见 `apperr.UserText`）。 |
 | `WEB_AUTH_FAILED` / `WEB_LOGIN_LOCKED` / `WEB_CSRF_INVALID` / `OAUTH_STATE_INVALID` / `OAUTH_EXCHANGE_FAILED` | 管理端登录与 CSRF/OAuth 边界（`internal/web`） | 管理端页面中文提示（见 `apperr.UserText`）。 |
 

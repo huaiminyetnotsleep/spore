@@ -654,6 +654,9 @@ export interface SettingsView {
   join_mute_enabled: boolean;
   join_archive_enabled: boolean;
 
+  /** 单个请求累计尝试上限（含首次；即时生效；缺省 3，可配 1–10）。 */
+  max_request_attempts: number;
+
   /** 文件分片传输运行时配置：当前生效值（1–16）。 */
   download_threads: number;
   upload_threads: number;

@@ -10,9 +10,9 @@ package web
 import (
 	"net/http"
 
-	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
 // apiRequestProgress 是处理中请求的实时传输进度（字节，内存态不落库）。
@@ -151,7 +151,7 @@ func (s *Server) handleAPIRequestDetail(w http.ResponseWriter, r *http.Request, 
 		MessageURL:      requestLink(rq),
 		Username:        u.Username,
 		DisplayName:     u.DisplayName,
-		AttemptMax:      access.MaxRequestAttempts,
+		AttemptMax:      syscfg.LoadMaxRequestAttempts(ctx, s.st),
 		FileName:        rq.FileName,
 		FileSize:        rq.FileSize,
 		QueuedAt:        rq.QueuedAt,

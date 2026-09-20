@@ -94,7 +94,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 
 ### 3.2 requests
 
-一次提取请求的全生命周期记录；频道统计、业务统计、DC 分布、Bot 分布全部聚合自本表。状态机：`queued` → `processing` → `succeeded` / `failed` / `cancelled`；重试复用同一行，`attempt` 累计（含首次上限 3 次）。
+一次提取请求的全生命周期记录；频道统计、业务统计、DC 分布、Bot 分布全部聚合自本表。状态机：`queued` → `processing` → `succeeded` / `failed` / `cancelled`；重试复用同一行，`attempt` 累计（上限为动态配置 `max_request_attempts`，默认 3；管理端可重置计数）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |

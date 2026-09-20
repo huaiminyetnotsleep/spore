@@ -19,6 +19,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/config"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
 )
 
@@ -479,7 +480,7 @@ func TestAPIRequestRetry(t *testing.T) {
 	}
 	var env apiErrorEnvelope
 	decodeAPIJSON(t, bodyOf(t, resp), &env)
-	if env.Error.Code != string(apperr.CodeStoreConstraint) || env.Error.Message != retryErrText(apperr.New(apperr.CodeStoreConstraint, "")) {
+	if env.Error.Code != string(apperr.CodeStoreConstraint) || env.Error.Message != retryErrText(apperr.New(apperr.CodeStoreConstraint, ""), syscfg.DefaultMaxRequestAttempts) {
 		t.Errorf("非 failed 重试错误响应不对: %+v", env.Error)
 	}
 
@@ -1242,5 +1243,91 @@ func TestAPIUserSetCloudDownload(t *testing.T) {
 	getAPIJSON(t, e, j, "/api/v1/users?q=44", &list)
 	if len(list.Items) != 1 || list.Items[0].CloudDownload != 1 || !list.Items[0].EffectiveCloudDownload {
 		t.Fatalf("列表应回显云盘下载字段: %+v", list.Items)
+	}
+}
+
+// ---- 请求尝试计数重置 ----
+
+func TestAPIRequestResetAttempts(t *testing.T) {
+	e := newTestEnv(t, nil)
+	j := e.login(t)
+	csrf := apiCSRFToken(t, e, j)
+	ctx := context.Background()
+	seedUser(t, e, 1, store.UserEnabled)
+	req := seedRequest(t, e, 1, "example_channel", 10, store.RequestFailed)
+	// 两次 RetryRequest + 落失败终态，把 attempt 抬到 3
+	for i := 0; i < 2; i++ {
+		if err := e.st.RetryRequest(ctx, req.ID, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.FinishRequest(ctx, req.ID, store.RequestResult{
+			Status: store.RequestFailed, ErrorCode: "MEDIA_DOWNLOAD_FAILED"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := "/api/v1/requests/" + strconv.FormatInt(req.ID, 10) + "/reset_attempts"
+
+	resp := e.apiPost(j, path, csrf, "")
+	requireAPIStatus(t, resp, "reset_attempts", http.StatusOK)
+	got, _ := e.st.GetRequest(ctx, req.ID)
+	if got.Status != store.RequestFailed || got.Attempt != 1 || got.ErrorCode != "MEDIA_DOWNLOAD_FAILED" {
+		t.Fatalf("重置后应保持 failed/attempt=1/错误码不动：%+v", got)
+	}
+	if !e.containsAction("request.reset_attempts") {
+		t.Error("重置应写审计 request.reset_attempts")
+	}
+
+	// 非 failed 状态 → 409 STORE_CONSTRAINT（重置后的 failed/attempt=1 行
+	// 幂等返回 200，另造 succeeded 行验证拒绝分支）
+	succ := seedRequest(t, e, 1, "alpha", 2, store.RequestQueued)
+	if err := e.st.FinishRequest(ctx, succ.ID, store.RequestResult{Status: store.RequestSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	csrf = apiCSRFToken(t, e, j)
+	resp = e.apiPost(j, "/api/v1/requests/"+strconv.FormatInt(succ.ID, 10)+"/reset_attempts", csrf, "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("非 failed 重置应 409，得到 %d", resp.StatusCode)
+	}
+	var env apiErrorEnvelope
+	decodeAPIJSON(t, bodyOf(t, resp), &env)
+	if env.Error.Code != string(apperr.CodeStoreConstraint) || env.Error.Message != resetErrText(apperr.New(apperr.CodeStoreConstraint, "")) {
+		t.Errorf("非 failed 重置错误响应不对: %+v", env.Error)
+	}
+
+	// 不存在 → 404
+	resp = e.apiPost(j, "/api/v1/requests/999/reset_attempts", csrf, "")
+	requireJSONError(t, resp.StatusCode, resp.Header.Get("Content-Type"), bodyOf(t, resp), apiCodeNotFound)
+}
+
+// 配置动态生效：调低上限后，attempt 低于旧缺省值的 failed 行也按
+// RETRY_EXHAUSTED 拒绝（409），拒绝文案携带当前配置值。
+func TestAPIRequestRetryDynamicLimit(t *testing.T) {
+	e := newTestEnv(t, nil)
+	j := e.login(t)
+	csrf := apiCSRFToken(t, e, j)
+	seedUser(t, e, 1, store.UserEnabled)
+	req := seedRequest(t, e, 1, "alpha", 1, store.RequestFailed)
+	if err := syscfg.SetMaxRequestAttempts(context.Background(), e.st, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := e.apiPost(j, "/api/v1/requests/"+strconv.FormatInt(req.ID, 10)+"/retry", csrf, "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("上限调到 1 后重试应 409，得到 %d", resp.StatusCode)
+	}
+	var env apiErrorEnvelope
+	decodeAPIJSON(t, bodyOf(t, resp), &env)
+	if env.Error.Code != string(apperr.CodeRetryExhausted) {
+		t.Fatalf("应返回 RETRY_EXHAUSTED: %+v", env.Error)
+	}
+	if !strings.Contains(env.Error.Message, "1 次") {
+		t.Errorf("拒绝文案应携带当前上限值: %q", env.Error.Message)
+	}
+
+	// 详情接口 attempt_max 下发当前配置值
+	var detail apiRequestDetail
+	getAPIJSON(t, e, j, "/api/v1/requests/"+strconv.FormatInt(req.ID, 10), &detail)
+	if detail.AttemptMax != 1 {
+		t.Errorf("详情 attempt_max 应为配置值 1，得到 %d", detail.AttemptMax)
 	}
 }

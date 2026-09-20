@@ -372,6 +372,7 @@ const applicationsFixture = {
 const settingsFixture = {
   timezone: "Asia/Shanghai",
   max_links_per_message: 30,
+  max_request_attempts: 3,
   dedup_window_min: 30,
   queue_capacity: 8,
   queue_runtime: 8,

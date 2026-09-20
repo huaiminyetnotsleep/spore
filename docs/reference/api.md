@@ -464,9 +464,15 @@
 
 ### POST /api/v1/requests/{id}/retry
 
-受控重试（认证 + CSRF），无请求体。仅失败状态的请求可重试；不扣用户额度。响应 `{"ok":true}`。
+受控重试（认证 + CSRF），无请求体。仅失败状态的请求可重试；不扣用户额度。响应 `{"ok":true}`。累计尝试上限为动态配置 `max_request_attempts`（默认 3，可配 1–10，见[配置参考](./configuration.md)）。
 
-错误：`404`；`409 STORE_CONSTRAINT`（仅失败状态可重试）、`409 RETRY_EXHAUSTED`（已达最大尝试次数）、`409 USER_DISABLED`（所属用户未启用）；`503 QUEUE_FULL`（内存队列已满）。
+错误：`404`；`409 STORE_CONSTRAINT`（仅失败状态可重试）、`409 RETRY_EXHAUSTED`（已达当前配置的最大尝试次数）、`409 USER_DISABLED`（所属用户未启用）；`503 QUEUE_FULL`（内存队列已满）。
+
+### POST /api/v1/requests/{id}/reset_attempts
+
+重置单条请求的累计尝试计数（认证 + CSRF），无请求体。仅失败状态的请求可重置：`attempt` 清回 1，状态、错误码与时间戳保持不变，**不自动重新入队**（清零后经 retry 端点显式重试）；计数已为 1 时幂等成功且不写审计。响应 `{"ok":true}`。
+
+错误：`404`；`409 STORE_CONSTRAINT`（仅失败状态可重置）。
 
 ### POST /api/v1/requests/{id}/cancel
 
@@ -1048,6 +1054,7 @@ cloud-drive.json.enc
 | `join_max_channels` | int | 活跃加入频道数量上限（0–200，0 = 不限；缺省 20） |
 | `join_mute_enabled` | bool | 加入后静音（缺省 `true`） |
 | `join_archive_enabled` | bool | 加入后归档（缺省 `true`） |
+| `max_request_attempts` | int | 单个请求累计尝试上限（1–10，含首次；即时生效；缺省 3） |
 | `download_threads` / `upload_threads` / `download_connections` / `upload_connections` | int | 传输并发当前生效值（1–16） |
 | `download_threads_env` / `upload_threads_env` / `download_connections_env` / `upload_connections_env` | int | 对应环境变量默认值 |
 | `download_threads_overridden` / `upload_threads_overridden` / `download_connections_overridden` / `upload_connections_overridden` | bool | 该项是否存在数据库覆盖（缺省 `false` = 跟随环境默认） |
@@ -1055,7 +1062,7 @@ cloud-drive.json.enc
 
 ### POST /api/v1/settings
 
-保存运营设置（认证 + CSRF）。按 时区 → 去重窗口 → 单次最大链接数 → 频道副本开关 → 复用开关 → 缓存频道 → 频道加入 → 队列容量 → worker 数 → 媒体参数 → 传输并发顺序逐项校验。生效方式：时区、去重窗口、单次最大链接数、频道副本开关、复用开关、缓存频道、频道加入、内存预算、传输并发**即时生效**；队列容量、worker 数、媒体参数**重启生效**。空缺字段保持不变；值未变化时不写审计。
+保存运营设置（认证 + CSRF）。按 时区 → 去重窗口 → 单次最大链接数 → 频道副本开关 → 复用开关 → 缓存频道 → 频道加入 → 最大尝试次数 → 队列容量 → worker 数 → 媒体参数 → 传输并发顺序逐项校验。生效方式：时区、去重窗口、单次最大链接数、频道副本开关、复用开关、缓存频道、频道加入、最大尝试次数、内存预算、传输并发**即时生效**；队列容量、worker 数、媒体参数**重启生效**。空缺字段保持不变；值未变化时不写审计。
 
 | 请求字段 | 类型 | 校验 |
 | --- | --- | --- |
@@ -1067,6 +1074,7 @@ cloud-drive.json.enc
 | `dump_channel` | string | 缓存频道目标：`@用户名` / `t.me` 链接 / `-100` 数字 ID；经 Bot 校验（频道存在且 Bot 可发帖）后保存数字 ID；空串清除配置（显式 `0` 覆盖环境变量） |
 | `join_enabled` / `join_auto_leave_external` / `join_require_approval` / `join_mute_enabled` / `join_archive_enabled` | bool | 频道加入配置，逐项可选 |
 | `join_max_channels` | int | 0–200（0 = 不限） |
+| `max_request_attempts` | int | 1–10（累计含首次）；缺省保持不变，保存后即时影响重试校验 |
 | `queue_capacity` | int | 1–4096；缺省保持不变 |
 | `worker_count` | int | 1–16；缺省保持不变 |
 | `max_file_size` + `max_file_unit` | string | 数值 + 单位（`MB`/`GB`）；缺省保持不变，**两项必须成对填写** |

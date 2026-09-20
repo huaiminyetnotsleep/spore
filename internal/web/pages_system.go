@@ -241,12 +241,15 @@ type settingsUpdateInput struct {
 	DumpChannel *string
 	// 频道加入（/join）配置；nil 表示不变更，合并当前值后整体写入
 	// （syscfg.JoinConfig 单一来源）。
-	JoinEnabled            *bool
-	JoinAutoLeaveExternal  *bool
-	JoinRequireApproval    *bool
-	JoinMaxChannels        *int
-	JoinMuteEnabled        *bool
-	JoinArchiveEnabled     *bool
+	JoinEnabled           *bool
+	JoinAutoLeaveExternal *bool
+	JoinRequireApproval   *bool
+	JoinMaxChannels       *int
+	JoinMuteEnabled       *bool
+	JoinArchiveEnabled    *bool
+	// MaxRequestAttempts 为单个请求累计尝试上限（含首次）；nil 表示不变更。
+	// 即时生效（syscfg 直查，重试校验与详情展示无缓存）。
+	MaxRequestAttempts     *int
 	DownloadThreads        *int
 	UploadThreads          *int
 	DownloadConnections    *int
@@ -449,6 +452,23 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 			}
 			s.audit(ctx, "settings.channel_join", "settings", map[string]any{
 				"before": before, "after": after, "effect": "即时生效"})
+		}
+	}
+
+	// 最大尝试次数（即时生效）：重试校验、详情展示与拒绝文案调用点直查，
+	// 无进程内缓存
+	if in.MaxRequestAttempts != nil {
+		n := *in.MaxRequestAttempts
+		if err := syscfg.ValidateMaxRequestAttempts(n); err != nil {
+			return res, &settingsParamError{err.Error()}
+		}
+		current := syscfg.LoadMaxRequestAttempts(ctx, s.st)
+		if n != current {
+			if err := syscfg.SetMaxRequestAttempts(ctx, s.st, n); err != nil {
+				return res, &settingsStoreError{op: "保存最大尝试次数", err: err}
+			}
+			s.audit(ctx, "settings.request_retry", "settings", map[string]any{
+				"before": current, "after": n, "effect": "即时生效"})
 		}
 	}
 

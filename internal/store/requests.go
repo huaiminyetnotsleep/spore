@@ -442,6 +442,25 @@ func (s *Store) RetryRequest(ctx context.Context, id int64, queuedAt int64) erro
 	return requestUpdateConflict(ctx, s, id, "重试请求")
 }
 
+// ResetRequestAttempts 把 failed 请求的累计尝试计数清回指定值（管理端
+// "重置尝试计数"动作的落库步骤）：只改 attempt，状态与时间戳、错误码
+// 均不动（请求保持 failed，等待管理员再次重试）。前置条件（状态 failed、
+// 计数已在下限时跳过）由 internal/access 的 ResetAttempts 在同一事务内
+// 校验后再调用本方法。
+func (s *Store) ResetRequestAttempts(ctx context.Context, id int64, attempt int) error {
+	res, err := s.ex.ExecContext(ctx, `UPDATE requests SET attempt = ?
+		WHERE id = ? AND status = ?`, attempt, id, RequestFailed)
+	if err != nil {
+		return wrapDB("重置尝试计数", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return wrapDB("重置尝试计数", err)
+	} else if n > 0 {
+		return nil
+	}
+	return requestUpdateConflict(ctx, s, id, "重置尝试计数")
+}
+
 func requestStateConflict(id int64, status, op string) error {
 	return apperr.Wrap(apperr.CodeStoreConstraint,
 		fmt.Errorf("%s：请求 %d 当前状态为 %s", op, id, status))
