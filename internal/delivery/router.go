@@ -127,26 +127,24 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
 // 按防御错误处理。
 //
-// 整组发送成功后执行"恰好组首一条 caption"不变量（repairAlbumCaptions，
-// 参照缓存频道副本 WriteClean 的已验证机制——副本只保留每组首条 caption，
-// 展示一直正常）：客户端对相册的首渲染在**多个成员携带 caption** 时抑制
-// 组级展示位（相册下方空白；真机 2026-09-20 五组实验：恰好组首一条 → 正常
-// 展示，2+ 条 → 抑制——包括把署名写到组末分段后缓存频道副本也失去文字的
-// 反向验证）。发送路径已按不变量构造（拆分段仅组首携带 caption），此处兜底：
-// 非组首成员带 caption 则清空，组首 caption 缺失则补写。MTProto 分支与
-// Bot API 分支的拆分相册（Split 标记）执行；普通相册（全员 Bot API 承载且
-// 无拆分）不执行，历史行为不变。
+// 发送前执行"恰好组首一条 caption"归一化（normalizeAlbumCaptions）：客户端
+// 对相册的首渲染在**多个成员携带 caption** 时抑制组级展示位（相册下方空白；
+// 真机 2026-09-20 五组实验：恰好组首一条 → 正常展示，2+ 条 → 抑制——包括
+// 把署名写到组末分段后缓存频道副本也失去文字的反向验证）。全部成员语义
+// caption（各成员正文、切段说明）按源顺序合并进组首并保留实体，其余成员
+// 清零——两条整组通道（Bot API sendMediaGroup 与 MTProto sendMultiMedia）
+// 从首次请求起就收到规范形态，不依赖发送后编辑修补（Bot API 空串编辑受
+// 依赖库 omitempty 影响不可靠，且补写完成前存在错误展示窗口）。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
-	allAPI := true
-	splitAlbum := false
 	for i, e := range entries {
 		if e.Reader == nil {
 			return nil, apperr.New(apperr.CodeInternal,
 				fmt.Sprintf("相册第 %d 项缺少上传数据源（Reader 为空）", i))
 		}
-		if e.Split {
-			splitAlbum = true
-		}
+	}
+	entries = s.normalizeAlbumCaptions(chatID, entries)
+	allAPI := true
+	for i, e := range entries {
 		switch {
 		case e.Media.Size <= s.uploadCap && s.api.AlbumGroupable(e.Media): // Bot API 承载
 		case e.Media.Size <= s.largeCap &&
@@ -158,14 +156,7 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 		}
 	}
 	if allAPI {
-		ids, err := s.api.SendAlbum(ctx, chatID, entries)
-		if err != nil {
-			return nil, err
-		}
-		if splitAlbum { // 拆分相册走 Bot API 分支（本地服务器模式）：同样重写 caption
-			s.repairAlbumCaptions(ctx, chatID, entries, ids)
-		}
-		return ids, nil
+		return s.api.SendAlbum(ctx, chatID, entries)
 	}
 	if !s.large.Available() {
 		return nil, apperr.New(apperr.CodeLargeChannelUnavailable,
@@ -179,66 +170,36 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 		readers[i] = e.Reader
 		captions[i] = e.Caption
 	}
-	ids, err := s.large.SendAlbum(ctx, chatID, medias, readers, captions)
-	if err != nil {
-		return nil, err
-	}
-	s.repairAlbumCaptions(ctx, chatID, entries, ids)
-	return ids, nil
+	return s.large.SendAlbum(ctx, chatID, medias, readers, captions)
 }
 
-// repairAlbumCaptions 整组发送成功后，把组首成员的署名 caption 强制写入
-// **组首与组末**两个成员（经 Bot API 编辑链路，参照缓存频道副本 WriteClean
-// 的已验证机制）。
-//
-// 客户端对相册组级展示位（相册下方唯一的 caption 槽）的成员取舍规则不稳定，
-// 真机实验矩阵（2026-09-20，[图片(署名), 段1(署名), 段2(空 caption)]）：
-//   - 完整三成员 → 展示位空白（caption 数据在线上，点开单条可见）；
-//   - 删除组首图片 → 展示位出现分段署名；
-//   - 删除组末空 caption 分段 → 展示位出现文字与原链接。
-//
-// 删除任一成员（组级重渲染）都让展示位恢复，说明数据在、渲染规则不稳——
-// 与"组末成员 caption 为空"强相关。两端写入使展示位无论按首/末/其他规则
-// 解析都能渲染完整署名；绑定频道副本（裸 copyMessages）随源消息自然继承。
-//
-// 两步强制写入（占位符 → 目标）：两次都是相对当前状态的真修改，不依赖空
-// caption 的序列化行为，也免疫"线上已等于目标内容"的 no-op 吸收。首末是
-// 同一条消息（单成员防御）时只写一次。尽力而为：媒体此刻已送达，编辑失败
-// 只记 Warn（带 Telegram 原始错误文本，真机观测点）、不改变发送结果；任一
-// 目标成功即记 Info。
-// repairAlbumCaptions 整组发送成功后执行"恰好组首一条 caption"不变量的
-// 兜底（Bot API editMessageCaption，与缓存频道副本 WriteClean 同款编辑
-// 链路）。客户端对相册的首渲染在多个成员携带 caption 时抑制组级展示位
-// （真机 2026-09-20 五组实验矩阵，含把署名写到组末分段后缓存频道副本一并
-// 失去文字的反向验证；恰好组首一条——如正常相册、单视频切段、修复前的
-// 缓存频道副本——展示正常）。发送路径已按不变量构造，此处兜底：
-//   - 非组首成员带 caption → 清空（多 caption 抑制展示；缓存频道副本经
-//     copyMessages 忠实继承，清空同时修正下游副本）；
-//   - 组首 caption 缺失（发送链路意外丢失）→ 补写（线上已正确时为
-//     "message is not modified" no-op）。
-//
-// 尽力而为：媒体此刻已送达，编辑失败只记 Warn（带 Telegram 原始错误文本，
-// 真机观测点）、不改变发送结果。
-func (s *routerSender) repairAlbumCaptions(ctx context.Context, chatID int64, entries []AlbumEntry, ids []int) {
-	if len(ids) != len(entries) || len(ids) == 0 {
-		return
-	}
-	for i := 1; i < len(entries); i++ {
-		if entries[i].Caption.RenderHTML() == "" {
-			continue
-		}
-		if err := s.api.EditMessageCaption(ctx, chatID, ids[i], ""); err != nil {
-			s.log.Warn("非组首 caption 清空失败（相册下方署名可能缺失）",
-				"chat_id", chatID, "message_id", ids[i], "error", err.Error())
-		} else {
-			s.log.Info("非组首成员 caption 已清空（保证组级展示位渲染组首署名）",
-				"chat_id", chatID, "message_id", ids[i])
+// normalizeAlbumCaptions 把整组 caption 归一化为"恰好组首一条"：全部成员
+// 语义 caption 经 message.MergeCaptions 按源顺序合并进组首（实体偏移按
+// UTF-16 平移、频道脚注保留组首一份），其余成员 caption 清零。返回浅拷贝
+// 切片，不修改调用方条目。折叠了多条 caption 时记 Info 观测（只含计数，
+// 不含消息内容），供远程核对归一化是否发生。
+func (s *routerSender) normalizeAlbumCaptions(chatID int64, entries []AlbumEntry) []AlbumEntry {
+	out := make([]AlbumEntry, len(entries))
+	copy(out, entries)
+	nonEmpty := 0
+	for _, e := range out {
+		if e.Caption.Text != "" {
+			nonEmpty++
 		}
 	}
-	if captionHTML := entries[0].Caption.RenderHTML(); captionHTML != "" {
-		if err := s.api.EditMessageCaption(ctx, chatID, ids[0], captionHTML); err != nil {
-			s.log.Warn("组首 caption 补写失败（相册下方署名可能缺失）",
-				"chat_id", chatID, "message_id", ids[0], "error", err.Error())
-		}
+	if nonEmpty <= 1 {
+		return out
 	}
+	captions := make([]message.Caption, len(out))
+	for i, e := range out {
+		captions[i] = e.Caption
+	}
+	merged := message.MergeCaptions(captions)
+	for i := range out {
+		out[i].Caption = message.Caption{}
+	}
+	out[0].Caption = merged
+	s.log.Info("相册多成员 caption 已归一化为组首一条",
+		"chat_id", chatID, "members", len(out), "captions", nonEmpty)
+	return out
 }

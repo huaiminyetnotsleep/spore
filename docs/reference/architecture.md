@@ -227,14 +227,14 @@ SourceRef
                上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
                整组直传；全 document 组（分卷拆分段）同走该通道；
                通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
-               拆分相册满足"恰好组首一条 caption"不变量：客户端对多成员
+               全部相册满足"恰好组首一条 caption"不变量：客户端对多成员
                带 caption 的相册首渲染会抑制组级展示位（真机五组实验
-               2026-09-20，含缓存频道副本反向验证），分段仅组首携带 caption，
-               混合相册的署名与切段说明折叠进组首成员；发送成功后路由层
-               执行不变量兜底（非组首清空、组首补写，与缓存频道副本同款
-               Bot API 编辑链路）——MTProto 分支恒执行，Bot API 分支对拆分
-               相册执行（分段带 Split 标记，本地服务器模式下整组走
-               sendMediaGroup）；尽力而为，失败只记日志。混合相册拆分整组
+               2026-09-20，含缓存频道副本反向验证），路由层发送前把全部
+               成员语义 caption（各成员正文、切段说明）按源顺序合并进组首
+               （实体按 UTF-16 平移、频道脚注保留组首一份），其余成员清零
+               ——Bot API（含本地服务器模式下的拆分相册）与 MTProto 从首次
+               请求起就收到规范形态；不做发送后 caption 修补（空串编辑受
+               依赖库 omitempty 影响不可靠）。混合相册拆分整组
                同样按 split 记 delivery_mode（与单媒体拆分同语义）
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
@@ -269,9 +269,10 @@ SourceRef
 直传，任务级原子（任何成员失败整组失败、零字节发出）；展开后超相册 10 成员
 上限时回退逐条（非视频成员走字节分段）。拆分放弃
 "边下边传"交叠（流复制与区间读取依赖完整落盘），先 WaitDownloaded 再切再传，
-磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。缓存频道干净副本按
-源条目分组（sentSpans）复制清洗。delivery_mode 记 `split`（仅成功时，失败
-回落 upload 由错误码记录原因）。
+磁盘峰值 ≈ 2× 文件大小（TEMP_DIR_MAX_SIZE 需覆盖）。缓存频道干净副本与
+投递同为"恰好组首一条合并 caption"：worker 从实际展开条目以同一合并语义
+生成 canonical clean caption（剥离频道脚注），副本只重写组首。
+delivery_mode 记 `split`（仅成功时，失败回落 upload 由错误码记录原因）。
 
 默认 MaxFileSize 为 2000MB（MTProto 上传硬上限：4000 part × 512KB）；
 默认 InMemoryLimit 为 512MB（单文件常驻内存上限）；内存路径另受进程级
@@ -306,14 +307,19 @@ MaxFileSize 的成员不可整组，相册逐条发送（逐条后超限成员�
 频道，bot 为管理员）写一份**无脚注干净副本**——给用户的投递 caption 织有
 该用户绑定频道的脚注，副本必须剥离：单媒体 `copyMessage` 带 caption 覆盖
 （干净 caption = 引用正文 + 原消息链接，不含频道脚注）；单文本 `SendMessage`
-干净渲染；多条 `copyMessages` 整批复制（相册保组）后逐条
-`editMessageCaption`/`editMessageText` 清洗。副本坐标落 `dump_entries`
-（迁移 v13）。同链接再次提交时，`runJob` 在取数之前先 `tryReuseFromDump`：
+干净渲染；多条逐条投递 `copyMessages` 整批复制后按条目清洗；相册投递本身
+已是"恰好组首一条合并 caption"，副本只重写组首为 canonical clean caption
+（全部成员正文与切段说明按源顺序合并，源条目重建会把多 caption 形态带回
+缓存）。副本坐标落 `dump_entries`（迁移 v13；v16 起 `format_version`
+标记副本布局格式，历史格式行不再命中复用）。同链接再次提交时，`runJob` 在取数之前先 `tryReuseFromDump`：
 查最新副本条目 → `copyMessages(缓存频道 → 目标聊天)` 整条复制——服务端
 复制媒体与 caption，无损、无转发头、**不受媒体大小限制（2GB 与 10KB 同
 路径）**、相册保组、caption 从构造上无脚注泄露、副本不因原用户删消息失效，
 跳过整个 fetch/下载/上传。绑定频道的用户收到复制品后经 fetch 一次重建
-caption（1 次 RPC）编辑补上自己的脚注；复制失败（副本被删等）回落完整
+caption（1 次 RPC）编辑补上自己的脚注——普通相册合并全部成员正文后只编辑
+首条（缓存副本是组首一条合并 caption，只用首条源正文会丢其余成员正文）；
+拆分展开副本（复制条数 > 源条目数）跳过覆盖，保留缓存 canonical caption
+（源 items 无法重建运行期切段说明）。复制失败（副本被删等）回落完整
 链路，成功后重写副本自愈。额度照扣、终态记 `delivery_mode=reuse`；总开关
 `tg_reuse_enabled`（settings，默认开，即时生效）与 `DUMP_CHANNEL_ID` 未
 配置均回到完整"下载+上传"链路。历史上的用户聊天坐标复用（v12
@@ -335,7 +341,7 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 ### 3.6 Album 聚合
 
-同一 `GroupedID` 的多条消息是一个 Album，不能按独立消息逐条发送。`Fetch` 发现 `GroupedID != 0` 时**一次批量取** `[ID-9, ID+9]` 共 19 个 ID（`channels.getMessages` 支持批量），过滤相同 GroupedID 按升序返回。发送时 **caption 逐成员绑定**（保持源相册中文字与媒体的对应关系；客户端对组内 caption 的展示策略不影响数据保真）。整组只接受 photo/video，且 `AlbumMaxItems=10`（超过 10 项暂不拆分，直接返回错误）；路由按成员大小分流——全员在 Bot API 上限内走 `sendMediaGroup`，含超限成员（video 且 ≤2000MB）走 Bot 号 MTProto 两阶段整组直传：每成员 `uploader.Upload` → `messages.uploadMedia`（注册到目标 peer，换取带新鲜 file_reference 的坐标）→ 汇总为 `InputMediaPhoto/InputMediaDocument` 引用 → `messages.sendMultiMedia` 一次整组发送（sendMultiMedia 只接受已注册引用，raw `inputMediaUploaded*` 会被 400 MEDIA_INVALID 拒绝——真机结论 2026-09-03）；photo 超 photoLimit、document/audio 成员或超 2000MB 时整组降级逐条发送。
+同一 `GroupedID` 的多条消息是一个 Album，不能按独立消息逐条发送。`Fetch` 发现 `GroupedID != 0` 时**一次批量取** `[ID-9, ID+9]` 共 19 个 ID（`channels.getMessages` 支持批量），过滤相同 GroupedID 按升序返回。发送时逐成员构造语义 caption，路由层发送前统一归一化为"恰好组首一条合并 caption"（全部成员正文按源顺序合并进组首并保留实体；客户端对多成员 caption 的相册首渲染抑制组级展示位——真机 2026-09-20；不做发送后修补）。整组只接受 photo/video，且 `AlbumMaxItems=10`（超过 10 项暂不拆分，直接返回错误）；路由按成员大小分流——全员在 Bot API 上限内走 `sendMediaGroup`，含超限成员（video 且 ≤2000MB）走 Bot 号 MTProto 两阶段整组直传：每成员 `uploader.Upload` → `messages.uploadMedia`（注册到目标 peer，换取带新鲜 file_reference 的坐标）→ 汇总为 `InputMediaPhoto/InputMediaDocument` 引用 → `messages.sendMultiMedia` 一次整组发送（sendMultiMedia 只接受已注册引用，raw `inputMediaUploaded*` 会被 400 MEDIA_INVALID 拒绝——真机结论 2026-09-03）；photo 超 photoLimit、document/audio 成员或超 2000MB 时整组降级逐条发送。
 
 ### 3.7 持久化：内嵌 SQLite（internal/store）
 
@@ -343,7 +349,7 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 **选型**：`modernc.org/sqlite`（纯 Go 驱动，无 CGO，保住 `make linux` 交叉编译）+ 标准库 `database/sql`。连接级 PRAGMA 挂在 DSN 上（WAL、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL`），连接数固定为 1——SQLite 单写者，容量目标（≤100 用户、约 5,000 请求/日，约 180 万行/年）远低于其上限，不需要外部数据库服务。
 
-**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v15）共 **13 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
+**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v16）共 **13 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
 
 **数据红线**：消息正文、caption、媒体本体与明文凭据（Token/Session/手机号）不入库；通知通道与 GitHub OAuth 的可轮换外部凭据以 AES-256-GCM 密文存于 `settings`，Web 访问密钥只存 SHA-256 哈希；云盘凭据在 `data/cloud-drive.json` 文件中，不进数据库。`data/session.json`、`data/peers.json`、`data/tmp/` 维持文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
 
@@ -784,7 +790,7 @@ media.Open(ctx, api, media, jobID, opt, log)
  ├─ SendMessage / DeleteMessage：429 → 等 RetryAfter+1 秒后重试一次
  ├─ SendMedia：photo 超 sendPhoto 上限(10MB) → 归一为 document 发送；
  │      按 Kind 分发 sendPhoto / Video / Voice / Audio / Document
- ├─ SendAlbum（router 分流，caption 逐成员绑定在 AlbumEntry 上）：
+ ├─ SendAlbum（router 分流，发送前把全部成员 caption 归一化为组首一条）：
  │      全员 ≤uploadCap 且 Bot API 可整组 → sendMediaGroup 整组原子发送
  │      （attach://<名字> 挂附件，每项各自渲染 caption HTML）；组内混入
  │      不支持类型或超限图片 → ErrAlbumNotSupported；

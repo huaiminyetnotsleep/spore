@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 )
@@ -72,7 +74,10 @@ type fakeAPISender struct {
 	editCalls    []string
 	groupable    bool
 
-	// captionEdits 记录 EditMessageCaption 调用（路由的整组 caption 修复）；
+	// lastEntries 记录最近一次 SendAlbum 收到的条目（归一化后的形态）。
+	lastEntries []AlbumEntry
+
+	// captionEdits 记录 EditMessageCaption 调用（缓存清洗/复用补脚注等）；
 	// captionErr 非 nil 时该调用返回错误（仍记录）。
 	captionEdits []captionEditCall
 	captionErr   error
@@ -97,6 +102,7 @@ func (f *fakeAPISender) SendMedia(context.Context, int64, message.Media, message
 
 func (f *fakeAPISender) SendAlbum(_ context.Context, _ int64, entries []AlbumEntry) ([]int, error) {
 	f.albumCalls++
+	f.lastEntries = entries
 	ids := make([]int, len(entries))
 	for i := range entries {
 		ids[i] = i + 1
@@ -255,8 +261,12 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 		if large.lastReaders[0] == nil || large.lastReaders[1] == nil {
 			t.Error("整组调用应携带全部数据源")
 		}
-		if large.lastCaptions[0].Text != "图说明" || large.lastCaptions[1].Text != "视频说明" {
-			t.Errorf("整组调用应逐成员透传 caption: %+v", large.lastCaptions)
+		// 归一化：两条语义 caption 合并进组首，其余成员清零
+		if large.lastCaptions[0].Text != "图说明\n\n视频说明" {
+			t.Errorf("caption 应合并进组首: %q", large.lastCaptions[0].Text)
+		}
+		if large.lastCaptions[1].Text != "" || len(large.lastCaptions[1].Entities) != 0 {
+			t.Errorf("非组首 caption 应清零: %+v", large.lastCaptions[1])
 		}
 	})
 
@@ -376,15 +386,15 @@ func TestRouterCopyMessagesDelegation(t *testing.T) {
 	}
 }
 
-// TestRouterAlbumCaptionRepair 整组发送成功后执行"恰好组首一条 caption"
-// 不变量兜底：客户端对多成员带 caption 的相册首渲染抑制组级展示位（真机
-// 2026-09-20 五组实验），非组首 caption 清空、组首缺失补写（已正确时为
-// no-op）。MTProto 分支恒执行；Bot API 分支仅对拆分相册（Split 标记）执行；
-// 普通相册不执行；失败不改变已完成的发送结果。
-func TestRouterAlbumCaptionRepair(t *testing.T) {
+// TestRouterAlbumCaptionNormalization 发送前把整组 caption 归一化为"恰好
+// 组首一条"：客户端对多成员带 caption 的相册首渲染抑制组级展示位（真机
+// 2026-09-20 五组实验），全部成员语义 caption 按源顺序合并进组首（正文、
+// 切段说明、实体保留），其余成员清零——两条整组通道从首次请求起就收到
+// 规范形态，无任何发送后 caption 编辑。归一化不修改调用方条目。
+func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("MTProto 整组 → 非组首 caption 清空、组首补写", func(t *testing.T) {
+	t.Run("MTProto 整组 → 合并进组首、其余清零", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -396,45 +406,61 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 				Caption: message.Caption{Text: "视频说明"}},
 			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("c")},
 		}
-		ids, err := s.SendAlbum(ctx, 7, entries)
-		if err != nil {
+		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
 			t.Fatalf("MTProto 整组直传应成功: %v", err)
 		}
-		if len(api.captionEdits) != 2 {
-			t.Fatalf("应清空 1 个非组首 caption 并补写组首: %d", len(api.captionEdits))
+		if large.albumCalls != 1 {
+			t.Fatalf("应一次整组直传: %d", large.albumCalls)
 		}
-		if api.captionEdits[0].chatID != 7 || api.captionEdits[0].messageID != ids[1] ||
-			api.captionEdits[0].caption != "" {
-			t.Errorf("非组首应被清空: %+v", api.captionEdits[0])
+		if large.lastCaptions[0].Text != "图片说明\n\n视频说明" {
+			t.Errorf("caption 应按源顺序合并进组首: %q", large.lastCaptions[0].Text)
 		}
-		if api.captionEdits[1].messageID != ids[0] || api.captionEdits[1].caption != "图片说明" {
-			t.Errorf("组首应被补写: %+v", api.captionEdits[1])
+		for i := 1; i < len(large.lastCaptions); i++ {
+			if large.lastCaptions[i].Text != "" {
+				t.Errorf("成员 %d caption 应清零: %q", i, large.lastCaptions[i].Text)
+			}
+		}
+		if len(api.captionEdits) != 0 {
+			t.Errorf("不应有任何发送后 caption 编辑: %+v", api.captionEdits)
+		}
+		// 调用方条目不被修改
+		if entries[0].Caption.Text != "图片说明" || entries[1].Caption.Text != "视频说明" {
+			t.Errorf("归一化不应修改调用方条目: %q %q", entries[0].Caption.Text, entries[1].Caption.Text)
 		}
 	})
 
-	t.Run("Bot API 整组（普通相册）→ 不执行（历史行为不变）", func(t *testing.T) {
+	t.Run("Bot API 整组（普通相册）→ 同样归一化", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
-				Caption: message.Caption{Text: "图片说明"}},
-			{Media: message.Media{Kind: message.KindPhoto, Size: 20}, Reader: strings.NewReader("b")},
+				Caption: message.Caption{Text: "图一"}},
+			{Media: message.Media{Kind: message.KindPhoto, Size: 20}, Reader: strings.NewReader("b"),
+				Caption: message.Caption{Text: "图二"}},
 		}
 		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
 			t.Fatalf("Bot API 整组应成功: %v", err)
 		}
-		if api.albumCalls != 1 || len(api.captionEdits) != 0 {
-			t.Fatalf("普通相册不应触发 caption 编辑: album=%d edits=%d",
-				api.albumCalls, len(api.captionEdits))
+		if api.albumCalls != 1 {
+			t.Fatalf("应一次整组上传: %d", api.albumCalls)
+		}
+		if api.lastEntries[0].Caption.Text != "图一\n\n图二" {
+			t.Errorf("普通相册也应归一化进组首: %q", api.lastEntries[0].Caption.Text)
+		}
+		if api.lastEntries[1].Caption.Text != "" {
+			t.Errorf("第二成员 caption 应清零: %q", api.lastEntries[1].Caption.Text)
+		}
+		if len(api.captionEdits) != 0 {
+			t.Errorf("不应有任何发送后 caption 编辑: %+v", api.captionEdits)
 		}
 	})
 
-	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样执行不变量", func(t *testing.T) {
+	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样归一化", func(t *testing.T) {
 		// 本地 Bot API 服务器：uploadCap = MaxFileSize，分段全员落在 Bot API
-		// 承载内、整组走 sendMediaGroup 分支——拆分相册同样需要不变量兜底，
-		// 由 Split 标记触发
+		// 承载内、整组走 sendMediaGroup 分支——与 MTProto 分支同一归一化规则，
+		// 不再有 Split 特判
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -443,44 +469,74 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
 				Caption: message.Caption{Text: "图片说明"}},
 			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part1of2", Size: testUploadCap},
-				Reader: strings.NewReader("p1"), Split: true},
+				Reader: strings.NewReader("p1"), Caption: message.Caption{Text: "大文件\n\n已切分为 2 段视频"}},
 			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part2of2", Size: testUploadCap},
-				Reader: strings.NewReader("p2"), Split: true},
+				Reader: strings.NewReader("p2")},
 		}
-		ids, err := s.SendAlbum(ctx, 7, entries)
-		if err != nil {
+		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
 			t.Fatalf("Bot API 整组应成功: %v", err)
 		}
 		if api.albumCalls != 1 || large.albumCalls != 0 {
 			t.Fatalf("应只调 Bot API 通道: api=%d large=%d", api.albumCalls, large.albumCalls)
 		}
-		// 分段本就不带 caption（发送路径不变量）：只有组首补写一次
-		if len(api.captionEdits) != 1 || api.captionEdits[0].messageID != ids[0] ||
-			api.captionEdits[0].caption != "图片说明" {
-			t.Fatalf("应只有组首补写: %+v", api.captionEdits)
+		got := api.lastEntries[0].Caption.Text
+		if !strings.Contains(got, "图片说明") || !strings.Contains(got, "大文件") || !strings.Contains(got, "已切分为 2 段视频") {
+			t.Errorf("组首应合并图片正文、视频正文与切段说明: %q", got)
+		}
+		if api.lastEntries[1].Caption.Text != "" || api.lastEntries[2].Caption.Text != "" {
+			t.Errorf("分段 caption 应清零: %+v %+v", api.lastEntries[1].Caption, api.lastEntries[2].Caption)
+		}
+		if len(api.captionEdits) != 0 {
+			t.Errorf("不应有任何发送后 caption 编辑: %+v", api.captionEdits)
 		}
 	})
 
-	t.Run("不变量执行失败 → 发送结果不受影响", func(t *testing.T) {
+	t.Run("合并保留实体并平移 UTF-16 偏移", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
-		api := &fakeAPISender{groupable: true, captionErr: errors.New("edit failed")}
+		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
-				Caption: message.Caption{Text: "图片说明"}},
+				Caption: message.Caption{Text: "ab", Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 2}}}},
 			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("b"),
-				Caption: message.Caption{Text: "视频说明"}},
+				Caption: message.Caption{Text: "cd", Entities: []tg.MessageEntityClass{&tg.MessageEntityItalic{Offset: 0, Length: 2}}}},
 		}
-		ids, err := s.SendAlbum(ctx, 7, entries)
-		if err != nil {
-			t.Fatalf("caption 编辑失败不应让已完成的整组发送失败: %v", err)
+		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
+			t.Fatalf("整组应成功: %v", err)
 		}
-		if large.albumCalls != 1 || len(ids) != 2 {
-			t.Fatalf("整组发送应照常完成: album=%d ids=%v", large.albumCalls, ids)
+		merged := large.lastCaptions[0]
+		if merged.Text != "ab\n\ncd" {
+			t.Fatalf("合并文本不符: %q", merged.Text)
 		}
-		if len(api.captionEdits) != 2 {
-			t.Fatalf("清空与补写各应尝试一次: %d", len(api.captionEdits))
+		if len(merged.Entities) != 2 {
+			t.Fatalf("应保留两条实体: %+v", merged.Entities)
+		}
+		first, ok := merged.Entities[0].(*tg.MessageEntityBold)
+		if !ok || first.Offset != 0 || first.Length != 2 {
+			t.Errorf("组首实体应保持原偏移: %+v", merged.Entities[0])
+		}
+		second, ok := merged.Entities[1].(*tg.MessageEntityItalic)
+		if !ok || second.Offset != 4 || second.Length != 2 {
+			t.Errorf("后续实体应平移到前缀之后（UTF-16）: %+v", merged.Entities[1])
+		}
+	})
+
+	t.Run("恰好组首一条 → 原样透传", func(t *testing.T) {
+		large := &fakeLargeSender{available: true}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
+				Caption: message.Caption{Text: "唯一说明", Channels: []message.ChannelLink{{Label: "频道", URL: "https://t.me/c"}}}},
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("b")},
+		}
+		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
+			t.Fatalf("整组应成功: %v", err)
+		}
+		if large.lastCaptions[0].Text != "唯一说明" || len(large.lastCaptions[0].Channels) != 1 {
+			t.Errorf("单条 caption 应原样透传: %+v", large.lastCaptions[0])
 		}
 	})
 }

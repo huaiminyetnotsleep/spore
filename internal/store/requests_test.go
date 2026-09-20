@@ -764,10 +764,41 @@ func TestDumpEntries(t *testing.T) {
 	if got.ID != latest.ID || len(got.DumpIDs) != 3 || got.DumpIDs[2] != 23 {
 		t.Fatalf("应命中最新条目并保持顺序: %+v", got)
 	}
+	if got.FormatVersion != DumpFormatVersion {
+		t.Fatalf("新条目应为当前格式版本: %+v", got)
+	}
 	if _, err := s.LatestDumpEntry(ctx, "example", 8); !errors.Is(err, ErrNotFound) {
 		t.Errorf("无条目应 ErrNotFound，得到 %v", err)
 	}
 	if _, err := s.LatestDumpEntry(ctx, "other", 7); !errors.Is(err, ErrNotFound) {
 		t.Errorf("其他频道不应命中: %v", err)
+	}
+}
+
+// TestDumpEntriesFormatVersionFilter 历史格式行（format_version < 当前版本）
+// 不再命中：旧副本可能是相册多 caption 形态，复用会把问题带回用户聊天——
+// 坐标保留供审计，忽略后由下次成功投递自愈重写。
+func TestDumpEntriesFormatVersionFilter(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// 直接注入一条历史格式行（绕过 InsertDumpEntry 的恒写当前版本）
+	if _, err := s.ex.ExecContext(ctx, `INSERT INTO dump_entries
+		(channel_key, message_id, dump_ids_json, format_version, created_at) VALUES (?,?,?,?,?)`,
+		"example", 7, `[11,12]`, 0, nowMillis()); err != nil {
+		t.Fatalf("注入历史行失败: %v", err)
+	}
+	if _, err := s.LatestDumpEntry(ctx, "example", 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("历史格式行不应命中: %v", err)
+	}
+
+	// 新写入当前版本后命中；同链接混存两代时仍只返回当前版本
+	if _, err := s.InsertDumpEntry(ctx, DumpEntry{
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{21}}); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+	got, err := s.LatestDumpEntry(ctx, "example", 7)
+	if err != nil || got.DumpIDs[0] != 21 {
+		t.Fatalf("当前格式行应命中: %+v err=%v", got, err)
 	}
 }

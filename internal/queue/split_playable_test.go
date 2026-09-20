@@ -172,12 +172,14 @@ func photoMsg(id int, accessHash int64, size int) *tg.Message {
 }
 
 // 混合相册 [图片, 超限视频] 拆分整组：图片 + 2 个可播放分段合成同一条相册
-// 原子投递。断言四件事（真机 2026-09-20 回归）：
-//   - 成员形态 [photo, video, video]，图片为组首且携带完整署名（正文 +
-//     来源链接 + 频道脚注）与折叠的切段说明；
-//   - 分段一律不带 caption（"恰好组首一条 caption"不变量：客户端对多成员
-//     带 caption 的相册首渲染抑制组级展示位），分段带 Split 标记（路由层
-//     据此对 Bot API 分支同样执行不变量兜底）；
+// 原子投递。worker 逐成员构造语义 caption（正文/来源/脚注在各自归属成员上，
+// 切段说明跟其视频成员）——整组 caption 由路由层发送前归一化合并到组首
+// （见 delivery/router_test.go 的归一化测试）。断言四件事（真机 2026-09-20
+// 回归）：
+//   - 成员形态 [photo, video, video]，图片为组首且携带正文 + 来源链接 +
+//     频道脚注；
+//   - 后置视频成员自己的正文与切段说明保留在其首段（不静默丢弃，路由层
+//     归一化时并入组首）；
 //   - delivery_mode 归并为 split（此前混合拆分整组路径漏标 split，被归并
 //     为 upload，管理端"分段投递"口径失真）。
 func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
@@ -227,22 +229,29 @@ func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
 		call.Kinds[1] != message.KindVideo || call.Kinds[2] != message.KindVideo {
 		t.Fatalf("成员形态应为 [图片, 段1, 段2]: %+v", call.Kinds)
 	}
-	if call.Splits[0] || !call.Splits[1] || !call.Splits[2] {
-		t.Fatalf("Split 标记应只落在分段上: %+v", call.Splits)
-	}
-	// 组首图片携带完整署名 + 折叠的切段说明（分段自身不带 caption）
-	for _, want := range []string{"图注", "https://t.me/example/7", "已切分为 2 段"} {
+	// 组首图片携带正文 + 来源链接 + 频道脚注（无切段说明——说明归属视频成员）
+	for _, want := range []string{"图注", "https://t.me/example/7"} {
 		if !strings.Contains(call.Captions[0].Text, want) {
 			t.Errorf("组首图片 caption 缺少 %q: %q", want, call.Captions[0].Text)
 		}
 	}
+	if strings.Contains(call.Captions[0].Text, "已切分为") {
+		t.Errorf("组首不应折叠切段说明（说明归属视频成员首段）: %q", call.Captions[0].Text)
+	}
 	if len(call.Captions[0].Channels) != 1 || call.Captions[0].Channels[0].Label != "我的频道" {
 		t.Errorf("组首图片应携带频道脚注: %+v", call.Captions[0].Channels)
 	}
-	for i := 1; i <= 2; i++ {
-		if call.Captions[i].Text != "" || len(call.Captions[i].Channels) != 0 {
-			t.Errorf("分段 %d 不应带 caption/脚注（恰好组首一条 caption 不变量）: %+v", i, call.Captions[i])
+	// 后置视频成员自己的正文与切段说明保留在其首段（路由归一化时并入组首）
+	for _, want := range []string{"大文件", "已切分为 2 段"} {
+		if !strings.Contains(call.Captions[1].Text, want) {
+			t.Errorf("分段首段 caption 缺少 %q: %q", want, call.Captions[1].Text)
 		}
+	}
+	if len(call.Captions[1].Channels) != 0 {
+		t.Errorf("非组首分段不应携带频道脚注: %+v", call.Captions[1].Channels)
+	}
+	if call.Captions[2].Text != "" || len(call.Captions[2].Channels) != 0 {
+		t.Errorf("次段不应带 caption/脚注: %+v", call.Captions[2])
 	}
 }
 

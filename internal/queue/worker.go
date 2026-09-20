@@ -337,7 +337,7 @@ func (d Deps) writeCleanDump(ctx context.Context, j Job, meta mediaMeta) {
 	defer cancel()
 	sourceURL, _ := j.Ref.URL()
 	d.Dump.WriteClean(cctx, j.BotID, j.ChatID, refChannelKey(j.Ref), j.Ref.MessageID,
-		meta.Items, meta.SentSpans, sourceURL)
+		meta.Items, meta.SentSpans, sourceURL, meta.CleanAlbumCaptionHTML)
 }
 
 // channelLinks 读取该用户绑定频道的脚注链接（尽力而为：失败降级为空，
@@ -432,7 +432,7 @@ func sendConverted(ctx context.Context, d Deps, j Job, target int64, msgs []*tg.
 	defer cancelSend()
 
 	if isAlbum(items) {
-		return meta, sendAlbumGroup(sendCtx, d, j, target, items, sourceURL, links, &meta.Track, sent)
+		return meta, sendAlbumGroup(sendCtx, d, j, target, items, sourceURL, links, &meta, sent)
 	}
 
 	for _, it := range items {
@@ -478,6 +478,28 @@ type mediaMeta struct {
 	// Items 是转换后的标准化条目（内存传递，不落库）：成功收尾时供
 	// dumpcache.WriteClean 构造无脚注干净副本。复用与云盘路径为零值。
 	Items []message.Item
+	// CleanAlbumCaptionHTML 是相册投递的 canonical 组首干净 caption（渲染后
+	// HTML、无频道脚注；内存传递不落库）：从实际展开的相册条目按源顺序合并
+	// 全部成员正文与切段说明（与路由归一化同一份合并语义），writeCleanDump
+	// 据此让缓存频道副本与投递保持同一"恰好组首一条"布局。非相册任务为零值
+	// （副本仍按条目清洗）。
+	CleanAlbumCaptionHTML string
+}
+
+// cleanAlbumCaptionHTML 把实际投递的相册条目 caption 合并为缓存频道副本的
+// canonical 组首 clean caption：全部成员正文按源顺序折叠（含拆分成员正文与
+// 切段说明），剥离用户频道脚注（缓存副本天然无脚注）。条目为空或全部
+// caption 为空时返回 ""（调用方回退按条目清洗）。
+func cleanAlbumCaptionHTML(entries []delivery.AlbumEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	captions := make([]message.Caption, len(entries))
+	for i, e := range entries {
+		captions[i] = e.Caption
+		captions[i].Channels = nil
+	}
+	return message.MergeCaptions(captions).RenderHTML()
 }
 
 // mediaMetaOf 从标准化条目提取落库元数据：
@@ -757,7 +779,8 @@ func planAlbumSend(d Deps, j Job, items []message.Item) ([]albumMemberPlan, erro
 // 显式取消以停止其余在途下载（含分钟级 ToPath），函数返回时兜底取消。
 // 可拆成员的切段等待（WaitDownloaded）同样挂在 openCtx 下——其余成员失败
 // 时下载 ctx 被取消，切段等待随之返回错误，整组原子失败。
-func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
+func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []message.Item, sourceURL string, links []message.ChannelLink, meta *mediaMeta, sent *sentIDs) error {
+	track := &meta.Track
 	plans, planErr := planAlbumSend(d, j, items)
 	if planErr != nil {
 		// 超限视频无法切段：整组原子失败（零下载零投递，图片不会先发出）
@@ -798,15 +821,6 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 	defer cancelOpen()
 	g, gctx := errgroup.WithContext(ctx)
 	sem := make(chan struct{}, albumOpenConcurrency)
-	// 混合拆分整组的组首说明：组首为普通成员（如图片）而后置成员切段时，
-	// 切段说明折叠进组首 caption——多成员带 caption 会抑制相册组级展示位
-	//（真机 2026-09-20），分段自身一律不带 caption
-	laterSplitSegs := 0
-	for i := range items {
-		if plans[i].split && i != 0 {
-			laterSplitSegs += plans[i].count
-		}
-	}
 	for i, it := range items {
 		g.Go(func() error {
 			select { // 信号量限并发；首个失败取消后续排队者
@@ -824,8 +838,9 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 			if plans[i].split {
 				// 可拆视频成员：完整落盘 → ffmpeg 切段 → 展开为 N 个分段
 				// 条目（不经过 prepareVideoThumb——其 reader 会被切段路径
-				// 的区间读取取代，头部字节不能被消费）；caption 仅在该成员
-				// 是组首时挂首段（多 caption 抑制组级展示，见函数级注释）
+				// 的区间读取取代，头部字节不能被消费）；该成员自己的正文与
+				// 切段说明挂首段（withSource=是整组组首时另带原链/脚注），
+				// 整组 caption 由路由层发送前统一归一化合并
 				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
 					sourceURL, links, i == 0)
 				if err != nil {
@@ -845,15 +860,11 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 			caption := it.MediaCaption().WithQuotedBody()
 			if i == 0 {
 				caption = caption.WithSourceLink(sourceURL).WithChannels(links)
-				if laterSplitSegs > 0 {
-					// 后置成员的切段说明折叠到组首（分段自身不带 caption）
-					caption = caption.WithNote(splitVideoNote(laterSplitSegs))
-				}
 			}
 			memberEntries[i] = []delivery.AlbumEntry{{
 				Media:   m,
 				Reader:  uploadReader(d, j, src),
-				Caption: caption, // 逐成员绑定；组级署名与切段说明只置于组首
+				Caption: caption, // 语义 caption 逐成员携带；发送前由路由层归一化合并到组首
 			}}
 			return nil
 		})
@@ -868,6 +879,10 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 	for _, me := range memberEntries {
 		entries = append(entries, me...)
 	}
+	// canonical clean caption：与路由归一化同一份合并语义（从实际展开的
+	// entries 计算，切段说明保留），剥离用户频道脚注后供缓存频道副本一次性
+	// 重写组首，使副本与投递同为"恰好组首一条"布局。仅任务内存传递不落库。
+	meta.CleanAlbumCaptionHTML = cleanAlbumCaptionHTML(entries)
 	// 全员打开成功：openCtx 仍存活，SendAlbum 消费期间后台下载持续推进
 	ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)
 	if err != nil {

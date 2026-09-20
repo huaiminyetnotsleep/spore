@@ -2,6 +2,7 @@ package message
 
 import (
 	"reflect"
+	"strings"
 
 	"github.com/gotd/td/tg"
 )
@@ -18,6 +19,42 @@ type Caption struct {
 }
 
 const sourceLinkText = "🔗 原消息"
+
+// MergeCaptions 按输入顺序把多条成员 caption 合并为一条组级 caption：
+// 非空正文以空行连接（保持源顺序），后续成员实体按 UTF-16 前缀长度平移
+// （星界字符按双 unit 计），频道脚注只保留首个携带者——组级署名恰出现
+// 一次且位于最末。合并不做长度截断：Bot API / MTProto 各自的 RenderHTML /
+// Limited 仍是唯一的预算执行点。输入原样保留（实体经 cloneEntityWithOffset
+// 浅拷贝平移，不污染源实体）。相册"恰好组首一条 caption"归一化使用。
+func MergeCaptions(captions []Caption) Caption {
+	var out Caption
+	var text strings.Builder
+	units := 0
+	entities := make([]tg.MessageEntityClass, 0)
+	for _, c := range captions {
+		if c.Text == "" {
+			continue // 空正文无内容可并（实体失去定位基准，一并跳过）
+		}
+		if text.Len() > 0 {
+			const sep = "\n\n"
+			text.WriteString(sep)
+			units += newUnitMapper(sep).units
+		}
+		for _, e := range c.Entities {
+			if shifted, ok := cloneEntityWithOffset(e, units); ok {
+				entities = append(entities, shifted)
+			}
+		}
+		text.WriteString(c.Text)
+		units += newUnitMapper(c.Text).units
+		if len(out.Channels) == 0 && len(c.Channels) > 0 {
+			out.Channels = c.Channels
+		}
+	}
+	out.Text = text.String()
+	out.Entities = entities
+	return out
+}
 
 // WithQuotedBody 把正文包进普通引用块（blockquote），与链接卡片、频道脚注形成
 // 视觉区分；正文自带的实体（加粗/链接等）保留嵌套。必须在 WithSourceLink /

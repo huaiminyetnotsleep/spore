@@ -51,7 +51,7 @@ func tryReuseFromDump(ctx context.Context, d Deps, j Job) (mediaMeta, []int, boo
 	items := fetchForFootnote(ctx, d, j)
 	meta := metaMetaFromHistory(ctx, d, j)
 	if len(items) > 0 {
-		if ferr := applyFootnote(ctx, d, j, items, ids[0]); ferr != nil {
+		if ferr := applyFootnote(ctx, d, j, items, ids); ferr != nil {
 			d.Log.Info("复制品补脚注失败（脚注省略，不影响任务）",
 				"job_id", j.ID, "error", ferr.Error())
 		}
@@ -90,20 +90,61 @@ func fetchForFootnote(ctx context.Context, d Deps, j Job) []message.Item {
 	return items
 }
 
-// applyFootnote 对复制的首条消息补上含用户频道脚注的 caption（媒体
-// editMessageCaption，文本 editMessageText）。
-func applyFootnote(ctx context.Context, d Deps, j Job, items []message.Item, firstID int) error {
+// applyFootnote 为绑定频道的用户给复制品补上含其频道脚注的首条 caption
+// （媒体 editMessageCaption，文本 editMessageText）。
+//   - 普通相册（复制条数 == 源条目数且同组）：全部源成员 caption 按源顺序
+//     合并后编辑首条——缓存副本是"恰好组首一条合并 caption"形态，只用
+//     items[0] 重建会丢其余成员正文；
+//   - 拆分展开副本（复制条数 > 源条目数）：源 items 无法重建运行期生成的
+//     切段说明，跳过覆盖以保留缓存 canonical caption（脚注省略，尽力而为）；
+//   - 其余（单条、非同组的多条独立投递）：仅重建首条，历史行为不变。
+func applyFootnote(ctx context.Context, d Deps, j Job, items []message.Item, ids []int) error {
+	if len(ids) == 0 || len(items) == 0 {
+		return nil
+	}
 	sourceURL, _ := j.Ref.URL()
 	links, _ := d.Channels.PublicChannelLinks(ctx, j.UserID)
+	if len(ids) != len(items) { // 拆分展开：保留缓存 canonical caption
+		d.Log.Info("拆分展开副本跳过脚注重写（保留缓存 caption）",
+			"job_id", j.ID, "items", len(items), "messages", len(ids))
+		return nil
+	}
 	first := items[0]
-	if first.Media != nil {
+	if first.Media == nil {
+		return d.senderFor(j).EditMessageText(ctx, j.ChatID, ids[0], first.RenderHTMLWithSource(sourceURL, links))
+	}
+	if len(items) == 1 || !isSameAlbum(items) {
 		caption := first.MediaCaption().WithQuotedBody()
 		if sourceURL != "" {
 			caption = caption.WithSourceLink(sourceURL).WithChannels(links)
 		}
-		return d.senderFor(j).EditMessageCaption(ctx, j.ChatID, firstID, caption.RenderHTML())
+		return d.senderFor(j).EditMessageCaption(ctx, j.ChatID, ids[0], caption.RenderHTML())
 	}
-	return d.senderFor(j).EditMessageText(ctx, j.ChatID, firstID, first.RenderHTMLWithSource(sourceURL, links))
+	// 相册：全部成员正文合并进组首（与投递归一化同构），补上用户脚注
+	captions := make([]message.Caption, len(items))
+	for i, it := range items {
+		c := it.MediaCaption().WithQuotedBody()
+		if i == 0 && sourceURL != "" {
+			c = c.WithSourceLink(sourceURL)
+		}
+		captions[i] = c
+	}
+	merged := message.MergeCaptions(captions).WithChannels(links)
+	return d.senderFor(j).EditMessageCaption(ctx, j.ChatID, ids[0], merged.RenderHTML())
+}
+
+// isSameAlbum 判断条目是否同属一个相册组（GroupedID 一致且非零的媒体）。
+func isSameAlbum(items []message.Item) bool {
+	gid := items[0].GroupedID
+	if gid == 0 {
+		return false
+	}
+	for _, it := range items {
+		if !it.IsAlbumMember() || it.GroupedID != gid {
+			return false
+		}
+	}
+	return true
 }
 
 // metaMetaFromHistory 兜底还原：从同链接最近成功请求行取媒体诊断元数据

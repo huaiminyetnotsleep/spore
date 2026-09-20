@@ -265,3 +265,90 @@ func TestCaptionWithNote(t *testing.T) {
 		}
 	})
 }
+
+func TestMergeCaptions(t *testing.T) {
+	t.Run("按源顺序空行连接并保留全部实体", func(t *testing.T) {
+		got := MergeCaptions([]Caption{
+			{Text: "图一", Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 4}}},
+			{Text: "图二", Entities: []tg.MessageEntityClass{&tg.MessageEntityItalic{Offset: 0, Length: 4}}},
+		})
+		if got.Text != "图一\n\n图二" {
+			t.Fatalf("应按源顺序空行连接: %q", got.Text)
+		}
+		if len(got.Entities) != 2 {
+			t.Fatalf("应保留全部实体: %+v", got.Entities)
+		}
+		bold, ok := got.Entities[0].(*tg.MessageEntityBold)
+		if !ok || bold.Offset != 0 || bold.Length != 4 {
+			t.Errorf("组首实体偏移应不变: %#v", got.Entities[0])
+		}
+		italic, ok := got.Entities[1].(*tg.MessageEntityItalic)
+		if !ok || italic.Offset != 4 || italic.Length != 4 { // "图一"(2) + "\n\n"(2)
+			t.Errorf("后续实体应平移到前缀之后（含分隔符）: %#v", got.Entities[1])
+		}
+	})
+
+	t.Run("星界字符前缀按双 unit 平移", func(t *testing.T) {
+		got := MergeCaptions([]Caption{
+			{Text: "😀ab"}, // 6 UTF-16 units（emoji 2 + a/b 各 2？否——ASCII 各 1，共 4）
+			{Text: "cd", Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 2}}},
+		})
+		if got.Text != "😀ab\n\ncd" {
+			t.Fatalf("合并文本不符: %q", got.Text)
+		}
+		bold, ok := got.Entities[0].(*tg.MessageEntityBold)
+		if !ok || bold.Offset != 6 { // 4（😀ab）+ 2（\n\n）
+			t.Errorf("emoji 前缀后实体应按 UTF-16 平移 6: %#v", got.Entities[0])
+		}
+	})
+
+	t.Run("空 caption 跳过", func(t *testing.T) {
+		got := MergeCaptions([]Caption{
+			{},
+			{Text: "正文"},
+			{},
+		})
+		if got.Text != "正文" || len(got.Entities) != 0 {
+			t.Fatalf("空 caption 应跳过: %+v", got)
+		}
+		if MergeCaptions(nil).Text != "" {
+			t.Fatal("空输入应返回零值 caption")
+		}
+	})
+
+	t.Run("频道脚注只保留首个携带者", func(t *testing.T) {
+		links := []ChannelLink{{Label: "频道", URL: "https://t.me/c"}}
+		got := MergeCaptions([]Caption{
+			{Text: "一", Channels: links},
+			{Text: "二", Channels: []ChannelLink{{Label: "其他", URL: "https://t.me/x"}}},
+		})
+		if len(got.Channels) != 1 || got.Channels[0].Label != "频道" {
+			t.Fatalf("应只保留组首脚注: %+v", got.Channels)
+		}
+		html := got.RenderHTML()
+		if strings.Count(html, "t.me/c") != 1 || strings.Contains(html, "t.me/x") {
+			t.Fatalf("脚注应恰出现一次且为组首的: %q", html)
+		}
+	})
+
+	t.Run("合并不截断，预算仍由渲染入口执行", func(t *testing.T) {
+		long := strings.Repeat("a", maxCaptionUnits)
+		got := MergeCaptions([]Caption{{Text: long}, {Text: long}})
+		if newUnitMapper(got.Text).units != 2*maxCaptionUnits+2 {
+			t.Fatalf("合并不应截断: %d", newUnitMapper(got.Text).units)
+		}
+		if lim := got.Limited(); newUnitMapper(lim.Text).units > maxCaptionUnits {
+			t.Fatalf("Limited 应执行预算: %d", newUnitMapper(lim.Text).units)
+		}
+	})
+
+	t.Run("输入 caption 不被修改", func(t *testing.T) {
+		first := Caption{Text: "一", Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 1}}}
+		second := Caption{Text: "二", Entities: []tg.MessageEntityClass{&tg.MessageEntityItalic{Offset: 0, Length: 1}}}
+		MergeCaptions([]Caption{first, second})
+		if first.Entities[0].(*tg.MessageEntityBold).Offset != 0 ||
+			second.Entities[0].(*tg.MessageEntityItalic).Offset != 0 {
+			t.Fatal("合并不得修改输入实体偏移")
+		}
+	})
+}

@@ -180,12 +180,12 @@ func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it mess
 // cleanup 关闭全部 reader 并删除段文件，必须在整组发送消费完 reader 之后
 // 调用（单媒体路径 defer、整组路径函数级 defer 统一兜底）。
 //
-// caption 只在 withCaption=true（该拆分成员是整组的第一条目，如单媒体
-// 拆分、大视频领队的混合相册）时挂到首段；否则分段一律不带 caption——
-// 客户端对"多成员带 caption"的相册首渲染会抑制组级展示位（相册下方空白，
-// 真机 2026-09-20 四轮实验：恰好组首一条 caption 正常展示，2+ 条抑制），
-// 混合相册的署名与切段说明由组首成员（sendAlbumGroup 的 i==0）携带。
-func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, withCaption bool) ([]delivery.AlbumEntry, func(), error) {
+// caption 语义：该拆分源成员自己的正文与切段说明始终挂在首段——路由层
+// 发送前会把整组 caption 统一归一化合并到组首（normalizeAlbumCaptions），
+// 归一化前每条语义 caption 都要在场，正文才不会丢；withSource 表示该成员
+// 是整组组首（单媒体拆分、大视频领队），由它携带原消息链接与频道脚注。
+// 其余分段一律不带 caption。
+func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, withSource bool) ([]delivery.AlbumEntry, func(), error) {
 	if err := h.WaitDownloaded(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -207,14 +207,11 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 		return nil, nil, err
 	}
 
-	var caption message.Caption
-	if withCaption {
-		caption = it.MediaCaption().WithQuotedBody()
-		if sourceURL != "" {
-			caption = caption.WithSourceLink(sourceURL).WithChannels(links)
-		}
-		caption = caption.WithNote(splitVideoNote(n))
+	caption := it.MediaCaption().WithQuotedBody()
+	if withSource {
+		caption = caption.WithSourceLink(sourceURL).WithChannels(links)
 	}
+	caption = caption.WithNote(splitVideoNote(n))
 
 	entries := make([]delivery.AlbumEntry, 0, n)
 	readers := make([]io.Closer, 0, n)
@@ -243,7 +240,6 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 			Media:   seg.media,
 			Reader:  uploadReader(d, j, f),
 			Caption: ec,
-			Split:   true, // 路由层据此对 Bot API 分支（本地服务器模式）同样执行 caption 重写
 		})
 	}
 	return entries, cleanup, nil
@@ -427,7 +423,6 @@ func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, i
 			Media:   pm,
 			Reader:  uploadReader(d, j, sr),
 			Caption: ec,
-			Split:   true, // 路由层据此对 Bot API 分支（本地服务器模式）同样执行 caption 重写
 		})
 	}
 	ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)

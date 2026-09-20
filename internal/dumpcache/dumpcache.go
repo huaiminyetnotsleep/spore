@@ -9,9 +9,14 @@ package dumpcache
 // 干净副本构造（给用户的投递 caption 织有脚注，副本必须剥离）：
 //   - 单媒体：copyMessage 带 caption 覆盖（干净 caption：引用正文+原链接）；
 //   - 单文本：SendMessage 干净渲染（无脚注）；
-//   - 多条：copyMessages 整批复制（保组）后按源条目分组清洗——每条源条目
-//     （分卷拆分会展开为连续多条分段消息）仅首条 editMessageCaption /
-//     editMessageText（首条带原消息链接；拆分段非首条 caption 本为空）。
+//   - 多条（非相册的逐条投递）：copyMessages 整批复制（保组）后按源条目
+//     分组清洗——每条源条目（分卷拆分会展开为连续多条分段消息）仅首条
+//     editMessageCaption / editMessageText（首条带原消息链接；拆分段非首条
+//     caption 本为空）；
+//   - 相册：投递本身已是"恰好组首一条合并 caption"（routerSender 发送前
+//     归一化，客户端对多成员 caption 抑制组级展示位），副本按 worker 传入
+//     的 canonical clean caption 只重写组首——不从源 items 按 span 重建
+//     多条 caption（会把问题形态带回缓存并经复用扩散）。
 //
 // 全部步骤尽力而为：任一失败只记日志、不落条目（下次成功投递自愈），
 // 不影响任务结果。首次失败以 Warn 提示检查 DUMP_CHANNEL_ID 与 bot 频道
@@ -154,11 +159,14 @@ func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, dumpIDs []in
 // 复制。items 与 sentSpans 按序对应（worker 发送顺序）：每个 span 是一条
 // 源条目展开的消息 ID 组——常规成员 1 条，分卷拆分段连续多条。单条目任务
 // 走 copyMessage 带 caption 覆盖（一步到位）；多条任务整批 CopyMessages
-// （保组）后按 span 清洗首条 caption（拆分段非首条 caption 本就为空）。
+// （保组）后清洗：相册（albumCleanCaptionHTML 非空）只重写组首为 canonical
+// 合并 caption——与投递同一"恰好组首一条"布局，其余成员 caption 已随
+// copyMessages 忠实继承（为空），不做发送后清空编辑；非相册逐条投递按
+// span 逐条清洗首条 caption（各成员独立消息，逐成员 caption 历史行为不变）。
 // 复用命中（Reused）的任务不再重写（条目即复制来源）。sourceURL 为原消息
 // 链接（首条织入）。
 func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKey string, messageID int,
-	items []message.Item, sentSpans [][]int, sourceURL string) {
+	items []message.Item, sentSpans [][]int, sourceURL, albumCleanCaptionHTML string) {
 	if !s.Enabled() {
 		return
 	}
@@ -197,22 +205,31 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 			s.failHint(ctx, err)
 			return
 		}
-		// 按 span 清洗首条 caption：常规成员各自清洗；拆分段仅首条带
-		// 脚注需清洗，其余段 caption 为空不处理。来源链接只织入首条目。
-		pos := 0
-		for i, span := range sentSpans {
-			first := i == 0
-			var cerr error
-			if items[i].Media != nil {
-				cerr = snd.EditMessageCaption(ctx, channel, ids[pos], CleanCaption(items[i], first, sourceURL, nil))
-			} else {
-				cerr = snd.EditMessageText(ctx, channel, ids[pos], items[i].RenderHTMLWithSource(sourceURL, nil))
-			}
-			if cerr != nil {
+		// 相册：只重写组首为 canonical 合并 caption（含全部成员正文与切段
+		// 说明、无频道脚注）；其余成员 caption 随复制继承（为空），不需要也
+		// 不应再编辑——避免空串清空的序列化不确定性。
+		if albumCleanCaptionHTML != "" {
+			if cerr := snd.EditMessageCaption(ctx, channel, ids[0], albumCleanCaptionHTML); cerr != nil {
 				s.failHint(ctx, cerr)
 				return
 			}
-			pos += len(span)
+		} else {
+			// 非相册逐条投递：按 span 清洗首条 caption。来源链接只织入首条目。
+			pos := 0
+			for i, span := range sentSpans {
+				first := i == 0
+				var cerr error
+				if items[i].Media != nil {
+					cerr = snd.EditMessageCaption(ctx, channel, ids[pos], CleanCaption(items[i], first, sourceURL, nil))
+				} else {
+					cerr = snd.EditMessageText(ctx, channel, ids[pos], items[i].RenderHTMLWithSource(sourceURL, nil))
+				}
+				if cerr != nil {
+					s.failHint(ctx, cerr)
+					return
+				}
+				pos += len(span)
+			}
 		}
 		dumpIDs = ids
 	}

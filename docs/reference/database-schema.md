@@ -42,7 +42,7 @@
 
 ## 2. Schema 总览
 
-当前版本 v15 包含 **13 张业务表、12 个显式索引、4 个数据库外键**：
+当前版本 v16 包含 **13 张业务表、12 个显式索引、4 个数据库外键**：
 
 - 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
 - `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`）自动维护的内部表，**不属于业务 schema**。
@@ -271,7 +271,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 
 ### 3.13 dump_entries
 
-任务成功投递后同步写入 bot 自有**缓存频道**的"干净副本"消息坐标（无脚注 caption，跨用户复用的唯一来源）。只存 bot 自有频道内的消息坐标，不存正文/媒体/凭据。同链接可有多条，"取最新"生效；副本被删时复用失败自动回落完整链路并重写副本自愈。生命周期独立于 `requests`（无外键）。
+任务成功投递后同步写入 bot 自有**缓存频道**的"干净副本"消息坐标（无脚注 caption，跨用户复用的唯一来源）。只存 bot 自有频道内的消息坐标，不存正文/媒体/凭据。同链接可有多条，"取当前格式最新"生效；副本被删时复用失败自动回落完整链路并重写副本自愈。生命周期独立于 `requests`（无外键）。
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -279,6 +279,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `channel_key` | TEXT | NOT NULL | 源链接的频道标识 |
 | `message_id` | INTEGER | NOT NULL | 源消息 ID |
 | `dump_ids_json` | TEXT | NOT NULL | 缓存频道内的消息 ID 数组（相册保组，按发送顺序） |
+| `format_version` | INTEGER | NOT NULL DEFAULT 0 | 副本布局格式版本（v16）：0 = 历史行（相册多 caption 旧形态），1 = "恰好组首一条合并 caption"；查询只命中当前版本，历史坐标保留供审计，复用回落完整投递后自愈重写 |
 | `created_at` | INTEGER | NOT NULL | 写入时间 |
 
 ## 4. 表关系与约束
@@ -447,3 +448,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v13 | `dump_entries` 表与索引 |
 | v14 | `system_metric_samples.cpu_percent` |
 | v15 | `requests.bot_id`、`requests.bot_username`；`users.source_bot_id`、`users.source_bot_username` |
+| v16 | `dump_entries.format_version`（缓存副本布局格式版本；历史行不再命中复用） |

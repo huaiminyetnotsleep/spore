@@ -258,6 +258,14 @@ ALTER TABLE requests ADD COLUMN bot_username TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN source_bot_id INTEGER NOT NULL DEFAULT 0;
 
 ALTER TABLE users ADD COLUMN source_bot_username TEXT NOT NULL DEFAULT '';`,
+
+	// v16：dump_entries 缓存副本格式版本——相册 caption 布局修复后副本
+	// canonical 形态变为"恰好组首一条合并 caption"（相册多成员 caption 会
+	// 被客户端抑制组级展示位），历史副本（默认版本 0）可能仍是多 caption
+	// 旧形态，复用会把问题带回用户聊天：LatestDumpEntry 只命中当前版本，
+	// 历史坐标保留供审计，复用回落完整投递后由 WriteClean 自愈重写。
+	// 只存整数版本号，非正文/caption（数据范围红线不变）。
+	`ALTER TABLE dump_entries ADD COLUMN format_version INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

@@ -133,7 +133,7 @@ func TestWriteCleanSingleMedia(t *testing.T) {
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "正文")}
-	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55}}, "https://t.me/example/7")
+	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55}}, "https://t.me/example/7", "")
 
 	if len(fs.singleCopies) != 1 {
 		t.Fatalf("单媒体应走 CopyMessage，得到 %+v", fs.singleCopies)
@@ -160,7 +160,7 @@ func TestWriteCleanSingleText(t *testing.T) {
 	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 
 	s.WriteClean(context.Background(), 0, 111, "example", 7,
-		[]message.Item{{ID: 7, Text: "纯文本"}}, [][]int{{66}}, "https://t.me/example/7")
+		[]message.Item{{ID: 7, Text: "纯文本"}}, [][]int{{66}}, "https://t.me/example/7", "")
 
 	if len(fs.sent) != 1 || len(fs.singleCopies) != 0 {
 		t.Fatalf("纯文本应走 SendMessage: sent=%v copy=%v", fs.sent, fs.singleCopies)
@@ -177,7 +177,7 @@ func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "图一"), mediaItem(8, "图二"), {ID: 9, Text: "附言"}}
-	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55}, {56}, {57}}, "https://t.me/example/7")
+	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55}, {56}, {57}}, "https://t.me/example/7", "")
 
 	if len(fs.copyMsgs) != 1 || fs.copyMsgs[0] != [2]int64{111, -1001234567890} {
 		t.Fatalf("多条应整批 CopyMessages: %+v", fs.copyMsgs)
@@ -206,14 +206,14 @@ func TestWriteCleanFailureNoEntry(t *testing.T) {
 	ctx := context.Background()
 
 	s.WriteClean(ctx, 0, 111, "example", 7,
-		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7")
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
 	if _, err := st.LatestDumpEntry(ctx, "example", 7); err == nil {
 		t.Fatal("复制失败不应落条目")
 	}
 
 	// 条目数与已发送数不一致同样跳过
 	s2 := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
-	s2.WriteClean(ctx, 0, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, [][]int{{55}}, "")
+	s2.WriteClean(ctx, 0, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, [][]int{{55}}, "", "")
 	if _, err := st.LatestDumpEntry(ctx, "example", 8); err == nil {
 		t.Fatal("数量不一致不应落条目")
 	}
@@ -317,7 +317,7 @@ func TestWriteCleanSplitSpan(t *testing.T) {
 
 	// 拆分投递：1 个源条目展开为 2 条分段消息（首条带脚注 caption，次条为空）
 	items := []message.Item{mediaItem(7, "大视频")}
-	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55, 56}}, "https://t.me/example/7")
+	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55, 56}}, "https://t.me/example/7", "")
 
 	if len(fs.copyMsgs) != 1 || fs.copyMsgs[0] != [2]int64{111, -1001234567890} {
 		t.Fatalf("拆分段应整批 CopyMessages: %+v", fs.copyMsgs)
@@ -328,5 +328,54 @@ func TestWriteCleanSplitSpan(t *testing.T) {
 	e, err := st.LatestDumpEntry(ctx, "example", 7)
 	if err != nil || len(e.DumpIDs) != 2 {
 		t.Fatalf("应落 2 条副本坐标: %+v err=%v", e, err)
+	}
+}
+
+// TestWriteCleanAlbumCanonicalPlan 相册走 worker 传入的 canonical clean
+// caption：整批复制后只重写组首一条（含全部成员正文与切段说明、无频道
+// 脚注），其余成员不做任何编辑——副本与投递同为"恰好组首一条"布局。
+func TestWriteCleanAlbumCanonicalPlan(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{}
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	ctx := context.Background()
+
+	items := []message.Item{mediaItem(7, "图注"), mediaItem(8, "大文件")}
+	plan := "图注\n\nhttps://t.me/example/7\n\n大文件\n\n已切分为 2 段视频"
+	s.WriteClean(ctx, 0, 111, "example", 7, items, [][]int{{55}, {56, 57}}, "https://t.me/example/7", plan)
+
+	if len(fs.copyMsgs) != 1 || fs.copyMsgs[0] != [2]int64{111, -1001234567890} {
+		t.Fatalf("应整批 CopyMessages: %+v", fs.copyMsgs)
+	}
+	if len(fs.capEdits) != 1 {
+		t.Fatalf("相册应只重写组首一次: %+v", fs.capEdits)
+	}
+	if fs.capEdits[0].MsgID != 700 || fs.capEdits[0].Caption != plan {
+		t.Fatalf("组首应重写为 canonical clean caption: %+v", fs.capEdits[0])
+	}
+	if len(fs.txtEdits) != 0 {
+		t.Fatalf("不应有文本编辑: %+v", fs.txtEdits)
+	}
+	e, err := st.LatestDumpEntry(ctx, "example", 7)
+	if err != nil || len(e.DumpIDs) != 3 {
+		t.Fatalf("应落 3 条副本坐标: %+v err=%v", e, err)
+	}
+	if e.FormatVersion != store.DumpFormatVersion {
+		t.Fatalf("新条目应为当前格式版本: %d", e.FormatVersion)
+	}
+}
+
+// TestWriteCleanAlbumPlanFailureNoEntry 相册复制失败：不落条目（下次成功
+// 投递自愈），不影响任务结果（尽力而为）。
+func TestWriteCleanAlbumPlanFailureNoEntry(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{failCopies: true}
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+
+	s.WriteClean(context.Background(), 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x"), mediaItem(8, "y")},
+		[][]int{{55}, {56}}, "https://t.me/example/7", "plan")
+	if _, err := st.LatestDumpEntry(context.Background(), "example", 7); err == nil {
+		t.Fatal("复制失败不应落条目")
 	}
 }

@@ -6,6 +6,7 @@ package queue
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -169,6 +170,73 @@ func TestReuseFromDumpFootnote(t *testing.T) {
 	}
 }
 
+// TestReuseAlbumFootnoteMergesAllBodies 普通相册复用补脚注：缓存副本是
+// "恰好组首一条合并 caption"形态，重建时必须合并全部源成员正文再编辑首条
+// ——只用 items[0] 会丢其余成员正文。后续成员不做任何编辑。
+func TestReuseAlbumFootnoteMergesAllBodies(t *testing.T) {
+	s := openStore(t)
+	job := reuseHarness(t, s, 7)
+	seedDumpEntry(t, s, 7, []int{11, 12})
+	sender := &fakeSender{}
+	p1, p2 := photoMsg(7, 1101, 10), photoMsg(8, 1102, 10)
+	p1.SetGroupedID(42)
+	p2.SetGroupedID(42)
+	fetcher := &countingFetcher{fakeFetcher: &fakeFetcher{msgs: []*tg.Message{p1, p2}}}
+	ch := &fakeChannels{links: map[int64][]message.ChannelLink{
+		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
+	}}
+	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
+		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Channels: ch}
+
+	runProcess(t, d, job)
+
+	if fetcher.calls != 1 {
+		t.Fatalf("绑定频道用户应 fetch 一次: %d", fetcher.calls)
+	}
+	if len(sender.captionEdits) != 1 {
+		t.Fatalf("相册补脚注应只编辑首条一次: %+v", sender.captionEdits)
+	}
+	edit := sender.captionEdits[0]
+	if edit.ChatID != job.ChatID || edit.MessageID != 400 {
+		t.Fatalf("应编辑复制品首条: %+v", edit)
+	}
+	for _, want := range []string{"图注", "https://t.me/example/7", "用户频道"} {
+		if !strings.Contains(edit.Caption, want) {
+			t.Errorf("合并 caption 缺少 %q: %q", want, edit.Caption)
+		}
+	}
+}
+
+// TestReuseSplitExpandedSkipsFootnote 拆分展开副本（复制条数 > 源条目数）：
+// 源 items 无法重建运行期切段说明，跳过脚注重写以保留缓存 canonical
+// caption——不做破坏性覆盖。
+func TestReuseSplitExpandedSkipsFootnote(t *testing.T) {
+	s := openStore(t)
+	job := reuseHarness(t, s, 7)
+	seedDumpEntry(t, s, 7, []int{11, 12}) // 1 个源条目展开的 2 条分段
+	sender := &fakeSender{}
+	fetcher := &countingFetcher{fakeFetcher: &fakeFetcher{
+		msgs: []*tg.Message{oversizeMsg(7, 1101, 64)}}}
+	ch := &fakeChannels{links: map[int64][]message.ChannelLink{
+		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
+	}}
+	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
+		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Channels: ch}
+
+	runProcess(t, d, job)
+
+	if fetcher.calls != 1 {
+		t.Fatalf("绑定频道用户应 fetch 一次: %d", fetcher.calls)
+	}
+	if len(sender.captionEdits) != 0 || len(sender.edits) != 0 {
+		t.Fatalf("拆分展开副本不应重写 caption: %+v %+v", sender.captionEdits, sender.edits)
+	}
+	req, _ := s.GetRequest(context.Background(), job.RequestID)
+	if req.Status != store.RequestSucceeded || req.DeliveryMode != store.DeliveryModeReuse {
+		t.Fatalf("跳过脚注不影响复用成功: %+v", req)
+	}
+}
+
 // TestReuseFromDumpCopyFailureSelfHeals 复制失败回落完整下载上传，
 // 任务成功且重写缓存频道条目（自愈）。
 func TestReuseFromDumpCopyFailureSelfHeals(t *testing.T) {
@@ -265,6 +333,59 @@ func TestWriteCleanAfterFullRun(t *testing.T) {
 	}
 	if _, err := s.LatestDumpEntry(context.Background(), "example", 7); err != nil {
 		t.Fatalf("全量成功应写干净副本条目: %v", err)
+	}
+}
+
+// TestWriteCleanAlbumCanonicalPlanAfterFullRun 全量相册投递成功后：缓存频道
+// 副本从用户聊天整批复制（保组），并按 worker 从实际展开条目计算的 canonical
+// clean caption 只重写组首一次——合并全部成员正文与原消息链接、剥离用户频道
+// 脚注；其余成员不做任何编辑（不按源条目重建多条 caption，副本与投递同为
+// "恰好组首一条"布局）。条目按当前格式版本落库。
+func TestWriteCleanAlbumCanonicalPlanAfterFullRun(t *testing.T) {
+	s := openStore(t)
+	job := reuseHarness(t, s, 7)
+	msgs := []*tg.Message{docMsg(7, 1401), docMsg(8, 1402)}
+	msgs[0].SetGroupedID(42)
+	msgs[1].SetGroupedID(42)
+	sender := &fakeSender{groupable: func(message.Media) bool { return true }}
+	d := uploadDeps(t, s, fetcherWith(errInvoker{}, msgs...), sender)
+	d.Dump = dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog())
+	d.Channels = &fakeChannels{links: map[int64][]message.ChannelLink{
+		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
+	}}
+
+	runJobSync(t, d, job)
+
+	if calls := sender.albumCallsSnapshot(); len(calls) != 1 || len(calls[0].Kinds) != 2 {
+		t.Fatalf("应整组发送一次且含两个成员: %+v", calls)
+	}
+	// 缓存副本：整批复制（保组），之后只有组首一次 caption 重写
+	if len(sender.copyCalls) != 1 || len(sender.copyCalls[0].MessageIDs) != 2 {
+		t.Fatalf("副本应整批复制 2 条: %+v", sender.copyCalls)
+	}
+	if c := sender.copyCalls[0]; c.FromChatID != job.ChatID || c.ChatID != testDumpChannel {
+		t.Fatalf("副本应从用户聊天复制到缓存频道: %+v", c)
+	}
+	if len(sender.captionEdits) != 1 {
+		t.Fatalf("相册副本应只重写组首一次: %+v", sender.captionEdits)
+	}
+	edit := sender.captionEdits[0]
+	if edit.ChatID != testDumpChannel || edit.MessageID != 400 { // fakeSender 整批复制自 400 起
+		t.Fatalf("应重写缓存频道内组首消息: %+v", edit)
+	}
+	if !strings.Contains(edit.Caption, "https://t.me/example/7") {
+		t.Errorf("canonical clean caption 应织入原消息链接: %q", edit.Caption)
+	}
+	// 两个成员正文（均为 "cap"）都保留在组首合并 caption 中
+	if got := strings.Count(edit.Caption, "cap"); got != 2 {
+		t.Errorf("canonical clean caption 应合并两个成员正文，得到 %d 处: %q", got, edit.Caption)
+	}
+	if strings.Contains(edit.Caption, "userchan") {
+		t.Errorf("canonical clean caption 不应带用户频道脚注: %q", edit.Caption)
+	}
+	entry, err := s.LatestDumpEntry(context.Background(), "example", 7)
+	if err != nil || len(entry.DumpIDs) != 2 || entry.DumpIDs[0] != 400 || entry.FormatVersion != store.DumpFormatVersion {
+		t.Fatalf("应按当前格式落 2 条副本坐标: %+v err=%v", entry, err)
 	}
 }
 

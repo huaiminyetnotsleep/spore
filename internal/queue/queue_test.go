@@ -85,11 +85,10 @@ type mediaCall struct {
 // albumCall 记录一次 SendAlbum 调用的信息。
 type albumCall struct {
 	Kinds     []message.ItemKind
-	Captions  []message.Caption // 逐成员 caption（worker 从各 item 的文字填充）
+	Captions  []message.Caption // 逐成员语义 caption（发送前归一化前 worker 构造的形态）
 	ReadLens  []int             // consumeAlbumReaders 时逐成员读得的字节数
 	ReadErrs  []error           // 逐成员读源错误（nil = 成功读尽）
 	ThumbLens []int             // 逐成员缩略图字节数（0 = 不带封面）
-	Splits    []bool            // 逐成员分卷拆分标记（路由层 caption 重写触发条件）
 }
 
 // copyCall 记录一次 CopyMessages 调用（复用路径）。
@@ -169,14 +168,12 @@ func (f *fakeSender) SendAlbum(_ context.Context, _ int64, entries []delivery.Al
 	kinds := make([]message.ItemKind, 0, len(entries))
 	captions := make([]message.Caption, 0, len(entries))
 	thumbLens := make([]int, 0, len(entries))
-	splits := make([]bool, 0, len(entries))
 	for _, e := range entries {
 		kinds = append(kinds, e.Media.Kind)
 		captions = append(captions, e.Caption)
 		thumbLens = append(thumbLens, len(e.Media.ThumbJPEG))
-		splits = append(splits, e.Split)
 	}
-	call := albumCall{Kinds: kinds, Captions: captions, ThumbLens: thumbLens, Splits: splits}
+	call := albumCall{Kinds: kinds, Captions: captions, ThumbLens: thumbLens}
 	var content [][]byte
 	if f.consumeAlbumReaders { // 模拟上传侧读源：驱动流式/内存管道的下载
 		for _, e := range entries {
