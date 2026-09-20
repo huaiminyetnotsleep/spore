@@ -95,9 +95,13 @@ func (f *fakeAPISender) SendMedia(context.Context, int64, message.Media, message
 	return 1, nil
 }
 
-func (f *fakeAPISender) SendAlbum(context.Context, int64, []AlbumEntry) ([]int, error) {
+func (f *fakeAPISender) SendAlbum(_ context.Context, _ int64, entries []AlbumEntry) ([]int, error) {
 	f.albumCalls++
-	return []int{1, 2}, nil
+	ids := make([]int, len(entries))
+	for i := range entries {
+		ids[i] = i + 1
+	}
+	return ids, nil
 }
 
 func (f *fakeAPISender) AlbumGroupable(message.Media) bool { return f.groupable }
@@ -372,11 +376,12 @@ func TestRouterCopyMessagesDelegation(t *testing.T) {
 	}
 }
 
-// TestRouterAlbumCaptionRepair MTProto 整组发送成功后逐成员修复非空 caption
-// （Bot API 编辑链路，与缓存频道副本 WriteClean 同款）：sendMultiMedia 逐成员
-// 携带的 caption 中图片成员在客户端不展示（相册聊天界面只渲染首条成员
-// caption，真机 2026-09-20），重写保证展示。Bot API 整组路径 caption 展示
-// 正常，不重写；修复失败不改变已完成的发送结果。
+// TestRouterAlbumCaptionRepair 整组发送成功后重写非空 caption（Bot API
+// 编辑链路，与缓存频道副本 WriteClean 同款）：相册聊天界面只渲染首条成员
+// caption，混合相册组首为图片时组级展示位缺失（真机 2026-09-20），重写
+// 保证展示。MTProto 分支恒重写；Bot API 分支仅对拆分相册（Split 标记，
+// 本地服务器模式下 1800MB 分段 ≤ uploadCap、整组走 sendMediaGroup）重写，
+// 普通相册不重写；修复失败不改变已完成的发送结果。
 func TestRouterAlbumCaptionRepair(t *testing.T) {
 	ctx := context.Background()
 
@@ -408,7 +413,7 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 		}
 	})
 
-	t.Run("Bot API 整组 → 不重写（caption 展示正常）", func(t *testing.T) {
+	t.Run("Bot API 整组（普通相册）→ 不重写（caption 展示正常）", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -422,8 +427,42 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 			t.Fatalf("Bot API 整组应成功: %v", err)
 		}
 		if api.albumCalls != 1 || len(api.captionEdits) != 0 {
-			t.Fatalf("Bot API 整组不应触发 caption 重写: album=%d edits=%d",
+			t.Fatalf("普通相册不应触发 caption 重写: album=%d edits=%d",
 				api.albumCalls, len(api.captionEdits))
+		}
+	})
+
+	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样重写 caption", func(t *testing.T) {
+		// 本地 Bot API 服务器：uploadCap = MaxFileSize，分段全员落在 Bot API
+		// 承载内、整组走 sendMediaGroup 分支——拆分相册的 caption 组级展示
+		// 同样需要发送后重写兜底，由 Split 标记触发
+		large := &fakeLargeSender{available: true}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
+				Caption: message.Caption{Text: "图片说明"}},
+			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part1of2", Size: testUploadCap},
+				Reader: strings.NewReader("p1"), Caption: message.Caption{Text: "首段"}, Split: true},
+			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part2of2", Size: testUploadCap},
+				Reader: strings.NewReader("p2"), Split: true},
+		}
+		ids, err := s.SendAlbum(ctx, 7, entries)
+		if err != nil {
+			t.Fatalf("Bot API 整组应成功: %v", err)
+		}
+		if api.albumCalls != 1 || large.albumCalls != 0 {
+			t.Fatalf("应只调 Bot API 通道: api=%d large=%d", api.albumCalls, large.albumCalls)
+		}
+		if len(api.captionEdits) != 2 {
+			t.Fatalf("含拆分段时应重写 2 个非空 caption: %d", len(api.captionEdits))
+		}
+		if api.captionEdits[0].messageID != ids[0] || api.captionEdits[0].caption != "图片说明" {
+			t.Errorf("组首图片 caption 重写应按位对应: %+v", api.captionEdits[0])
+		}
+		if api.captionEdits[1].messageID != ids[1] || api.captionEdits[1].caption != "首段" {
+			t.Errorf("首段 caption 重写应按位对应: %+v", api.captionEdits[1])
 		}
 	})
 

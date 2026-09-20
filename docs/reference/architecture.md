@@ -227,11 +227,14 @@ SourceRef
                上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
                整组直传；全 document 组（分卷拆分段）同走该通道；
                通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
-               MTProto 整组发送成功后逐成员重写非空 caption（Bot API
-               editMessageCaption，与缓存频道副本同款编辑链路）：sendMultiMedia
-               逐成员携带的 caption 里图片成员在客户端不展示（相册聊天界面只
-               渲染首条成员 caption），重写保证相册下方文字可见；尽力而为，
-               修复失败只记日志不影响已完成的发送
+               整组发送成功后重写非空 caption（Bot API editMessageCaption，
+               与缓存频道副本同款编辑链路）：相册聊天界面只渲染首条成员
+               caption，组级展示位可能缺失（真机复现），重写保证相册下方
+               文字可见。MTProto 分支恒重写；Bot API 分支对拆分相册重写
+               （分段带 Split 标记——本地 Bot API 服务器模式下分段全员落
+               Bot API 承载、整组走 sendMediaGroup，不标记则修复不执行）；
+               尽力而为，重写失败只记日志不影响已完成的发送。混合相册
+               拆分整组同样按 split 记 delivery_mode（与单媒体拆分同语义）
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
 上限（2000MB）的媒体不再失败——完整落盘后切为 N 个分段（⌈Size/1800MB⌉，

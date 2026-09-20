@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 
 	"github.com/huaiminyetnotsleep/spore/internal/media"
@@ -154,6 +156,94 @@ func TestWorkerSplitPlayableVideoSegments(t *testing.T) {
 	}
 	if r.DeliveryMode != store.DeliveryModeSplit {
 		t.Fatalf("delivery_mode 应为 split: %q", r.DeliveryMode)
+	}
+}
+
+// photoMsg 构造带 Progressive 尺寸的图片消息（Convert 提取最大尺寸为下载坐标）。
+func photoMsg(id int, accessHash int64, size int) *tg.Message {
+	return &tg.Message{
+		ID: id, Message: "图注",
+		Media: &tg.MessageMediaPhoto{Photo: &tg.Photo{
+			ID: 7000 + int64(id), AccessHash: accessHash, DCID: 2,
+			FileReference: []byte{byte(accessHash)},
+			Sizes:         []tg.PhotoSizeClass{&tg.PhotoSizeProgressive{Type: "x", Sizes: []int{size}}},
+		}},
+	}
+}
+
+// 混合相册 [图片, 超限视频] 拆分整组：图片 + 2 个可播放分段合成同一条相册
+// 原子投递。断言三件事（真机 2026-09-20 回归）：
+//   - 成员形态 [photo, video, video]，图片为组首且携带完整署名（正文 +
+//     来源链接 + 频道脚注），分段带 Split 标记（路由层据此对 Bot API 分支
+//     同样执行 caption 重写）；
+//   - 首段 caption 携带完整署名与切段说明（c653682 语义）；
+//   - delivery_mode 归并为 split（此前混合拆分整组路径漏标 split，被归并
+//     为 upload，管理端"分段投递"口径失真）。
+func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
+	requireFFmpeg(t)
+
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 0)
+	payload := genTestVideo(t, "ffmpeg", t.TempDir(), 4)
+
+	sender := &fakeSender{consumeAlbumReaders: true, captureAlbumContent: true,
+		groupable: func(m message.Media) bool { return m.Kind == message.KindPhoto }}
+	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}), sender)
+	d.Channels = &fakeChannelLinks{links: []message.ChannelLink{
+		{Label: "我的频道", URL: "https://t.me/mychannel"},
+	}}
+	d.Media = media.Options{
+		TmpDir:            t.TempDir(),
+		MaxFileSize:       int64(len(payload)) / 2,
+		MaxSplitTotalSize: int64(len(payload)) * 10,
+		SplitSegmentSize:  int64(len(payload))/2 + 1, // ceil(size/seg)=2 段
+		StreamLimit:       int64(len(payload)),       // 小图片走流式路径（超限视频强制落盘不受影响）
+		FFmpegPath:        "ffmpeg",
+	}
+	msgs := []*tg.Message{photoMsg(7, 1101, 10), oversizeMsg(8, 1102, len(payload))}
+	msgs[0].SetGroupedID(42)
+	msgs[1].SetGroupedID(42)
+	d.Fetcher.(*fakeFetcher).msgs = msgs
+	Process(d)(context.Background(), job)
+
+	r, err := s.GetRequest(context.Background(), job.RequestID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
+	}
+	if r.Status != store.RequestSucceeded {
+		t.Fatalf("任务应成功: %s/%s", r.Status, r.ErrorCode)
+	}
+	if r.DeliveryMode != store.DeliveryModeSplit {
+		t.Fatalf("混合拆分整组的 delivery_mode 应为 split: %q", r.DeliveryMode)
+	}
+
+	calls := sender.albumCallsSnapshot()
+	if len(calls) != 1 {
+		t.Fatalf("应一次整组发送: %+v", calls)
+	}
+	call := calls[0]
+	if len(call.Kinds) != 3 || call.Kinds[0] != message.KindPhoto ||
+		call.Kinds[1] != message.KindVideo || call.Kinds[2] != message.KindVideo {
+		t.Fatalf("成员形态应为 [图片, 段1, 段2]: %+v", call.Kinds)
+	}
+	if call.Splits[0] || !call.Splits[1] || !call.Splits[2] {
+		t.Fatalf("Split 标记应只落在分段上: %+v", call.Splits)
+	}
+	for _, want := range []string{"图注", "https://t.me/example/7"} {
+		if !strings.Contains(call.Captions[0].Text, want) {
+			t.Errorf("组首图片 caption 缺少 %q: %q", want, call.Captions[0].Text)
+		}
+	}
+	if len(call.Captions[0].Channels) != 1 || call.Captions[0].Channels[0].Label != "我的频道" {
+		t.Errorf("组首图片应携带频道脚注: %+v", call.Captions[0].Channels)
+	}
+	for _, want := range []string{"https://t.me/example/7", "已切分为 2 段"} {
+		if !strings.Contains(call.Captions[1].Text, want) {
+			t.Errorf("首段 caption 缺少 %q: %q", want, call.Captions[1].Text)
+		}
+	}
+	if call.Captions[2].Text != "" {
+		t.Errorf("次段不应带 caption: %q", call.Captions[2].Text)
 	}
 }
 

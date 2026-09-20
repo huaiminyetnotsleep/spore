@@ -871,6 +871,15 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 	} else {
 		sent.addSpan(ids)
 	}
+	// 混合相册的拆分整组：任一成员经切段展开时按 split 记观测（与单媒体
+	// 拆分路径同语义，delivery_mode 归并为 split；此前该路径漏标被归并为
+	// upload，管理端"分段投递"口径失真）
+	for i := range plans {
+		if plans[i].split {
+			track.split = true
+			break
+		}
+	}
 	track.delivered() // 整组成功按一次送达计
 	return nil
 }

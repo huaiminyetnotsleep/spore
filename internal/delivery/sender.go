@@ -80,10 +80,15 @@ type Sender interface {
 // AlbumEntry 相册单成员：媒体描述、数据源与该成员自己的 caption。
 // caption 逐成员绑定（两条整组通道同语义）；Telegram 客户端对相册 caption
 // 的展示策略（组内通常只显示一条）不影响数据的保真透传与转发保留。
+// Split 标记该条目由分卷拆分产生（视频切段/字节分段，见 queue/split.go）：
+// 拆分相册在本地 Bot API 服务器模式下（uploadCap=MaxFileSize）全员落在
+// Bot API 上限内、整组走 sendMediaGroup 分支——路由层据此对 Bot API 分支
+// 同样执行发送后的 caption 重写（见 routerSender.repairAlbumCaptions）。
 type AlbumEntry struct {
 	Media   message.Media
 	Reader  io.Reader
 	Caption message.Caption
+	Split   bool
 }
 
 // TryDeleteStatus 尽力删除状态提示消息：ID 为 0 跳过，失败仅记 debug 日志。

@@ -238,6 +238,7 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 			Media:   seg.media,
 			Reader:  uploadReader(d, j, f),
 			Caption: ec,
+			Split:   true, // 路由层据此对 Bot API 分支（本地服务器模式）同样执行 caption 重写
 		})
 	}
 	return entries, cleanup, nil
@@ -421,6 +422,7 @@ func sendByteSectionDocument(ctx context.Context, d Deps, j Job, target int64, i
 			Media:   pm,
 			Reader:  uploadReader(d, j, sr),
 			Caption: ec,
+			Split:   true, // 路由层据此对 Bot API 分支（本地服务器模式）同样执行 caption 重写
 		})
 	}
 	ids, err := d.senderFor(j).SendAlbum(ctx, target, entries)

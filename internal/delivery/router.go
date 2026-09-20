@@ -127,18 +127,24 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
 // 按防御错误处理。
 //
-// MTProto 整组发送成功后做 caption 修复（repairAlbumCaptions）：经
-// messages.sendMultiMedia 逐成员携带的 caption 里，图片成员的 caption 在
-// 客户端不展示——相册在聊天界面只渲染首条成员的 caption，首条为图片时
-// 相册下方无任何文字（真机 2026-09-20：[图片, 大视频] 拆分整组投递，删掉
-// 图片后分段 caption 才露出）。参照缓存频道副本已验证的 Bot API 编辑链路，
-// 发送成功后把各成员非空 caption 用 editMessageCaption 重写一遍，保证展示。
+// 整组发送成功后做 caption 修复（repairAlbumCaptions，参照缓存频道副本
+// WriteClean 已真机验证的 Bot API 编辑链路）：把各成员非空 caption 经
+// editMessageCaption 重写一遍。两条分支都需要——MTProto 路径上
+// sendMultiMedia 逐成员携带的 caption 中图片成员的 caption 在客户端不展示
+// （相册聊天界面只渲染首条成员 caption，首条为图片时相册下方无任何文字；
+// 真机 2026-09-20）；Bot API 路径（本地 Bot API 服务器模式下的拆分相册：
+// 1800MB 分段 ≤ uploadCap=MaxFileSize，全员落 Bot API 承载）同理重写兜底。
+// 普通相册（无 Split 标记且全员 Bot API 承载）caption 展示正常，不重写。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	allAPI := true
+	splitAlbum := false
 	for i, e := range entries {
 		if e.Reader == nil {
 			return nil, apperr.New(apperr.CodeInternal,
 				fmt.Sprintf("相册第 %d 项缺少上传数据源（Reader 为空）", i))
+		}
+		if e.Split {
+			splitAlbum = true
 		}
 		switch {
 		case e.Media.Size <= s.uploadCap && s.api.AlbumGroupable(e.Media): // Bot API 承载
@@ -151,7 +157,14 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 		}
 	}
 	if allAPI {
-		return s.api.SendAlbum(ctx, chatID, entries)
+		ids, err := s.api.SendAlbum(ctx, chatID, entries)
+		if err != nil {
+			return nil, err
+		}
+		if splitAlbum { // 拆分相册走 Bot API 分支（本地服务器模式）：同样重写 caption
+			s.repairAlbumCaptions(ctx, chatID, entries, ids)
+		}
+		return ids, nil
 	}
 	if !s.large.Available() {
 		return nil, apperr.New(apperr.CodeLargeChannelUnavailable,
@@ -173,24 +186,32 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 	return ids, nil
 }
 
-// repairAlbumCaptions MTProto 整组发送成功后，把各成员非空 caption 经
-// Bot API editMessageCaption 重写一遍（与缓存频道副本 WriteClean 同款编辑
-// 链路，展示已真机验证）。尽力而为：整组媒体此刻已送达，caption 修复失败
-// 只记日志、不改变发送结果——把已完成的投递标记为失败只会诱导用户重发，
-// 重复 2GB 级上传。ID 数与成员数不符（发送器契约违约，SendAlbum 已防御）
-// 时无法按位定位成员，整体跳过。
+// repairAlbumCaptions 整组发送成功后，把各成员非空 caption 经 Bot API
+// editMessageCaption 重写一遍（与缓存频道副本 WriteClean 同款编辑链路，
+// 展示已真机验证）。尽力而为：整组媒体此刻已送达，caption 修复失败只记
+// 日志、不改变发送结果——把已完成的投递标记为失败只会诱导用户重发，重复
+// 2GB 级上传。ID 数与成员数不符（发送器契约违约，SendAlbum 已防御）时无法
+// 按位定位成员，整体跳过。成功重写记一条 Info（真机排查相册 caption 展示
+// 问题的观测点）。
 func (s *routerSender) repairAlbumCaptions(ctx context.Context, chatID int64, entries []AlbumEntry, ids []int) {
 	if len(ids) != len(entries) {
 		return
 	}
+	edited := 0
 	for i, e := range entries {
 		captionHTML := e.Caption.RenderHTML()
 		if captionHTML == "" {
 			continue
 		}
 		if err := s.api.EditMessageCaption(ctx, chatID, ids[i], captionHTML); err != nil {
-			s.log.Warn("MTProto 整组 caption 修复失败（相册下方文字可能缺失）",
+			s.log.Warn("整组 caption 重写失败（相册下方文字可能缺失）",
 				"chat_id", chatID, "message_id", ids[i], "error", err.Error())
+		} else {
+			edited++
 		}
+	}
+	if edited > 0 {
+		s.log.Info("整组 caption 已重写（保证相册下方文字展示）",
+			"chat_id", chatID, "messages", len(ids), "edited", edited)
 	}
 }
