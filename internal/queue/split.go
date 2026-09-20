@@ -157,7 +157,7 @@ type videoSegment struct {
 // 2026-09-20）。成功按整组记一次送达，观测标记 split。
 func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	if m.Kind == message.KindVideo {
-		entries, cleanup, err := openVideoSegmentEntries(ctx, d, j, it, m, h, sourceURL, links, true)
+		entries, cleanup, err := openVideoSegmentEntries(ctx, d, j, it, m, h, sourceURL, links)
 		if err != nil {
 			return err
 		}
@@ -178,9 +178,11 @@ func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it mess
 // 播放分段并构造相册条目：阻塞等待完整落盘 → 临时目录余量预检（分段近似
 // 再落一份）→ ffmpeg 流复制切段 → 逐段封面 → 打开段文件 reader。返回的
 // cleanup 关闭全部 reader 并删除段文件，必须在整组发送消费完 reader 之后
-// 调用（单媒体路径 defer、整组路径函数级 defer 统一兜底）。withSource 控制
-// 首段是否织入来源链接与频道脚注（整组路径仅组首成员为 true）。
-func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, withSource bool) ([]delivery.AlbumEntry, func(), error) {
+// 调用（单媒体路径 defer、整组路径函数级 defer 统一兜底）。
+// 首段无条件携带完整署名（正文 + 来源链接 + 频道脚注 + 切段说明）——拆分
+// 成员可能位于源相册的非首位，若仅在组首织入，分段会缺失来源与脚注
+// （真机 2026-09-20：[图片, 大视频] 相册的分段只剩切段说明）。
+func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink) ([]delivery.AlbumEntry, func(), error) {
 	if err := h.WaitDownloaded(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -203,8 +205,8 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 	}
 
 	caption := it.MediaCaption().WithQuotedBody()
-	if withSource && sourceURL != "" {
-		// 脚注与原消息链接同位：只出现在组首/带来源的条目上
+	if sourceURL != "" {
+		// 拆分段的首段无条件织入来源链接与频道脚注（见函数注释）
 		caption = caption.WithSourceLink(sourceURL).WithChannels(links)
 	}
 	caption = caption.WithNote(splitVideoNote(n))

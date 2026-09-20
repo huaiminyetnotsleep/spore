@@ -9,13 +9,14 @@ package queue
 // 字节分段用例覆盖。
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
@@ -69,6 +70,10 @@ func TestWorkerSplitPlayableVideoSegments(t *testing.T) {
 
 	sender := &fakeSender{consumeAlbumReaders: true, captureAlbumContent: true}
 	d := uploadDeps(t, s, fetcherWith(splitChunkInvoker{payload: payload}), sender)
+	// 绑定频道脚注提供者：验证分段首段携带完整署名（正文/来源链接/脚注/说明）
+	d.Channels = &fakeChannelLinks{links: []message.ChannelLink{
+		{Label: "我的频道", URL: "https://t.me/mychannel"},
+	}}
 	d.Media = media.Options{
 		TmpDir:            t.TempDir(),
 		MaxFileSize:       int64(len(payload)) / 2,
@@ -97,11 +102,18 @@ func TestWorkerSplitPlayableVideoSegments(t *testing.T) {
 			t.Errorf("分段 %d 应有 ffmpeg 抽帧封面: %d", i, call.ThumbLens[i])
 		}
 	}
-	if !bytes.Contains([]byte(call.Captions[0].Text), []byte("已切分为 2 段视频")) {
-		t.Errorf("首段 caption 应含可播放说明: %q", call.Captions[0].Text)
+	// 首段 caption 必须完整：正文 + 来源链接 + 切段说明；频道脚注为延迟
+	// 拼装（Channels 字段携带，MTProto 发送侧 Limited 才拼接文本）
+	for _, want := range []string{"大文件", "https://t.me/example/7", "已切分为 2 段视频"} {
+		if !strings.Contains(call.Captions[0].Text, want) {
+			t.Errorf("首段 caption 缺少 %q: %q", want, call.Captions[0].Text)
+		}
 	}
-	if call.Captions[1].Text != "" {
-		t.Errorf("次段不应带 caption: %q", call.Captions[1].Text)
+	if len(call.Captions[0].Channels) != 1 || call.Captions[0].Channels[0].Label != "我的频道" {
+		t.Errorf("首段应携带频道脚注: %+v", call.Captions[0].Channels)
+	}
+	if call.Captions[1].Text != "" || len(call.Captions[1].Channels) != 0 {
+		t.Errorf("次段不应带 caption/脚注: %+v", call.Captions[1])
 	}
 	// 分段内容拼接应不少于原视频字节（流复制无损 + 容器封装开销）
 	content := sender.albumContentSnapshot()
@@ -123,6 +135,18 @@ func TestWorkerSplitPlayableVideoSegments(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("分段文件应随发送完成清理，残留 %d 个", len(entries))
 	}
+	// 分段必须是合法可解码的视频（流复制产物）：逐段落盘后用 ffmpeg 解析
+	for i, c := range sender.albumContentSnapshot() {
+		pf := filepath.Join(t.TempDir(), fmt.Sprintf("seg%d.mkv", i))
+		if err := os.WriteFile(pf, c, 0o644); err != nil {
+			t.Fatalf("写分段文件失败: %v", err)
+		}
+		probe := exec.Command("ffmpeg", "-hide_banner", "-i", pf)
+		out, _ := probe.CombinedOutput() // 无输出映射必非零退出，看 stderr 是否解析出时长
+		if !strings.Contains(string(out), "Duration: 00:00:0") {
+			t.Errorf("分段 %d 应为可解码视频（stderr 含 Duration）: %.300s", i, out)
+		}
+	}
 	// 观测：delivery_mode = split
 	r, err := s.GetRequest(context.Background(), job.RequestID)
 	if err != nil {
@@ -142,6 +166,9 @@ func TestPlanAlbumSend(t *testing.T) {
 			MaxFileSize:       100,
 			MaxSplitTotalSize: 1000,
 			SplitSegmentSize:  400,
+			// 裸名 false 经 PATH 解析（macOS/Linux 均存在），LookPath
+			// 可执行即可过 splittableVideo（规划层不真正运行 ffmpeg）
+			FFmpegPath: "false",
 		},
 		Sender: &fakeSender{groupable: func(m message.Media) bool {
 			return m.Size <= 100 && m.Kind == message.KindPhoto

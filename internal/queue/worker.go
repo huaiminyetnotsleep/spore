@@ -817,7 +817,7 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 				// 条目（不经过 prepareVideoThumb——其 reader 会被切段路径
 				// 的区间读取取代，头部字节不能被消费）
 				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
-					sourceURL, links, i == 0)
+					sourceURL, links)
 				if err != nil {
 					cancelOpen() // 切段/下载失败：整组失败（未发出任何字节，不降级）
 					return err
