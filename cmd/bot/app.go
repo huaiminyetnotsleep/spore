@@ -292,7 +292,7 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	// 本 bot 的 MTProto 会话直传（上限 2000MB）。已计数包装供 worker 与审批
 	// 通知使用；原始 sender 供事件/加入通知使用（通知失败不计业务失败）。
 	counted := notify.NewCountSender(
-		delivery.NewRouter(sender, a.botClients[botID], a.cfg.BotAPIUploadCap(), a.cfg.MaxFileSize),
+		delivery.NewRouter(sender, a.botClients[botID], a.cfg.BotAPIUploadCap(), a.cfg.MaxFileSize, a.log),
 		a.hub)
 	member := &botpool.Member{
 		ID:        botID,

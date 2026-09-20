@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
@@ -36,13 +37,18 @@ type routerSender struct {
 	large     LargeFileSender // 大文件直传实现（mtproto.BotClient）
 	uploadCap int64           // Bot API 上传路径的大小上限（官方服务器 50MB；本地服务器 = MaxFileSize）
 	largeCap  int64           // MTProto 直传通道的大小上限（= MaxFileSize，2000MB 级）
+	log       *slog.Logger    // 整组 caption 修复的失败日志（尽力而为，不向上传播）
 }
 
 // NewRouter 组装路由 Sender：Size 超过 uploadCap 的媒体走 MTProto 大文件
 // 直传，其余（上传、文本、删除）委托 Bot API 实现；相册全员在上限内走
 // Bot API sendMediaGroup，含超限成员时走 MTProto 整组直传（largeCap）。
-func NewRouter(botAPI Sender, large LargeFileSender, uploadCap, largeCap int64) Sender {
-	return &routerSender{api: botAPI, large: large, uploadCap: uploadCap, largeCap: largeCap}
+// log 为 nil 时回退 slog.Default()。
+func NewRouter(botAPI Sender, large LargeFileSender, uploadCap, largeCap int64, log *slog.Logger) Sender {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &routerSender{api: botAPI, large: large, uploadCap: uploadCap, largeCap: largeCap, log: log}
 }
 
 func (s *routerSender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
@@ -120,6 +126,13 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 降级，历史行为不变。大文件通道未就绪按确定性失败处理（与单媒体路径同
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
 // 按防御错误处理。
+//
+// MTProto 整组发送成功后做 caption 修复（repairAlbumCaptions）：经
+// messages.sendMultiMedia 逐成员携带的 caption 里，图片成员的 caption 在
+// 客户端不展示——相册在聊天界面只渲染首条成员的 caption，首条为图片时
+// 相册下方无任何文字（真机 2026-09-20：[图片, 大视频] 拆分整组投递，删掉
+// 图片后分段 caption 才露出）。参照缓存频道副本已验证的 Bot API 编辑链路，
+// 发送成功后把各成员非空 caption 用 editMessageCaption 重写一遍，保证展示。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	allAPI := true
 	for i, e := range entries {
@@ -152,5 +165,32 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 		readers[i] = e.Reader
 		captions[i] = e.Caption
 	}
-	return s.large.SendAlbum(ctx, chatID, medias, readers, captions)
+	ids, err := s.large.SendAlbum(ctx, chatID, medias, readers, captions)
+	if err != nil {
+		return nil, err
+	}
+	s.repairAlbumCaptions(ctx, chatID, entries, ids)
+	return ids, nil
+}
+
+// repairAlbumCaptions MTProto 整组发送成功后，把各成员非空 caption 经
+// Bot API editMessageCaption 重写一遍（与缓存频道副本 WriteClean 同款编辑
+// 链路，展示已真机验证）。尽力而为：整组媒体此刻已送达，caption 修复失败
+// 只记日志、不改变发送结果——把已完成的投递标记为失败只会诱导用户重发，
+// 重复 2GB 级上传。ID 数与成员数不符（发送器契约违约，SendAlbum 已防御）
+// 时无法按位定位成员，整体跳过。
+func (s *routerSender) repairAlbumCaptions(ctx context.Context, chatID int64, entries []AlbumEntry, ids []int) {
+	if len(ids) != len(entries) {
+		return
+	}
+	for i, e := range entries {
+		captionHTML := e.Caption.RenderHTML()
+		if captionHTML == "" {
+			continue
+		}
+		if err := s.api.EditMessageCaption(ctx, chatID, ids[i], captionHTML); err != nil {
+			s.log.Warn("MTProto 整组 caption 修复失败（相册下方文字可能缺失）",
+				"chat_id", chatID, "message_id", ids[i], "error", err.Error())
+		}
+	}
 }

@@ -226,7 +226,12 @@ SourceRef
                含超限成员（video 且 ≤2000MB）→ 同一 Bot 会话逐成员 uploader
                上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
                整组直传；全 document 组（分卷拆分段）同走该通道；
-               通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败
+               通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
+               MTProto 整组发送成功后逐成员重写非空 caption（Bot API
+               editMessageCaption，与缓存频道副本同款编辑链路）：sendMultiMedia
+               逐成员携带的 caption 里图片成员在客户端不展示（相册聊天界面只
+               渲染首条成员 caption），重写保证相册下方文字可见；尽力而为，
+               修复失败只记日志不影响已完成的发送
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
 上限（2000MB）的媒体不再失败——完整落盘后切为 N 个分段（⌈Size/1800MB⌉，
