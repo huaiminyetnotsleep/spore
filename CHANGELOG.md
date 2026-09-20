@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.18.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.17.1...v1.18.0) (2026-09-20)
+
+
+### Features
+
+* **deploy:** 升级/切换版本后自动回收悬空镜像 ([63dbcf5](https://github.com/huaiminyetnotsleep/spore/commit/63dbcf5c658a5466384dfaf39cdd39de59b139cd))
+* **queue:** 超限视频单遍流式切段，磁盘峰值 2×→1× ([1e6fa7a](https://github.com/huaiminyetnotsleep/spore/commit/1e6fa7a657e7f963e8a9ebff9f0ea785828558ed))
+* **retry:** 最大尝试次数改为管理端可配置并支持重置尝试计数 ([0424637](https://github.com/huaiminyetnotsleep/spore/commit/0424637cef052beaff8bbab0dc703d1fd0027314))
+
 ## [1.17.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.17.0...v1.17.1) (2026-09-20)
 
 
