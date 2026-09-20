@@ -5,15 +5,19 @@
 #
 # 菜单项：安装 / 升级 / 升级后验证 / 查看状态 / 查看日志 / 查看访问密钥 / 重设密钥 /
 # 清理临时文件 / 磁盘与数据检查 / 重启服务 / 停止服务 / 卸载 / 退出。
-# 也支持子命令直接调用（便于脚本化）：install | upgrade | verify | status | logs | show-key |
-# reset-key | clean-tmp | diskcheck | restart | stop | uninstall | exit
+# 也支持子命令直接调用（便于脚本化）：install [版本] | upgrade | verify | status | logs |
+# show-key | reset-key | clean-tmp | diskcheck | restart | stop | uninstall | exit
+#   install [版本]：安装/切换到指定镜像版本（1.16.4、v1.16、sha-<commit>、latest；
+#   缺省 = latest）。已安装环境下执行即切换/回滚版本，升级到指定版本同样用它；
+#   固定值写入部署目录 .env 的 SPORE_IMAGE_TAG，spore install latest 解除固定
 #
 # 可选环境变量：
 #   SPORE_DIR      部署目录，默认 ~/spore（管道形式：curl ... | SPORE_DIR=/opt/spore bash）
 #   SPORE_RAW_BASE 配置文件下载基址，默认仓库 main 分支 raw 地址（fork 或镜像加速时覆盖）
 #
-# 安装流程含交互：Telegram 凭据（可留空跳过，稍后补进 .env）、宿主端口（默认 8080，
-# 实时探测占用）以及是否立即启动（可选择只完成配置、稍后手动启动）。
+# 安装流程含交互：镜像版本 tag（留空 = latest）、Telegram 凭据（可留空跳过，稍后补进
+# .env）、宿主端口（默认 8080，实时探测占用）以及是否立即启动（可选择只完成配置、
+# 稍后手动启动）。
 # 首次扫码登录是固有人工环节：安装后在管理端「MTProto」页面完成，
 # 见 docs/guide/deployment.md §4.4。
 set -euo pipefail
@@ -22,7 +26,8 @@ REPO_RAW="${SPORE_RAW_BASE:-https://raw.githubusercontent.com/huaiminyetnotsleep
 SPORE_DIR="${SPORE_DIR:-$HOME/spore}"
 CONTAINER_UID=10001
 CONTAINER_NAME=spore
-IMAGE="ghcr.io/huaiminyetnotsleep/spore:latest"
+IMAGE_REPO="ghcr.io/huaiminyetnotsleep/spore"
+IMAGE_LATEST="$IMAGE_REPO:latest"
 HEALTH_TIMEOUT=90
 
 info() { printf '==> %s\n' "$*"; }
@@ -140,6 +145,42 @@ set_env() {
   sed "s|^$1=.*|$1=$2|" .env > .env.spore-tmp
   mv .env.spore-tmp .env
   chmod 600 .env
+}
+
+# unset_env <KEY>：从 .env 删除该行（KEY 为脚本内字面量，无正则元字符）；
+# grep -v 在无匹配行（KEY 本就不存在）时输出其余所有行并以非零退出，|| true 压住
+unset_env() {
+  grep -v "^$1=" .env > .env.spore-tmp || true
+  mv .env.spore-tmp .env
+  chmod 600 .env
+}
+
+# normalize_version <输入>：把版本输入规范化为 GHCR 镜像 tag 输出到 stdout，无法
+# 识别时返回非零。可识别：latest、sha-<commit>、裸 commit SHA（7-40 位 hex，自动补
+# sha- 前缀）、v?主[.次[.修订]]（自动补 v 前缀；v1 / v1.16 / v1.16.4 均为发布标签）
+normalize_version() {
+  local v="$1"
+  case "$v" in
+    latest | sha-*)
+      printf '%s\n' "$v"
+      return 0
+      ;;
+  esac
+  # 正则入变量再用 =~：bash 3.2 下内联 {n} 量词解析有差异（spec 红线）
+  local semver_re='^v?[0-9]+(\.[0-9]+){0,2}$' hex_re='^[0-9a-fA-F]{7,40}$'
+  if [[ $v =~ $semver_re ]]; then
+    case "$v" in
+      v*) ;;
+      *) v="v$v" ;;
+    esac
+    printf '%s\n' "$v"
+    return 0
+  fi
+  if [[ $v =~ $hex_re ]]; then
+    printf 'sha-%s\n' "$v"
+    return 0
+  fi
+  return 1
 }
 
 ensure_docker() {
@@ -364,12 +405,55 @@ web_port() {
   echo "${port:-8080}"
 }
 
+# pull_with_pin_revert <旧固定值> <镜像引用>：docker compose pull；失败时把 .env 的
+# SPORE_IMAGE_TAG 恢复为旧值（空 = 原本无固定行），保证 .env 不停留在拉取不到的 tag 上
+pull_with_pin_revert() {
+  local prev="$1" image="$2"
+  info "拉取镜像 ${image} ..."
+  if ! docker compose pull; then
+    warn "镜像拉取失败"
+    if [ -n "$prev" ]; then
+      set_env SPORE_IMAGE_TAG "$prev"
+    else
+      unset_env SPORE_IMAGE_TAG
+    fi
+    warn "已还原 .env 的版本固定（运行中的服务未受影响）"
+    die "若 GHCR 包为私有，请先 docker login ghcr.io 后重新运行；详见 docs/guide/deployment.md §4.2"
+  fi
+}
+
+# print_running_version：查询容器内实际运行版本（best-effort，失败只提示不致命）
+print_running_version() {
+  info "查询容器内实际运行版本 ..."
+  if ! docker compose exec -T bot spore version; then
+    warn "版本查询失败（容器可能未就绪），可稍后执行：docker compose exec bot spore version"
+  fi
+}
+
 # ---------- 菜单动作 ----------
 
 do_install() {
   ensure_docker
   docker info >/dev/null 2>&1 ||
     die "无法连接 Docker 守护进程。请将当前用户加入 docker 组（sudo usermod -aG docker \$USER 后重新登录）或用 sudo 重新运行本命令"
+
+  # 目标镜像版本：参数 > 交互追问（留空 = latest）；无交互终端按 latest。
+  # 当前固定值直接从 .env 读取（此时可能尚未 cd 到部署目录，env_get 不可用），
+  # 仅用于提示与变更比对
+  local tag_input="${1:-}" tag="latest" current_tag=""
+  current_tag="$(sed -n 's/^SPORE_IMAGE_TAG=//p' "$SPORE_DIR/.env" 2>/dev/null | tail -n 1)"
+  if [ -n "$tag_input" ]; then
+    tag="$(normalize_version "$tag_input")" ||
+      die "无法识别的版本：${tag_input}（示例：1.16.4 / v1.16 / sha-<commit> / latest）"
+  elif have_tty; then
+    local hint="例：1.16.4 / v1.16 / sha-xxxx"
+    [ -n "$current_tag" ] && hint="当前固定 ${current_tag}；例：1.16.4 / sha-xxxx"
+    local ver_re='^(latest|sha-[0-9a-fA-F]{7,40}|v?[0-9]+(\.[0-9]+){0,2}|[0-9a-fA-F]{7,40})$'
+    if prompt_value "镜像版本 tag（${hint}；留空回车 = latest）" "$ver_re" \
+      "无法识别的版本写法（示例：1.16.4 / v1.16 / sha-xxxx / latest）" skip; then
+      tag="$(normalize_version "$REPLY")" || tag="latest"
+    fi
+  fi
 
   if is_installed; then
     info "检测到现有安装，将保留配置并确保服务运行"
@@ -384,19 +468,47 @@ do_install() {
   # 嵌套子 shell 隔离：命令注册失败只告警，不阻断安装主流程
   (install_cmd) || warn "spore 命令注册失败（不影响本次部署），可重新运行 install 重试或手动软链"
 
+  # 版本固定写入 .env（latest = 解除固定）；目标与当前生效一致则不动任何文件。
+  # 旧部署的 docker-compose.yml 镜像 tag 写死 latest、不支持插值，先重新下载
+  local prev_pin="$current_tag" want_tag="$tag" cur_effect="${current_tag:-latest}" pin_changed=""
+  if [ "$want_tag" != "$cur_effect" ]; then
+    if ! grep -q 'SPORE_IMAGE_TAG' docker-compose.yml; then
+      info "部署目录的 docker-compose.yml 不支持版本插值，重新下载 ..."
+      fetch "$REPO_RAW/docker-compose.yml" docker-compose.yml
+      grep -q 'SPORE_IMAGE_TAG' docker-compose.yml ||
+        die "下载的 docker-compose.yml 内容异常，请检查网络后重试"
+    fi
+    if [ "$want_tag" = "latest" ]; then
+      unset_env SPORE_IMAGE_TAG
+      info "已取消版本固定（原固定 ${current_tag}），镜像回到 latest"
+    else
+      set_env SPORE_IMAGE_TAG "$want_tag"
+      info "版本固定为 ${want_tag}（写入 .env 的 SPORE_IMAGE_TAG；解除固定：spore install latest）"
+    fi
+    pin_changed=1
+  fi
+
   if is_running; then
-    if [ "$PORT_CHANGED" = "1" ]; then
+    if [ "$pin_changed" = "1" ]; then
+      info "目标版本变化（${cur_effect} → ${want_tag}），拉取镜像并切换 ..."
+      pull_with_pin_revert "$prev_pin" "${IMAGE_REPO}:${want_tag}"
+      info "滚动更新 ..."
+      docker compose up -d
+      wait_healthy || true
+      docker compose ps
+      print_running_version
+    elif [ "$PORT_CHANGED" = "1" ]; then
       info "端口已变更，重建容器以应用 ..."
       docker compose up -d
       wait_healthy || true
     else
-      info "服务运行中，如需更新镜像请使用菜单「升级」"
+      info "服务运行中，镜像版本未变化（${cur_effect}）；如需更新镜像请使用菜单「升级」"
     fi
     return 0
   fi
 
   echo
-  info "配置全部完成"
+  info "配置全部完成（目标镜像：${IMAGE_REPO}:${want_tag}）"
   local do_start=0
   if prompt_yesno "是否立即拉取镜像并启动服务？"; then
     do_start=1
@@ -408,15 +520,12 @@ do_install() {
     return 0
   fi
 
-  info "拉取镜像 $IMAGE ..."
-  if ! docker compose pull; then
-    warn "镜像拉取失败"
-    die "若 GHCR 包为私有，请先 docker login ghcr.io 后重新运行；详见 docs/guide/deployment.md §4.2"
-  fi
+  pull_with_pin_revert "$prev_pin" "${IMAGE_REPO}:${want_tag}"
   info "启动服务 ..."
   docker compose up -d
   wait_healthy || true
   docker compose ps
+  print_running_version
 
   echo
   info "提取首次启动的管理端访问密钥（仅明文打印一次，请立即保存到密码管理器）"
@@ -437,10 +546,23 @@ EOF
 
 do_upgrade() {
   require_installed
+  # 升级永远面向 latest：有版本固定（spore install <版本> 写入）时先解除
+  local pinned
+  pinned="$(env_get SPORE_IMAGE_TAG)"
+  if [ -n "$pinned" ]; then
+    unset_env SPORE_IMAGE_TAG
+    info "已取消版本固定 ${pinned}，本次升级到 latest（固定版本请用 spore install <版本>）"
+  fi
+  # 手工回滚留下的旧 compose（镜像 tag 写死、无插值变量）一并刷新，避免升级静默拉旧 tag
+  if ! grep -q 'SPORE_IMAGE_TAG' docker-compose.yml; then
+    info "部署目录的 docker-compose.yml 不支持版本插值，重新下载 ..."
+    fetch "$REPO_RAW/docker-compose.yml" docker-compose.yml
+    grep -q '^services:' docker-compose.yml || die "下载的 docker-compose.yml 内容异常，请检查网络后重试"
+  fi
   # 启用了 bigfile 备选路线（BOT_API_URL 非空）时，连带更新 bot-api 服务
   local -a pf=()
   [ -n "$(env_get BOT_API_URL)" ] && pf+=(--profile bigfile)
-  info "拉取新镜像 $IMAGE ..."
+  info "拉取新镜像 ${IMAGE_LATEST} ..."
   # ${pf[@]+...}：空数组在 bash 3.2 + set -u 下不可直接展开
   if ! docker compose ${pf[@]+"${pf[@]}"} pull; then
     warn "镜像拉取失败"
@@ -489,7 +611,7 @@ do_uninstall() {
   # 脚本自身的部署目录副本一并清理（正在运行的实例不受影响：bash 持有已打开的 inode）
   rm -f install-spore.sh .install-spore.sh.tmp
   rmdir "$SPORE_DIR" 2>/dev/null || true
-  info "卸载完成。镜像仍保留在本地，如需清理：docker rmi $IMAGE"
+  info "卸载完成。镜像仍保留在本地，如需清理：docker images \"${IMAGE_REPO}\" 查看后 docker rmi <镜像ID>"
 }
 
 do_status() {
@@ -729,7 +851,7 @@ main_menu() {
 main() {
   # 子命令直通（便于脚本化；uninstall 仍会交互确认；此模式保留 set -e 语义）
   case "${1:-}" in
-    install) do_install ;;
+    install) do_install "${2:-}" ;;
     upgrade) do_upgrade ;;
     verify) do_verify ;;
     status) do_status ;;
@@ -747,7 +869,7 @@ main() {
       main_menu
       ;;
     *)
-      die "未知子命令：$1（可用：install | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | stop | uninstall | exit）"
+      die "未知子命令：$1（可用：install [版本] | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | stop | uninstall | exit）"
       ;;
   esac
 }

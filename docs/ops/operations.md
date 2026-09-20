@@ -55,7 +55,7 @@
 
 | 子命令 | 作用 | 等价的原始操作 |
 | --- | --- | --- |
-| `spore install` | 安装服务：交互填写凭据、选择端口、授权数据目录 | [deployment.md §4.2](../guide/deployment.md) |
+| `spore install [版本]` | 安装服务：交互选择镜像版本（留空 = latest）、填写凭据、选择端口、授权数据目录；已安装环境下改变版本即切换/回滚（如 `spore install 1.16.4`） | [deployment.md §4.2](../guide/deployment.md)、[§2.5](#_2-5-回滚到已知可用版本) |
 | `spore upgrade` | 升级服务：拉取新镜像并滚动更新（不改配置），完成后自动执行升级验证 | `docker compose pull && docker compose up -d` |
 | `spore verify` | 升级验证：探针、容器健康、MTProto 通道（已并入 upgrade 自动执行，也可单独调用） | §2.4 |
 | `spore status` | 查看状态：容器列表与 `/healthz` 探活 | `docker compose ps` |
@@ -127,15 +127,19 @@ Compose 按新镜像重新创建需要更新的容器。
    tag 或 commit SHA）。公开发布的 GHCR 镜像提供 `vX.Y.Z` 语义化版本、完整 commit
    SHA 与 `latest` 三类标签，均随每次正式发布（合并 release PR）更新，main 上的
    中间提交不产生镜像。生产环境建议固定到完整 SHA 或正式版本标签，不要长期依赖
-   `latest`。发版与镜像标签的生成机制见 [release.md](./release.md)。
+   `latest`：一键脚本部署用 `spore install <版本>`（如 `spore install 1.16.4`）即可
+   固定到指定版本并切换；手动部署把 `.env` 的 `SPORE_IMAGE_TAG` 设为目标标签后执行
+   `docker compose pull bot && docker compose up -d`。发版与镜像标签的生成机制见
+   [release.md](./release.md)。
 
 ### 2.2 GHCR 镜像更新（推荐）
 
 适用于 [deployment.md §4.2](../guide/deployment.md) 的 GHCR 镜像部署。
 
-**一键脚本部署**：直接执行 `spore upgrade`（服务器任意目录可用）。它不改任何配置，
-自动拉取新镜像、滚动更新并做容器健康检查；`.env` 启用了 `bigfile` profile 时会连带
-更新 `bot-api` 服务，同时刷新 `spore` 命令自身。
+**一键脚本部署**：直接执行 `spore upgrade`（服务器任意目录可用）。它自动拉取新镜像、
+滚动更新并做容器健康检查；`.env` 启用了 `bigfile` profile 时会连带更新 `bot-api` 服务，
+同时刷新 `spore` 命令自身。若 `.env` 固定过版本（`SPORE_IMAGE_TAG`），升级会先解除
+固定回到 `latest`——要更新到指定版本请用 `spore install <版本>`。
 
 **手动命令**：在部署目录执行：
 
@@ -221,8 +225,21 @@ curl -fsS https://<域名>/readyz
 
 #### GHCR 镜像回滚
 
-每次发布的镜像都有完整 commit SHA 标签。将 `docker-compose.yml` 中的 `image:` 临时
-改为上一个可用版本，例如：
+每次发布的镜像都有完整 commit SHA 标签。`latest` 与 `vX.Y` / `vX` 这类滚动标签始终
+指向最新发布，不适合作为回滚的固定版本，应改用上一个版本的 `vX.Y.Z` 或 `sha-` 标签。
+
+**一键脚本部署**：一条命令切回指定版本——自动写入 `.env` 的 `SPORE_IMAGE_TAG`、
+拉取目标镜像并滚动更新：
+
+```bash
+spore install <旧版本>    # 如 spore install 1.16.3，或 spore install sha-<旧 commit SHA>
+```
+
+拉取失败（如 tag 不存在）时 `.env` 的版本固定会自动还原，运行中的服务不受影响。
+确认恢复正常后，用 `spore install latest` 解除固定（或留给下次 `spore upgrade`
+自动解除）。回滚完成后，按 [§2.4](#_2-4-更新后验证) 重新验证。
+
+**手动命令**：将 `docker-compose.yml` 中的 `image:` 临时改为上一个可用版本，例如：
 
 ```yaml
 image: ghcr.io/huaiminyetnotsleep/spore:sha-<旧 commit SHA>
@@ -235,9 +252,6 @@ docker compose down
 docker compose pull bot
 docker compose up -d
 ```
-
-`latest` 与 `vX.Y` / `vX` 这类滚动标签始终指向最新发布，不适合作为回滚的固定
-版本，应改用上一个版本的 `vX.Y.Z` 或 `sha-` 标签。回滚完成后，按 [§2.4](#_2-4-更新后验证) 重新验证。
 
 #### 源码构建回滚
 
@@ -328,7 +342,8 @@ docker compose pull bot
 docker compose up -d
 ```
 
-一键脚本部署的目录直接执行 `spore upgrade`（不改任何配置，等价于上面的 pull + up）。
+一键脚本部署的目录直接执行 `spore upgrade`（等价于上面的 pull + up；若 `.env` 固定过
+版本会先解除固定回到 `latest`）。
 
 源码构建部署执行：
 

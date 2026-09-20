@@ -92,7 +92,7 @@ openssl rand -hex 32
 
 把输出的 64 位十六进制字符串完整写入 `.env`。该密钥应**只生成一次并长期安全保管**：升级或重启不要重新生成；迁移数据库备份到新机器时，应通过密码管理器或其他独立安全通道同步原值。若原值丢失或被替换，已保存的 OAuth Secret 与通知通道凭据无法解密，只能在管理端重新填写；非敏感设置仍保留。
 
-以上变量均由应用进程读取。Compose 部署另有仅由 `docker-compose.yml` 消费的插值变量（应用不读取）：`WEB_HOST_PORT`（宿主侧管理端端口，默认 8080，宿主只绑回环）与 `BOT_API_PORT`（bigfile profile 的本地 Bot API 端口，默认 8081），同机多实例各自错开即可，详见 [部署指南](../guide/deployment.md)。
+以上变量均由应用进程读取。Compose 部署另有仅由 `docker-compose.yml` 消费的插值变量（应用不读取）：`WEB_HOST_PORT`（宿主侧管理端端口，默认 8080，宿主只绑回环）、`BOT_API_PORT`（bigfile profile 的本地 Bot API 端口，默认 8081）与 `SPORE_IMAGE_TAG`（bot 镜像 tag，留空 = `latest`；由 `spore install <版本>` 安装/切换指定版本时自动写入，`spore install latest` 或 `spore upgrade` 自动清空），同机多实例各自错开端口即可，详见 [部署指南](../guide/deployment.md) 与 [运维手册 §2.5](../ops/operations.md)。
 
 ### 2.7 事件与通知
 

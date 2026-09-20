@@ -12,7 +12,9 @@ services:
     build: .
     # 部署时优先拉取 GHCR 镜像（docker compose pull，无需 clone/编译）；
     # 本机验收仍可 docker compose up -d --build 从源码构建。详见 docs/guide/deployment.md §4。
-    image: ghcr.io/huaiminyetnotsleep/spore:latest
+    # 镜像 tag 经 .env 的 SPORE_IMAGE_TAG 固定（spore install <版本> 写入）；
+    # 留空 = latest。仅作 compose 插值，应用不读取该变量。
+    image: ghcr.io/huaiminyetnotsleep/spore:${SPORE_IMAGE_TAG:-latest}
     container_name: spore
     env_file:
       - .env

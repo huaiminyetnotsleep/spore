@@ -150,8 +150,9 @@ curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/insta
 重启、完整重启（重建容器加载环境变量）、停止、状态、日志、密钥查看与重设、临时清理、
 磁盘检查与退出（各子命令说明见
 [operations.md §1.1](../ops/operations.md)）。选 **1 安装**
-即完成下述第 1–5 步的全部动作（创建部署目录、下载两个配置文件、交互式填写凭据、
-授权数据目录、拉取镜像并启动、等待健康检查、提示保存访问密钥）。
+即完成下述第 1–5 步的全部动作（询问镜像版本 tag（留空回车 = latest）、创建部署目录、
+下载两个配置文件、交互式填写凭据、授权数据目录、拉取镜像并启动、等待健康检查、
+提示保存访问密钥）。
 
 脚本行为说明：
 
@@ -162,15 +163,21 @@ curl -fsSL https://raw.githubusercontent.com/huaiminyetnotsleep/spore/main/insta
   `~/spore/.env` 填入凭据，再运行 `spore upgrade`（或菜单「2) 升级服务」；仅改环境
   变量时用 `spore recreate` / 菜单「完整重启」即可）使其生效；
   重跑 install 只会补问缺失项；
+- 安装时询问**镜像版本 tag**：留空回车 = `latest`；填 `1.16.4`、`sha-<commit>` 等
+  会固定到该版本（写入 `.env` 的 `SPORE_IMAGE_TAG`）。已安装环境下重新执行 install
+  并改变版本即「切换/回滚版本」：自动拉取目标镜像并滚动更新；`spore install latest`
+  解除固定。固定期间执行 `spore upgrade` 会先解除固定再升到 latest（拉取失败时
+  `.env` 的版本固定会自动还原，运行中的服务不受影响）；
 - 安装时询问宿主访问端口，默认 `8080`，脚本会实时探测占用、被占时要求更换；服务已
   运行时改端口会自动重建容器使其生效。已安装后改端口：编辑 `.env` 的 `WEB_HOST_PORT`
   后执行 `docker compose up -d`（或 `spore upgrade`）；
 - 安装结束询问**是否立即启动**：选择「否」只完成配置与 `spore` 命令注册，之后运行
   `spore restart`（未运行时会直接启动）完成首次启动；
 - Docker 未安装时脚本会询问是否用 get.docker.com 官方脚本自动安装；
-- 菜单「升级」不改任何配置，仅拉取新镜像并滚动更新；「卸载」默认保留 `.env` 与
+- 菜单「升级」仅拉取新镜像并滚动更新（若 `.env` 固定过版本会先解除固定回到 latest）；
+  「卸载」默认保留 `.env` 与
   `data/`，按提示二次确认后才删除；
-- 也可用子命令直接调用（便于脚本化）：`install-spore.sh install | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | recreate | stop | uninstall | exit`；安装或升级后脚本会把自己注册为系统的 `spore` 命令（软链到 `/usr/local/bin/spore`），之后直接输入 `spore` 打开菜单或 `spore <子命令>` 调用，子命令说明见 [operations.md §1.1](../ops/operations.md)；
+- 也可用子命令直接调用（便于脚本化）：`install-spore.sh install [版本] | upgrade | verify | status | logs | show-key | reset-key | clean-tmp | diskcheck | restart | recreate | stop | uninstall | exit`（`install` 带版本参数时不追问，如 `spore install 1.16.4`）；安装或升级后脚本会把自己注册为系统的 `spore` 命令（软链到 `/usr/local/bin/spore`），之后直接输入 `spore` 打开菜单或 `spore <子命令>` 调用，子命令说明见 [operations.md §1.1](../ops/operations.md)；
 - 首次扫码登录是固有人工环节：启动后按 §4.4 在管理端「MTProto」页面完成。
 
 下面的分步说明是一键脚本的等价展开，便于核对脚本每一步做了什么，也可作为手动
