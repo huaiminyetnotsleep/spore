@@ -127,14 +127,15 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
 // 按防御错误处理。
 //
-// 整组发送成功后做 caption 修复（repairAlbumCaptions，参照缓存频道副本
-// WriteClean 已真机验证的 Bot API 编辑链路）：把各成员非空 caption 经
-// editMessageCaption 重写一遍。两条分支都需要——MTProto 路径上
-// sendMultiMedia 逐成员携带的 caption 中图片成员的 caption 在客户端不展示
-// （相册聊天界面只渲染首条成员 caption，首条为图片时相册下方无任何文字；
-// 真机 2026-09-20）；Bot API 路径（本地 Bot API 服务器模式下的拆分相册：
-// 1800MB 分段 ≤ uploadCap=MaxFileSize，全员落 Bot API 承载）同理重写兜底。
-// 普通相册（无 Split 标记且全员 Bot API 承载）caption 展示正常，不重写。
+// 整组发送成功后做首末 caption 强制写入（repairAlbumCaptions，参照缓存频道
+// 副本 WriteClean 已真机验证的 Bot API 编辑链路）：把组首成员的署名 caption
+// 经两步 editMessageCaption（占位符 → 目标）强制写入组首与组末两个成员——
+// 客户端对相册组级展示位的成员取舍规则不稳定（真机 2026-09-20 实验矩阵，
+// 见 repairAlbumCaptions 注释），首末写入使展示位无论按哪条规则解析都能
+// 渲染署名。两条分支都需要——MTProto 路径（sendMultiMedia 逐成员 caption
+// 的组级展示不可依赖）与 Bot API 路径（本地 Bot API 服务器模式下的拆分相册：
+// 1800MB 分段 ≤ uploadCap=MaxFileSize，全员落 Bot API 承载）同理兜底。
+// 普通相册（无 Split 标记且全员 Bot API 承载）caption 展示正常，不写入。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	allAPI := true
 	splitAlbum := false
@@ -186,32 +187,57 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 	return ids, nil
 }
 
-// repairAlbumCaptions 整组发送成功后，把各成员非空 caption 经 Bot API
-// editMessageCaption 重写一遍（与缓存频道副本 WriteClean 同款编辑链路，
-// 展示已真机验证）。尽力而为：整组媒体此刻已送达，caption 修复失败只记
-// 日志、不改变发送结果——把已完成的投递标记为失败只会诱导用户重发，重复
-// 2GB 级上传。ID 数与成员数不符（发送器契约违约，SendAlbum 已防御）时无法
-// 按位定位成员，整体跳过。成功重写记一条 Info（真机排查相册 caption 展示
-// 问题的观测点）。
+// repairAlbumCaptions 整组发送成功后，把组首成员的署名 caption 强制写入
+// **组首与组末**两个成员（经 Bot API 编辑链路，参照缓存频道副本 WriteClean
+// 的已验证机制）。
+//
+// 客户端对相册组级展示位（相册下方唯一的 caption 槽）的成员取舍规则不稳定，
+// 真机实验矩阵（2026-09-20，[图片(署名), 段1(署名), 段2(空 caption)]）：
+//   - 完整三成员 → 展示位空白（caption 数据在线上，点开单条可见）；
+//   - 删除组首图片 → 展示位出现分段署名；
+//   - 删除组末空 caption 分段 → 展示位出现文字与原链接。
+//
+// 删除任一成员（组级重渲染）都让展示位恢复，说明数据在、渲染规则不稳——
+// 与"组末成员 caption 为空"强相关。两端写入使展示位无论按首/末/其他规则
+// 解析都能渲染完整署名；绑定频道副本（裸 copyMessages）随源消息自然继承。
+//
+// 两步强制写入（占位符 → 目标）：两次都是相对当前状态的真修改，不依赖空
+// caption 的序列化行为，也免疫"线上已等于目标内容"的 no-op 吸收。首末是
+// 同一条消息（单成员防御）时只写一次。尽力而为：媒体此刻已送达，编辑失败
+// 只记 Warn（带 Telegram 原始错误文本，真机观测点）、不改变发送结果；任一
+// 目标成功即记 Info。
 func (s *routerSender) repairAlbumCaptions(ctx context.Context, chatID int64, entries []AlbumEntry, ids []int) {
-	if len(ids) != len(entries) {
+	if len(ids) != len(entries) || len(ids) == 0 {
 		return
 	}
-	edited := 0
-	for i, e := range entries {
-		captionHTML := e.Caption.RenderHTML()
-		if captionHTML == "" {
+	captionHTML := entries[0].Caption.RenderHTML()
+	if captionHTML == "" {
+		return
+	}
+	targets := []int{ids[0]}
+	if last := ids[len(ids)-1]; last != ids[0] {
+		targets = append(targets, last)
+	}
+	ok := 0
+	for _, id := range targets {
+		if err := s.api.EditMessageCaption(ctx, chatID, id, captionRepairPlaceholder); err != nil {
+			s.log.Warn("caption 占位写入失败（相册下方署名可能缺失）",
+				"chat_id", chatID, "message_id", id, "error", err.Error())
 			continue
 		}
-		if err := s.api.EditMessageCaption(ctx, chatID, ids[i], captionHTML); err != nil {
-			s.log.Warn("整组 caption 重写失败（相册下方文字可能缺失）",
-				"chat_id", chatID, "message_id", ids[i], "error", err.Error())
-		} else {
-			edited++
+		if err := s.api.EditMessageCaption(ctx, chatID, id, captionHTML); err != nil {
+			s.log.Warn("caption 写入失败（相册下方署名可能缺失）",
+				"chat_id", chatID, "message_id", id, "error", err.Error())
+			continue
 		}
+		ok++
 	}
-	if edited > 0 {
-		s.log.Info("整组 caption 已重写（保证相册下方文字展示）",
-			"chat_id", chatID, "messages", len(ids), "edited", edited)
+	if ok > 0 {
+		s.log.Info("相册首末 caption 已强制写入（保证组级展示位渲染署名）",
+			"chat_id", chatID, "message_id", ids[0], "album", len(ids), "written", ok)
 	}
 }
+
+// captionRepairPlaceholder 是两步强制写入的第一步占位内容：与任何目标
+// caption（署名卡片 + 正文 + 脚注）都不同，保证第二步写入必然是真实修改。
+const captionRepairPlaceholder = "…"
