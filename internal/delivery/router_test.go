@@ -376,17 +376,15 @@ func TestRouterCopyMessagesDelegation(t *testing.T) {
 	}
 }
 
-// TestRouterAlbumCaptionRepair 整组发送成功后把组首署名 caption 强制写入
-// 首末两个成员（Bot API 编辑链路，占位符→目标两步真修改）：客户端对相册
-// 组级展示位的成员取舍规则不稳定（真机 2026-09-20 实验矩阵：删除任一成员
-// 都让展示位恢复，与组末空 caption 强相关），首末写入使展示位无论按哪条
-// 规则解析都能渲染署名；绑定频道副本（copyMessages）随源消息继承。
-// MTProto 分支恒写入；Bot API 分支仅对拆分相册（Split 标记，本地服务器
-// 模式下整组走 sendMediaGroup 分支）写入；写入失败不改变已完成的发送结果。
+// TestRouterAlbumCaptionRepair 整组发送成功后执行"恰好组首一条 caption"
+// 不变量兜底：客户端对多成员带 caption 的相册首渲染抑制组级展示位（真机
+// 2026-09-20 五组实验），非组首 caption 清空、组首缺失补写（已正确时为
+// no-op）。MTProto 分支恒执行；Bot API 分支仅对拆分相册（Split 标记）执行；
+// 普通相册不执行；失败不改变已完成的发送结果。
 func TestRouterAlbumCaptionRepair(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("MTProto 整组 → 首末成员各两步写入", func(t *testing.T) {
+	t.Run("MTProto 整组 → 非组首 caption 清空、组首补写", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -402,28 +400,19 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MTProto 整组直传应成功: %v", err)
 		}
-		// 首末两个目标 × 占位/目标两步 = 4 次编辑；组中成员不写
-		if len(api.captionEdits) != 4 {
-			t.Fatalf("应对首末成员各两步写入: %d", len(api.captionEdits))
+		if len(api.captionEdits) != 2 {
+			t.Fatalf("应清空 1 个非组首 caption 并补写组首: %d", len(api.captionEdits))
 		}
-		for i, id := range []int{ids[0], ids[2]} {
-			base := i * 2
-			if api.captionEdits[base].chatID != 7 || api.captionEdits[base].messageID != id ||
-				api.captionEdits[base].caption != captionRepairPlaceholder {
-				t.Errorf("目标 %d 的占位写入不符: %+v", id, api.captionEdits[base])
-			}
-			if api.captionEdits[base+1].messageID != id || api.captionEdits[base+1].caption != "图片说明" {
-				t.Errorf("目标 %d 的署名写入不符: %+v", id, api.captionEdits[base+1])
-			}
+		if api.captionEdits[0].chatID != 7 || api.captionEdits[0].messageID != ids[1] ||
+			api.captionEdits[0].caption != "" {
+			t.Errorf("非组首应被清空: %+v", api.captionEdits[0])
 		}
-		for _, e := range api.captionEdits {
-			if e.messageID == ids[1] {
-				t.Errorf("组中成员不应被写入: %+v", e)
-			}
+		if api.captionEdits[1].messageID != ids[0] || api.captionEdits[1].caption != "图片说明" {
+			t.Errorf("组首应被补写: %+v", api.captionEdits[1])
 		}
 	})
 
-	t.Run("Bot API 整组（普通相册）→ 不写入（caption 展示正常）", func(t *testing.T) {
+	t.Run("Bot API 整组（普通相册）→ 不执行（历史行为不变）", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -437,15 +426,15 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 			t.Fatalf("Bot API 整组应成功: %v", err)
 		}
 		if api.albumCalls != 1 || len(api.captionEdits) != 0 {
-			t.Fatalf("普通相册不应触发 caption 写入: album=%d edits=%d",
+			t.Fatalf("普通相册不应触发 caption 编辑: album=%d edits=%d",
 				api.albumCalls, len(api.captionEdits))
 		}
 	})
 
-	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样写入首末", func(t *testing.T) {
+	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样执行不变量", func(t *testing.T) {
 		// 本地 Bot API 服务器：uploadCap = MaxFileSize，分段全员落在 Bot API
-		// 承载内、整组走 sendMediaGroup 分支——拆分相册的组级展示位同样需要
-		// 发送后写入兜底，由 Split 标记触发
+		// 承载内、整组走 sendMediaGroup 分支——拆分相册同样需要不变量兜底，
+		// 由 Split 标记触发
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -454,7 +443,7 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
 				Caption: message.Caption{Text: "图片说明"}},
 			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part1of2", Size: testUploadCap},
-				Reader: strings.NewReader("p1"), Caption: message.Caption{Text: "首段"}, Split: true},
+				Reader: strings.NewReader("p1"), Split: true},
 			{Media: message.Media{Kind: message.KindDocument, FileName: "big.part2of2", Size: testUploadCap},
 				Reader: strings.NewReader("p2"), Split: true},
 		}
@@ -465,19 +454,14 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 		if api.albumCalls != 1 || large.albumCalls != 0 {
 			t.Fatalf("应只调 Bot API 通道: api=%d large=%d", api.albumCalls, large.albumCalls)
 		}
-		if len(api.captionEdits) != 4 {
-			t.Fatalf("含拆分段时应写入首末成员: %d", len(api.captionEdits))
-		}
-		if api.captionEdits[1].messageID != ids[0] || api.captionEdits[1].caption != "图片说明" {
-			t.Errorf("组首写入不符: %+v", api.captionEdits[1])
-		}
-		// 组末是空 caption 分段：写入的是组首署名（组级展示位兜底）
-		if api.captionEdits[3].messageID != ids[2] || api.captionEdits[3].caption != "图片说明" {
-			t.Errorf("组末写入不符: %+v", api.captionEdits[3])
+		// 分段本就不带 caption（发送路径不变量）：只有组首补写一次
+		if len(api.captionEdits) != 1 || api.captionEdits[0].messageID != ids[0] ||
+			api.captionEdits[0].caption != "图片说明" {
+			t.Fatalf("应只有组首补写: %+v", api.captionEdits)
 		}
 	})
 
-	t.Run("写入失败 → 发送结果不受影响", func(t *testing.T) {
+	t.Run("不变量执行失败 → 发送结果不受影响", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true, captionErr: errors.New("edit failed")}
 		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
@@ -485,18 +469,18 @@ func TestRouterAlbumCaptionRepair(t *testing.T) {
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
 				Caption: message.Caption{Text: "图片说明"}},
-			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("b")},
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("b"),
+				Caption: message.Caption{Text: "视频说明"}},
 		}
 		ids, err := s.SendAlbum(ctx, 7, entries)
 		if err != nil {
-			t.Fatalf("caption 写入失败不应让已完成的整组发送失败: %v", err)
+			t.Fatalf("caption 编辑失败不应让已完成的整组发送失败: %v", err)
 		}
 		if large.albumCalls != 1 || len(ids) != 2 {
 			t.Fatalf("整组发送应照常完成: album=%d ids=%v", large.albumCalls, ids)
 		}
-		// 首末两个目标的占位写入都被拒绝（各尝试一次），不影响发送结果
 		if len(api.captionEdits) != 2 {
-			t.Fatalf("首末目标各应尝试一次占位写入: %d", len(api.captionEdits))
+			t.Fatalf("清空与补写各应尝试一次: %d", len(api.captionEdits))
 		}
 	})
 }

@@ -227,17 +227,15 @@ SourceRef
                上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
                整组直传；全 document 组（分卷拆分段）同走该通道；
                通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
-               整组发送成功后把组首署名 caption 经两步 editMessageCaption
-               （占位符 → 目标）强制写入首末两个成员（与缓存频道副本同款
-               编辑链路）：客户端相册组级展示位（相册下方唯一的 caption 槽）
-               的成员取舍规则不稳定（真机：删除任一成员即恢复展示），发送
-               链路逐成员携带的 caption 组级展示不可依赖；首末写入使展示位
-               无论按哪条规则解析都能渲染署名，绑定频道副本（copyMessages）
-               随源消息继承。MTProto 分支恒写入；Bot API 分支对拆分相册写入
-               （分段带 Split 标记——本地 Bot API 服务器模式下分段全员落
-               Bot API 承载、整组走 sendMediaGroup，不标记则写入不执行）；
-               尽力而为，写入失败只记日志不影响已完成的发送。混合相册
-               拆分整组同样按 split 记 delivery_mode（与单媒体拆分同语义）
+               拆分相册满足"恰好组首一条 caption"不变量：客户端对多成员
+               带 caption 的相册首渲染会抑制组级展示位（真机五组实验
+               2026-09-20，含缓存频道副本反向验证），分段仅组首携带 caption，
+               混合相册的署名与切段说明折叠进组首成员；发送成功后路由层
+               执行不变量兜底（非组首清空、组首补写，与缓存频道副本同款
+               Bot API 编辑链路）——MTProto 分支恒执行，Bot API 分支对拆分
+               相册执行（分段带 Split 标记，本地服务器模式下整组走
+               sendMediaGroup）；尽力而为，失败只记日志。混合相册拆分整组
+               同样按 split 记 delivery_mode（与单媒体拆分同语义）
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
 上限（2000MB）的媒体不再失败——完整落盘后切为 N 个分段（⌈Size/1800MB⌉，

@@ -798,6 +798,15 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 	defer cancelOpen()
 	g, gctx := errgroup.WithContext(ctx)
 	sem := make(chan struct{}, albumOpenConcurrency)
+	// 混合拆分整组的组首说明：组首为普通成员（如图片）而后置成员切段时，
+	// 切段说明折叠进组首 caption——多成员带 caption 会抑制相册组级展示位
+	//（真机 2026-09-20），分段自身一律不带 caption
+	laterSplitSegs := 0
+	for i := range items {
+		if plans[i].split && i != 0 {
+			laterSplitSegs += plans[i].count
+		}
+	}
 	for i, it := range items {
 		g.Go(func() error {
 			select { // 信号量限并发；首个失败取消后续排队者
@@ -815,9 +824,10 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 			if plans[i].split {
 				// 可拆视频成员：完整落盘 → ffmpeg 切段 → 展开为 N 个分段
 				// 条目（不经过 prepareVideoThumb——其 reader 会被切段路径
-				// 的区间读取取代，头部字节不能被消费）
+				// 的区间读取取代，头部字节不能被消费）；caption 仅在该成员
+				// 是组首时挂首段（多 caption 抑制组级展示，见函数级注释）
 				ents, cleanup, err := openVideoSegmentEntries(openCtx, d, j, it, *it.Media, h,
-					sourceURL, links)
+					sourceURL, links, i == 0)
 				if err != nil {
 					cancelOpen() // 切段/下载失败：整组失败（未发出任何字节，不降级）
 					return err
@@ -835,11 +845,15 @@ func sendAlbumGroup(ctx context.Context, d Deps, j Job, target int64, items []me
 			caption := it.MediaCaption().WithQuotedBody()
 			if i == 0 {
 				caption = caption.WithSourceLink(sourceURL).WithChannels(links)
+				if laterSplitSegs > 0 {
+					// 后置成员的切段说明折叠到组首（分段自身不带 caption）
+					caption = caption.WithNote(splitVideoNote(laterSplitSegs))
+				}
 			}
 			memberEntries[i] = []delivery.AlbumEntry{{
 				Media:   m,
 				Reader:  uploadReader(d, j, src),
-				Caption: caption, // 逐成员绑定；来源链接只置于相册首项
+				Caption: caption, // 逐成员绑定；组级署名与切段说明只置于组首
 			}}
 			return nil
 		})

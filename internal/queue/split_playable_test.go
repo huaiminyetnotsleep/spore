@@ -172,11 +172,12 @@ func photoMsg(id int, accessHash int64, size int) *tg.Message {
 }
 
 // 混合相册 [图片, 超限视频] 拆分整组：图片 + 2 个可播放分段合成同一条相册
-// 原子投递。断言三件事（真机 2026-09-20 回归）：
+// 原子投递。断言四件事（真机 2026-09-20 回归）：
 //   - 成员形态 [photo, video, video]，图片为组首且携带完整署名（正文 +
-//     来源链接 + 频道脚注），分段带 Split 标记（路由层据此对 Bot API 分支
-//     同样执行 caption 重写）；
-//   - 首段 caption 携带完整署名与切段说明（c653682 语义）；
+//     来源链接 + 频道脚注）与折叠的切段说明；
+//   - 分段一律不带 caption（"恰好组首一条 caption"不变量：客户端对多成员
+//     带 caption 的相册首渲染抑制组级展示位），分段带 Split 标记（路由层
+//     据此对 Bot API 分支同样执行不变量兜底）；
 //   - delivery_mode 归并为 split（此前混合拆分整组路径漏标 split，被归并
 //     为 upload，管理端"分段投递"口径失真）。
 func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
@@ -229,7 +230,8 @@ func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
 	if call.Splits[0] || !call.Splits[1] || !call.Splits[2] {
 		t.Fatalf("Split 标记应只落在分段上: %+v", call.Splits)
 	}
-	for _, want := range []string{"图注", "https://t.me/example/7"} {
+	// 组首图片携带完整署名 + 折叠的切段说明（分段自身不带 caption）
+	for _, want := range []string{"图注", "https://t.me/example/7", "已切分为 2 段"} {
 		if !strings.Contains(call.Captions[0].Text, want) {
 			t.Errorf("组首图片 caption 缺少 %q: %q", want, call.Captions[0].Text)
 		}
@@ -237,13 +239,10 @@ func TestWorkerSplitMixedAlbumMarksSplitDelivery(t *testing.T) {
 	if len(call.Captions[0].Channels) != 1 || call.Captions[0].Channels[0].Label != "我的频道" {
 		t.Errorf("组首图片应携带频道脚注: %+v", call.Captions[0].Channels)
 	}
-	for _, want := range []string{"https://t.me/example/7", "已切分为 2 段"} {
-		if !strings.Contains(call.Captions[1].Text, want) {
-			t.Errorf("首段 caption 缺少 %q: %q", want, call.Captions[1].Text)
+	for i := 1; i <= 2; i++ {
+		if call.Captions[i].Text != "" || len(call.Captions[i].Channels) != 0 {
+			t.Errorf("分段 %d 不应带 caption/脚注（恰好组首一条 caption 不变量）: %+v", i, call.Captions[i])
 		}
-	}
-	if call.Captions[2].Text != "" {
-		t.Errorf("次段不应带 caption: %q", call.Captions[2].Text)
 	}
 }
 

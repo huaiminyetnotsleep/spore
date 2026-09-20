@@ -127,15 +127,15 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
 // 按防御错误处理。
 //
-// 整组发送成功后做首末 caption 强制写入（repairAlbumCaptions，参照缓存频道
-// 副本 WriteClean 已真机验证的 Bot API 编辑链路）：把组首成员的署名 caption
-// 经两步 editMessageCaption（占位符 → 目标）强制写入组首与组末两个成员——
-// 客户端对相册组级展示位的成员取舍规则不稳定（真机 2026-09-20 实验矩阵，
-// 见 repairAlbumCaptions 注释），首末写入使展示位无论按哪条规则解析都能
-// 渲染署名。两条分支都需要——MTProto 路径（sendMultiMedia 逐成员 caption
-// 的组级展示不可依赖）与 Bot API 路径（本地 Bot API 服务器模式下的拆分相册：
-// 1800MB 分段 ≤ uploadCap=MaxFileSize，全员落 Bot API 承载）同理兜底。
-// 普通相册（无 Split 标记且全员 Bot API 承载）caption 展示正常，不写入。
+// 整组发送成功后执行"恰好组首一条 caption"不变量（repairAlbumCaptions，
+// 参照缓存频道副本 WriteClean 的已验证机制——副本只保留每组首条 caption，
+// 展示一直正常）：客户端对相册的首渲染在**多个成员携带 caption** 时抑制
+// 组级展示位（相册下方空白；真机 2026-09-20 五组实验：恰好组首一条 → 正常
+// 展示，2+ 条 → 抑制——包括把署名写到组末分段后缓存频道副本也失去文字的
+// 反向验证）。发送路径已按不变量构造（拆分段仅组首携带 caption），此处兜底：
+// 非组首成员带 caption 则清空，组首 caption 缺失则补写。MTProto 分支与
+// Bot API 分支的拆分相册（Split 标记）执行；普通相册（全员 Bot API 承载且
+// 无拆分）不执行，历史行为不变。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	allAPI := true
 	splitAlbum := false
@@ -206,38 +206,39 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 // 同一条消息（单成员防御）时只写一次。尽力而为：媒体此刻已送达，编辑失败
 // 只记 Warn（带 Telegram 原始错误文本，真机观测点）、不改变发送结果；任一
 // 目标成功即记 Info。
+// repairAlbumCaptions 整组发送成功后执行"恰好组首一条 caption"不变量的
+// 兜底（Bot API editMessageCaption，与缓存频道副本 WriteClean 同款编辑
+// 链路）。客户端对相册的首渲染在多个成员携带 caption 时抑制组级展示位
+// （真机 2026-09-20 五组实验矩阵，含把署名写到组末分段后缓存频道副本一并
+// 失去文字的反向验证；恰好组首一条——如正常相册、单视频切段、修复前的
+// 缓存频道副本——展示正常）。发送路径已按不变量构造，此处兜底：
+//   - 非组首成员带 caption → 清空（多 caption 抑制展示；缓存频道副本经
+//     copyMessages 忠实继承，清空同时修正下游副本）；
+//   - 组首 caption 缺失（发送链路意外丢失）→ 补写（线上已正确时为
+//     "message is not modified" no-op）。
+//
+// 尽力而为：媒体此刻已送达，编辑失败只记 Warn（带 Telegram 原始错误文本，
+// 真机观测点）、不改变发送结果。
 func (s *routerSender) repairAlbumCaptions(ctx context.Context, chatID int64, entries []AlbumEntry, ids []int) {
 	if len(ids) != len(entries) || len(ids) == 0 {
 		return
 	}
-	captionHTML := entries[0].Caption.RenderHTML()
-	if captionHTML == "" {
-		return
-	}
-	targets := []int{ids[0]}
-	if last := ids[len(ids)-1]; last != ids[0] {
-		targets = append(targets, last)
-	}
-	ok := 0
-	for _, id := range targets {
-		if err := s.api.EditMessageCaption(ctx, chatID, id, captionRepairPlaceholder); err != nil {
-			s.log.Warn("caption 占位写入失败（相册下方署名可能缺失）",
-				"chat_id", chatID, "message_id", id, "error", err.Error())
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Caption.RenderHTML() == "" {
 			continue
 		}
-		if err := s.api.EditMessageCaption(ctx, chatID, id, captionHTML); err != nil {
-			s.log.Warn("caption 写入失败（相册下方署名可能缺失）",
-				"chat_id", chatID, "message_id", id, "error", err.Error())
-			continue
+		if err := s.api.EditMessageCaption(ctx, chatID, ids[i], ""); err != nil {
+			s.log.Warn("非组首 caption 清空失败（相册下方署名可能缺失）",
+				"chat_id", chatID, "message_id", ids[i], "error", err.Error())
+		} else {
+			s.log.Info("非组首成员 caption 已清空（保证组级展示位渲染组首署名）",
+				"chat_id", chatID, "message_id", ids[i])
 		}
-		ok++
 	}
-	if ok > 0 {
-		s.log.Info("相册首末 caption 已强制写入（保证组级展示位渲染署名）",
-			"chat_id", chatID, "message_id", ids[0], "album", len(ids), "written", ok)
+	if captionHTML := entries[0].Caption.RenderHTML(); captionHTML != "" {
+		if err := s.api.EditMessageCaption(ctx, chatID, ids[0], captionHTML); err != nil {
+			s.log.Warn("组首 caption 补写失败（相册下方署名可能缺失）",
+				"chat_id", chatID, "message_id", ids[0], "error", err.Error())
+		}
 	}
 }
-
-// captionRepairPlaceholder 是两步强制写入的第一步占位内容：与任何目标
-// caption（署名卡片 + 正文 + 脚注）都不同，保证第二步写入必然是真实修改。
-const captionRepairPlaceholder = "…"

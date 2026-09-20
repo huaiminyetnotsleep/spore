@@ -157,7 +157,7 @@ type videoSegment struct {
 // 2026-09-20）。成功按整组记一次送达，观测标记 split。
 func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, track *deliveryTrack, sent *sentIDs) error {
 	if m.Kind == message.KindVideo {
-		entries, cleanup, err := openVideoSegmentEntries(ctx, d, j, it, m, h, sourceURL, links)
+		entries, cleanup, err := openVideoSegmentEntries(ctx, d, j, it, m, h, sourceURL, links, true)
 		if err != nil {
 			return err
 		}
@@ -179,10 +179,13 @@ func sendSplitDocument(ctx context.Context, d Deps, j Job, target int64, it mess
 // 再落一份）→ ffmpeg 流复制切段 → 逐段封面 → 打开段文件 reader。返回的
 // cleanup 关闭全部 reader 并删除段文件，必须在整组发送消费完 reader 之后
 // 调用（单媒体路径 defer、整组路径函数级 defer 统一兜底）。
-// 首段无条件携带完整署名（正文 + 来源链接 + 频道脚注 + 切段说明）——拆分
-// 成员可能位于源相册的非首位，若仅在组首织入，分段会缺失来源与脚注
-// （真机 2026-09-20：[图片, 大视频] 相册的分段只剩切段说明）。
-func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink) ([]delivery.AlbumEntry, func(), error) {
+//
+// caption 只在 withCaption=true（该拆分成员是整组的第一条目，如单媒体
+// 拆分、大视频领队的混合相册）时挂到首段；否则分段一律不带 caption——
+// 客户端对"多成员带 caption"的相册首渲染会抑制组级展示位（相册下方空白，
+// 真机 2026-09-20 四轮实验：恰好组首一条 caption 正常展示，2+ 条抑制），
+// 混合相册的署名与切段说明由组首成员（sendAlbumGroup 的 i==0）携带。
+func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item, m message.Media, h *media.Handle, sourceURL string, links []message.ChannelLink, withCaption bool) ([]delivery.AlbumEntry, func(), error) {
 	if err := h.WaitDownloaded(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -204,12 +207,14 @@ func openVideoSegmentEntries(ctx context.Context, d Deps, j Job, it message.Item
 		return nil, nil, err
 	}
 
-	caption := it.MediaCaption().WithQuotedBody()
-	if sourceURL != "" {
-		// 拆分段的首段无条件织入来源链接与频道脚注（见函数注释）
-		caption = caption.WithSourceLink(sourceURL).WithChannels(links)
+	var caption message.Caption
+	if withCaption {
+		caption = it.MediaCaption().WithQuotedBody()
+		if sourceURL != "" {
+			caption = caption.WithSourceLink(sourceURL).WithChannels(links)
+		}
+		caption = caption.WithNote(splitVideoNote(n))
 	}
-	caption = caption.WithNote(splitVideoNote(n))
 
 	entries := make([]delivery.AlbumEntry, 0, n)
 	readers := make([]io.Closer, 0, n)
