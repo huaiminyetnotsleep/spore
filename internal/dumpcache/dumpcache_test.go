@@ -4,6 +4,7 @@ package dumpcache
 // 写失败不落条目、Entry/CopyOut/Enabled。
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -377,5 +378,22 @@ func TestWriteCleanAlbumPlanFailureNoEntry(t *testing.T) {
 		[][]int{{55}, {56}}, "https://t.me/example/7", "plan")
 	if _, err := st.LatestDumpEntry(context.Background(), "example", 7); err == nil {
 		t.Fatal("复制失败不应落条目")
+	}
+}
+
+// TestEntryMissSilent 无条目（ErrNotFound）是查重/复用预检的正常未命中：
+// 静默返回 false，不刷 WARN（2026-09-21 真机日志噪音：每条新消息预热前
+// 的查重未命中都会告警一次）。
+func TestEntryMissSilent(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	var buf bytes.Buffer
+	s := New(&fakeSender{}, nil, st, func() int64 { return -100777 },
+		slog.New(slog.NewTextHandler(&buf, nil)))
+	if _, ok := s.Entry(ctx, "-1001234", 57); ok {
+		t.Fatal("无条目应返回 false")
+	}
+	if strings.Contains(buf.String(), "查询缓存频道条目失败") {
+		t.Fatalf("正常未命中不应告警: %s", buf.String())
 	}
 }

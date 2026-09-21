@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -253,6 +254,18 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 	if len(media) == 0 {
 		return
 	}
+	// 批内规范化：按消息 ID 升序去重。多 bot 池下同一源帖会被多个受理 bot
+	// 各投递一遍，共享聚合组可能出现重复或交错乱序成员——copyMessages 要
+	// 求 message_ids 严格递增，不规范化会被 Telegram 整批拒绝（批内全部丢
+	// 失，且该错误不回退入队）。排序后首条即相册头（回退定位符取它）。
+	sort.Slice(media, func(i, j int) bool { return media[i].ID < media[j].ID })
+	uniq := media[:0]
+	for _, m := range media {
+		if len(uniq) == 0 || uniq[len(uniq)-1].ID != m.ID {
+			uniq = append(uniq, m)
+		}
+	}
+	media = uniq
 	first := media[0]
 	numericKey := strconv.FormatInt(g.chat.ID, 10)
 	usernameKey := strings.ToLower(g.src.Username)
@@ -362,7 +375,7 @@ func hasMedia(m *models.Message) bool {
 
 // describeContent 描述消息实际携带的内容（跳过日志观测用）：让"看着有图
 // 却没预热"的差异有据可查——典型如图片以链接预览形态出现在纯文本里
-//（Bot API 视为 text，无 photo 字段）。
+// （Bot API 视为 text，无 photo 字段）。
 func describeContent(m *models.Message) string {
 	parts := make([]string, 0, 4)
 	if len(m.Photo) > 0 {

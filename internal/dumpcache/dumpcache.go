@@ -24,6 +24,7 @@ package dumpcache
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -93,11 +94,15 @@ func (s *Service) RecordEntry(ctx context.Context, channelKey string, messageID 
 }
 
 // Entry 取同链接最新干净副本坐标；未配置或无条目返回 false。
+// 无条目（ErrNotFound）是查重/复用预检的正常未命中，静默返回。
 func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (store.DumpEntry, bool) {
 	if !s.Enabled() {
 		return store.DumpEntry{}, false
 	}
 	e, err := s.st.LatestDumpEntry(ctx, channelKey, messageID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.DumpEntry{}, false
+	}
 	if err != nil {
 		s.log.Warn("查询缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
 		return store.DumpEntry{}, false
