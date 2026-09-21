@@ -766,6 +766,10 @@ body {
   white-space: nowrap;
 }
 
+.cell-nowrap {
+  white-space: nowrap;
+}
+
 .chart-panel__current-value-row {
   display: flex;
   justify-content: flex-end;

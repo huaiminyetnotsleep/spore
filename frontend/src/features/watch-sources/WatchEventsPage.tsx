@@ -103,10 +103,14 @@ export function WatchEventsPage() {
     {
       title: "Bot",
       dataIndex: "bot_id",
-      width: 140,
+      width: 180,
       render: (v: number, row) =>
-        v === 0 ? <Text type="secondary">—</Text> : (
-          <Text code>{row.bot_username ? `@${row.bot_username}` : v}</Text>
+        v === 0 ? (
+          <Text type="secondary">—</Text>
+        ) : (
+          <span className="cell-nowrap">
+            <Text code>{row.bot_username ? `@${row.bot_username}` : v}</Text>
+          </span>
         ),
     },
     {

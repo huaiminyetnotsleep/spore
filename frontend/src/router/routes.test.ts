@@ -20,8 +20,8 @@ describe("SPA 导航信息架构", () => {
       "机器人池",
       "系统运维",
     ]);
-    expect(navRoutes).toHaveLength(23);
-    expect(routeMeta).toHaveLength(26);
+    expect(navRoutes).toHaveLength(24);
+    expect(routeMeta).toHaveLength(27);
     expect(navigationGroups.flatMap((group) => group.routeKeys)).toEqual([
       "overview",
       "stats",
@@ -32,6 +32,7 @@ describe("SPA 导航信息架构", () => {
       "cloud-drive",
       "watch-events",
       "watch-sources",
+      "watch-settings",
       "invite-approvals",
       "joined-channels",
       "join-settings",
@@ -75,5 +76,40 @@ describe("SPA 导航信息架构", () => {
     expect(getActiveNavRoute("/settings/oauth")?.key).toBe("oauth");
     expect(getActiveNavRoute("/settings/oauth")?.key).not.toBe("settings");
     expect(getNavigationContext("/settings/oauth")?.group?.label).toBe("系统运维");
+  });
+
+  it("监听源分组拆分为监听源管理、监听源配置与监听记录三个独立菜单（记录在最前）", () => {
+    const watchGroup = navigationGroups.find((group) => group.key === "watch-group");
+    expect(watchGroup?.routeKeys).toEqual(["watch-events", "watch-sources", "watch-settings"]);
+
+    const eventsRoute = routeMeta.find((route) => route.key === "watch-events");
+    expect(eventsRoute).toMatchObject({
+      path: "/watch-events",
+      label: "监听记录",
+      title: "监听记录",
+      groupKey: "watch-group",
+      menuVisible: true,
+    });
+    expect(getActiveNavRoute("/watch-events")?.key).toBe("watch-events");
+
+    const sourcesRoute = routeMeta.find((route) => route.key === "watch-sources");
+    expect(sourcesRoute).toMatchObject({
+      path: "/watch-sources",
+      label: "监听源管理",
+      title: "监听源管理",
+      groupKey: "watch-group",
+      menuVisible: true,
+    });
+    expect(getActiveNavRoute("/watch-sources")?.key).toBe("watch-sources");
+
+    const settingsRoute = routeMeta.find((route) => route.key === "watch-settings");
+    expect(settingsRoute).toMatchObject({
+      path: "/watch-settings",
+      label: "监听源配置",
+      title: "监听源配置",
+      groupKey: "watch-group",
+      menuVisible: true,
+    });
+    expect(getActiveNavRoute("/watch-settings")?.key).toBe("watch-settings");
   });
 });

@@ -11,7 +11,6 @@
 import {
   ApiOutlined,
   EyeOutlined,
-  FileSearchOutlined,
   AuditOutlined,
   CheckCircleOutlined,
   BarChartOutlined,
@@ -22,6 +21,7 @@ import {
   DashboardOutlined,
   DatabaseOutlined,
   ExceptionOutlined,
+  HistoryOutlined,
   GithubOutlined,
   RobotOutlined,
   LineChartOutlined,
@@ -74,6 +74,11 @@ const ChannelSettingsPage = lazy(() =>
 const WatchSourcesPage = lazy(() =>
   import("../features/watch-sources/WatchSourcesPage").then((m) => ({
     default: m.WatchSourcesPage,
+  })),
+);
+const WatchSettingsPage = lazy(() =>
+  import("../features/watch-sources/WatchSettingsPage").then((m) => ({
+    default: m.WatchSettingsPage,
   })),
 );
 const WatchEventsPage = lazy(() =>
@@ -238,21 +243,30 @@ export const routeMeta = [
     menuVisible: true,
   },
   {
-    key: "watch-sources",
-    path: "/watch-sources",
-    label: "监听源配置",
-    title: "监听源配置",
-    groupKey: "watch-group",
-    icon: <EyeOutlined />,
-    menuVisible: true,
-  },
-  {
     key: "watch-events",
     path: "/watch-events",
     label: "监听记录",
     title: "监听记录",
     groupKey: "watch-group",
-    icon: <FileSearchOutlined />,
+    icon: <HistoryOutlined />,
+    menuVisible: true,
+  },
+  {
+    key: "watch-sources",
+    path: "/watch-sources",
+    label: "监听源管理",
+    title: "监听源管理",
+    groupKey: "watch-group",
+    icon: <EyeOutlined />,
+    menuVisible: true,
+  },
+  {
+    key: "watch-settings",
+    path: "/watch-settings",
+    label: "监听源配置",
+    title: "监听源配置",
+    groupKey: "watch-group",
+    icon: <SettingOutlined />,
     menuVisible: true,
   },
   {
@@ -404,7 +418,7 @@ export const navigationGroups = [
   {
     key: "watch-group",
     label: "监听源",
-    routeKeys: ["watch-events", "watch-sources"],
+    routeKeys: ["watch-events", "watch-sources", "watch-settings"],
   },
   {
     key: "channel-invited",
@@ -515,6 +529,7 @@ export function AppRoutes() {
         <Route path="/channel-bindings" element={<BindingsPage />} />
         <Route path="/channel-settings" element={<ChannelSettingsPage />} />
         <Route path="/watch-sources" element={<WatchSourcesPage />} />
+        <Route path="/watch-settings" element={<WatchSettingsPage />} />
         <Route path="/watch-events" element={<WatchEventsPage />} />
         <Route path="/cloud-drive" element={<CloudDrivePage />} />
         <Route path="/invite-approvals" element={<JoinApprovalsPage />} />
