@@ -80,13 +80,22 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 	return func(ctx context.Context, b *tgbot.Bot, update *models.Update) {
 		// 监听源消息：频道帖（bot 为频道管理员）与超级群组消息（bot 为
 		// 群管理员，privacy 旁路可见全部）。回调内自行做源白名单过滤，
-		// 未配置监听时是廉价的缓存查询后丢弃。
+		// 未配置监听时是廉价的缓存查询后丢弃。普通群组不支持监听（无法
+		// 稳定收到全部消息），打跳过日志便于定位"消息没被转发"。
 		if opt.OnSourceMessage != nil {
 			var srcMsg *models.Message
 			if update.ChannelPost != nil {
 				srcMsg = update.ChannelPost
 			} else if update.Message != nil && update.Message.Chat.Type == models.ChatTypeSupergroup {
 				srcMsg = update.Message
+			} else if update.Message != nil && update.Message.Chat.Type == models.ChatTypeGroup {
+				m := update.Message
+				fields := []any{"chat_id", m.Chat.ID, "message_id", m.ID,
+					"reason", "普通群组不支持监听（仅频道/超级群组）"}
+				if m.From != nil {
+					fields = append(fields, "from_id", m.From.ID, "from_is_bot", m.From.IsBot)
+				}
+				opt.Log.Info("监听消息跳过", fields...)
 			}
 			if srcMsg != nil {
 				bi := opt.Bot.Get()

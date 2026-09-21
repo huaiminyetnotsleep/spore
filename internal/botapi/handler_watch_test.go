@@ -3,9 +3,14 @@ package botapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/go-telegram/bot/models"
+
+	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
@@ -232,4 +237,62 @@ func TestHandleUnwatchSuccess(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0], "已移除监听源") {
 		t.Fatalf("应回复移除成功: %v", got)
 	}
+}
+
+// 普通群组消息在路由层跳过并打原因日志（不进 listener、不触发私聊分流）。
+func TestUpdateHandlerBasicGroupSkipLogged(t *testing.T) {
+	capture := &sliceLogCapture{}
+	var forwarded bool
+	opt := Options{
+		Log: slog.New(capture),
+		OnSourceMessage: func(_ *models.Message, _ delivery.Sender, _ int64, _ string) {
+			forwarded = true
+		},
+	}
+	updateHandler(opt)(context.Background(), nil, &models.Update{Message: &models.Message{
+		ID:    1,
+		Chat:  models.Chat{ID: -99, Type: models.ChatTypeGroup},
+		From:  &models.User{ID: 5, IsBot: true},
+		Video: &models.Video{},
+	}})
+	if forwarded {
+		t.Fatal("普通群组消息不应进入监听回调")
+	}
+	if !capture.contains("普通群组不支持监听") || !capture.contains("from_is_bot=true") {
+		t.Fatalf("应记录跳过原因与发送者身份: %v", capture.lines)
+	}
+}
+
+// sliceLogCapture 聚合日志行（跳过日志断言用）。
+type sliceLogCapture struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *sliceLogCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *sliceLogCapture) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool {
+		b.WriteString(" " + a.Key + "=" + a.Value.String())
+		return true
+	})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, b.String())
+	return nil
+}
+func (c *sliceLogCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *sliceLogCapture) WithGroup(string) slog.Handler      { return c }
+
+func (c *sliceLogCapture) contains(substr string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, l := range c.lines {
+		if strings.Contains(l, substr) {
+			return true
+		}
+	}
+	return false
 }
