@@ -46,6 +46,27 @@ func ParseInvite(text string) (string, bool) {
 	return "", false
 }
 
+// ParseInviteLink 与 ParseInvite 相同，但只接受链接形态
+// （t.me/+hash、telegram.me/+hash、t.me/joinchat/hash），不做裸 hash 回退。
+// 供"目标既可能是频道标识也可能是邀请链接"的场景（如 /watch）使用：
+// 裸 hash 会与合法频道用户名冲突，必须要求完整链接。
+func ParseInviteLink(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	for _, loc := range candidatePattern.FindAllStringIndex(text, -1) {
+		start := loc[0]
+		if start > 0 && boundaryForbidden(rune(text[start-1])) {
+			continue
+		}
+		if hash, ok := parseInviteCandidate(text[start:loc[1]]); ok {
+			return hash, true
+		}
+	}
+	return "", false
+}
+
 // trimInviteSuffix 移除链接末尾的自然语言标点，但保留邀请 hash 允许的
 // ASCII 连字符和下划线，避免合法 token 被误截断。
 func trimInviteSuffix(s string) string {

@@ -87,6 +87,8 @@ type Watch interface {
 	Unwatch(ctx context.Context, userID int64, isOwner bool, target string) (store.WatchSource, error)
 	// ListByUser 返回该用户名下的监听源（/watch 无参数列表）。
 	ListByUser(ctx context.Context, userID int64) ([]store.WatchSource, error)
+	// ListInvitesByUser 返回该用户名下的私有邀请链接申请（/watch 无参数列表）。
+	ListInvitesByUser(ctx context.Context, userID int64) ([]store.WatchInviteRequest, error)
 }
 
 // OwnerCheck 判定提交者是否号主（users 表全局唯一 owner）；未设 owner 时

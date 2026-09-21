@@ -1269,3 +1269,17 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 列表筛选控件（草稿态 + 「查询」按钮模式）的最小宽度 */
+.filter-select {
+  min-width: 160px;
+}
+
+.filter-input {
+  min-width: 200px;
+}
+
+/* 表格批量操作条（选中行后出现） */
+.batch-action-bar {
+  margin-bottom: 12px;
+}

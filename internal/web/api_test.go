@@ -261,7 +261,9 @@ func TestAPIAppErrStatusMapping(t *testing.T) {
 		{"存储约束", apperr.New(apperr.CodeStoreConstraint, "测试"), http.StatusConflict, string(apperr.CodeStoreConstraint)},
 		{"存储不可用", apperr.Wrap(apperr.CodeStoreUnavailable, errors.New("db down")), http.StatusServiceUnavailable, string(apperr.CodeStoreUnavailable)},
 		{"未分类错误", errors.New("boom"), http.StatusInternalServerError, string(apperr.CodeInternal)},
-		{"业务错误暂回落内部错误", apperr.New(apperr.CodeInvalidURL, "测试"), http.StatusInternalServerError, string(apperr.CodeInternal)},
+		{"邀请链接无效返回 400", apperr.New(apperr.CodeInvalidURL, "测试"), http.StatusBadRequest, string(apperr.CodeInvalidURL)},
+		{"频道邀请无效返回 400", apperr.New(apperr.CodeInvalidInviteURL, "测试"), http.StatusBadRequest, string(apperr.CodeInvalidInviteURL)},
+		{"业务错误暂回落内部错误", apperr.New(apperr.CodeMediaUnsupported, "测试"), http.StatusInternalServerError, string(apperr.CodeInternal)},
 	}
 	for _, tc := range cases {
 		status, code := apiAppErrStatus(tc.err)

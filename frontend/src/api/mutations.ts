@@ -10,6 +10,8 @@ import { getCSRFToken } from "./session";
 import { PROJECT_IDENTITY } from "../shared/projectIdentity.generated";
 import type {
   BackupView,
+  WatchEventsDeleteResult,
+  WatchInviteRequestRow,
   WatchSourceRow,
   CloudDriveBackupCandidate,
   CloudDriveView,
@@ -306,12 +308,13 @@ export const saveSettings = (input: SettingsSaveInput): Promise<SettingsSaveResu
 
 // ---- 监听源（/watch，预热缓存频道） ----
 
-/** 监听源写操作公共响应（add/review/toggle 携带最新行）。 */
+/** 监听源写操作公共响应；邀请链接可能返回待处理申请而非直接 source。 */
 export interface WatchSourceOpResult extends WriteOK {
   source?: WatchSourceRow;
+  invite_request?: WatchInviteRequestRow;
 }
 
-/** 管理员直接添加监听源（天然 approved；服务端校验 bot 须为源管理员）。 */
+/** 管理员添加监听源；target 也可为邀请链接，由服务端返回 source 或 invite_request。 */
 export const addWatchSource = (target: string, enabled = true): Promise<WatchSourceOpResult> =>
   postJSON<WatchSourceOpResult>("/api/v1/watch-sources/add", { target, enabled });
 
@@ -339,6 +342,28 @@ export interface WatchLeaveResult extends WriteOK {
 }
 export const leaveWatchSource = (channelId: number): Promise<WatchLeaveResult> =>
   postJSON<WatchLeaveResult>(`/api/v1/watch-sources/${channelId}/leave`);
+
+/** 邀请链接申请操作响应；审批成功时可能同时创建监听源。 */
+export interface WatchInviteRequestOpResult extends WriteOK {
+  invite_request?: WatchInviteRequestRow;
+  source?: WatchSourceRow;
+}
+
+export const approveWatchInviteRequest = (id: number): Promise<WatchInviteRequestOpResult> =>
+  postJSON<WatchInviteRequestOpResult>(`/api/v1/watch-invite-requests/${id}/approve`);
+
+export const rejectWatchInviteRequest = (id: number): Promise<WatchInviteRequestOpResult> =>
+  postJSON<WatchInviteRequestOpResult>(`/api/v1/watch-invite-requests/${id}/reject`);
+
+export const retryWatchInviteRequest = (id: number): Promise<WatchInviteRequestOpResult> =>
+  postJSON<WatchInviteRequestOpResult>(`/api/v1/watch-invite-requests/${id}/retry`);
+
+export const deleteWatchInviteRequest = (id: number): Promise<WriteOK> =>
+  postJSON<WriteOK>(`/api/v1/watch-invite-requests/${id}/delete`);
+
+/** 删除预热事件（单条/批量共用，单条传单元素数组）。 */
+export const deleteWatchEvents = (ids: number[]): Promise<WatchEventsDeleteResult> =>
+  postJSON<WatchEventsDeleteResult>("/api/v1/watch-events/delete", { ids });
 
 // ---- 系统设置（系统身份） ----
 

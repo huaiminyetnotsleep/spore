@@ -99,10 +99,11 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 		t.Errorf("max_channels 应为 %d（0=不限），得到 %d", wantMax, view.Join.MaxChannels)
 	}
 	wantDist := map[string]int{
-		store.JoinedViaCommand: 1, store.JoinedViaApproved: 2, store.JoinedViaExternal: 1,
+		store.JoinedViaCommand: 1, store.JoinedViaApproved: 2,
+		store.JoinedViaExternal: 1, store.JoinedViaWatchSource: 0,
 	}
-	if len(view.Join.SourceDist) != 3 {
-		t.Fatalf("来源分布应固定三行: %+v", view.Join.SourceDist)
+	if len(view.Join.SourceDist) != 4 {
+		t.Fatalf("来源分布应固定四行（含 watch_source 0 行）: %+v", view.Join.SourceDist)
 	}
 	for _, row := range view.Join.SourceDist {
 		if row.Count != wantDist[row.Key] {
@@ -111,7 +112,7 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 	}
 }
 
-// 空库时 join 快照为零值 + 三来源 0 行（join 功能未启用也照常下发）。
+// 空库时 join 快照为零值 + 四来源 0 行（join 功能未启用也照常下发）。
 func TestAPIOverviewJoinZeroState(t *testing.T) {
 	e := newTestEnv(t, nil)
 	j := e.login(t)
@@ -121,8 +122,8 @@ func TestAPIOverviewJoinZeroState(t *testing.T) {
 	if view.Join.Pending != 0 || view.Join.ActiveJoined != 0 || view.Join.LeftTotal != 0 {
 		t.Errorf("空库 join 计数应为零: %+v", view.Join)
 	}
-	if len(view.Join.SourceDist) != 3 {
-		t.Fatalf("来源分布应固定三行（含 0）: %+v", view.Join.SourceDist)
+	if len(view.Join.SourceDist) != 4 {
+		t.Fatalf("来源分布应固定四行（含 0）: %+v", view.Join.SourceDist)
 	}
 	for _, row := range view.Join.SourceDist {
 		if row.Count != 0 {

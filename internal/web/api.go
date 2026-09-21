@@ -17,6 +17,7 @@ import (
 	"net/http"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -31,6 +32,9 @@ const (
 	apiCodeConflict         = "CONFLICT"            // 与当前状态冲突
 	apiCodeMethodNotAllowed = "METHOD_NOT_ALLOWED"  // HTTP 方法与注册路由不匹配
 	apiCodeUnavailable      = "SERVICE_UNAVAILABLE" // 可选依赖未接入，操作暂不可用
+	// apiCodeMTProtoOffline MTProto 用户号离线：邀请/加入类操作暂不可执行
+	//（瞬态，登录恢复后重试；文案与 channel-join 页面的受控提示一致）。
+	apiCodeMTProtoOffline = "MTPROTO_OFFLINE"
 )
 
 // apiCSRFHeader 是 API 变更请求携带会话级 CSRF token 的请求头。
@@ -58,6 +62,8 @@ func apiUserMessage(code string) string {
 		return "请求方法与该端点不匹配。"
 	case apiCodeUnavailable:
 		return "管理服务未接入本实例，无法执行该操作。"
+	case apiCodeMTProtoOffline:
+		return "Telegram 用户号当前离线，请先在「Telegram 连接」页完成登录再操作。"
 	default:
 		return apperr.UserText(apperr.Code(code))
 	}
@@ -89,11 +95,15 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 
 // apiAppErrStatus 把业务错误映射为 API 状态与错误码：查无此行 404、
 // 存储约束 409、存储不可用 503；写操作相关业务码按语义补充
-// （RETRY_EXHAUSTED/USER_DISABLED 409、QUEUE_FULL 503），
-// 其余回落 500 与 INTERNAL_ERROR。
+// （RETRY_EXHAUSTED/USER_DISABLED 409、QUEUE_FULL 503、邀请链接类 400、
+// MTProto 用户号离线 503），其余回落 500 与 INTERNAL_ERROR。
 func apiAppErrStatus(err error) (status int, code string) {
 	if errors.Is(err, store.ErrNotFound) {
 		return http.StatusNotFound, apiCodeNotFound
+	}
+	if errors.Is(err, mtproto.ErrMembershipUnavailable) {
+		// 用户号离线是瞬态资源条件：同"稍后重试"语义，受控文案提示先登录
+		return http.StatusServiceUnavailable, apiCodeMTProtoOffline
 	}
 	var ae *apperr.AppError
 	if errors.As(err, &ae) {
@@ -105,6 +115,8 @@ func apiAppErrStatus(err error) (status int, code string) {
 			apperr.CodeChannelNotPostable, apperr.CodeChannelAlreadyBound:
 			return http.StatusConflict, string(ae.Code)
 		case apperr.CodeChannelTargetInvalid:
+			return http.StatusBadRequest, string(ae.Code)
+		case apperr.CodeInvalidURL, apperr.CodeInvalidInviteURL:
 			return http.StatusBadRequest, string(ae.Code)
 		}
 	}

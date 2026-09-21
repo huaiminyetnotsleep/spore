@@ -548,3 +548,33 @@ func TestBindLimitOwnerAndCustom(t *testing.T) {
 		t.Fatalf("幂等重绑不受新上限影响: %v", err)
 	}
 }
+
+func TestParseChannelTargetMalformedPrivateLink(t *testing.T) {
+	// 畸形私有链接应返回受控错误而不是 panic（splitTMe 越界回归）
+	for _, input := range []string{"t.me/c", "https://t.me/c", "t.me/c/"} {
+		if _, err := ParseChannelTarget(input); err == nil {
+			t.Fatalf("%q 应解析失败", input)
+		}
+	}
+}
+
+func TestParseChannelTargetInviteLinkNotAChannelTarget(t *testing.T) {
+	// 邀请链接不是频道目标；/watch 的邀请分流在服务层先行判断
+	for _, input := range []string{
+		"https://t.me/+AbCdEfGh12345678",
+		"https://t.me/joinchat/AbCdEfGh12345678",
+	} {
+		if _, err := ParseChannelTarget(input); err == nil {
+			t.Fatalf("邀请链接 %q 不应被当作频道目标解析成功", input)
+		}
+	}
+}
+
+func TestBotChannelIDConversion(t *testing.T) {
+	cases := map[int64]int64{1234567890: -1001234567890, 1: -1001, 999999999999: -100999999999999}
+	for in, want := range cases {
+		if got := BotChannelID(in); got != want {
+			t.Errorf("BotChannelID(%d) = %d, 期望 %d", in, got, want)
+		}
+	}
+}

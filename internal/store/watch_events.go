@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 )
 
 // watch_events.go — 预热事件记录：监听转储的逐次留痕（哪个 bot、哪个源、
@@ -38,9 +41,11 @@ type WatchEvent struct {
 	CreatedAt   int64  `json:"created_at"`
 }
 
-// WatchEventsQuery 是事件列表查询：ChannelID=0 表示全部源。
+// WatchEventsQuery 是事件列表查询：ChannelID=0 表示全部源；Path 为空
+// 表示全部路径（copy/fallback）。
 type WatchEventsQuery struct {
 	ChannelID int64
+	Path      string
 	Page      int
 	PageSize  int
 }
@@ -114,11 +119,22 @@ func scanWatchEvent(row scanner) (WatchEvent, error) {
 
 // ListWatchEvents 按查询返回事件页（id 倒序，最新在前）与总数。
 func (s *Store) ListWatchEvents(ctx context.Context, q WatchEventsQuery) ([]WatchEvent, int, error) {
-	where := ""
+	clauses := []string{}
 	args := []any{}
 	if q.ChannelID != 0 {
-		where = " WHERE channel_id = ?"
+		clauses = append(clauses, "channel_id = ?")
 		args = append(args, q.ChannelID)
+	}
+	if q.Path != "" {
+		if !watchPathSet[q.Path] {
+			return nil, 0, apperr.New(apperr.CodeInternal, fmt.Sprintf("非法路径筛选 %q", q.Path))
+		}
+		clauses = append(clauses, "path = ?")
+		args = append(args, q.Path)
+	}
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
 	}
 	var total int
 	if err := s.ex.QueryRowContext(ctx,
@@ -147,6 +163,29 @@ func (s *Store) ListWatchEvents(ctx context.Context, q WatchEventsQuery) ([]Watc
 		out = append(out, e)
 	}
 	return out, total, wrapDB("遍历预热事件行", rows.Err())
+}
+
+// DeleteWatchEvents 按 ID 批量删除预热事件（管理端单条/批量删除共用，
+// 单条传单元素切片），返回实际删除行数（不存在的不计入）。
+func (s *Store) DeleteWatchEvents(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	res, err := s.ex.ExecContext(ctx,
+		"DELETE FROM watch_events WHERE id IN ("+placeholders+")", args...)
+	if err != nil {
+		return 0, wrapDB("删除预热事件", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, wrapDB("统计预热事件删除数", err)
+	}
+	return n, nil
 }
 
 // ---- 监听源统计（业务统计页监听模块；全部基于 watch_events 聚合） ----

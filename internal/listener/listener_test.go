@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,3 +265,132 @@ func TestInactiveSourceAndTextIgnored(t *testing.T) {
 // 编译期断言：假发送器满足 Sender 接口（CopyMessages 之外的方法由内嵌
 // 接口占位，不触达）。
 var _ delivery.Sender = (*fakeCopySender)(nil)
+
+// logCapture 捕获日志输出的 io.Writer（跳过原因断言用）。
+type logCapture struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *logCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, string(p))
+	return len(p), nil
+}
+
+func newLogCapture() *logCapture { return &logCapture{} }
+
+func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool {
+		b.WriteString(" " + a.Key + "=" + a.Value.String())
+		return true
+	})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, b.String())
+	return nil
+}
+func (c *logCapture) WithAttrs(attrs []slog.Attr) slog.Handler { return c }
+func (c *logCapture) WithGroup(name string) slog.Handler       { return c }
+
+func (c *logCapture) contains(substr string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, l := range c.lines {
+		if strings.Contains(l, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// 跳过原因可见：已注册源的无媒体消息、待审批源、暂停源分别带可定位的
+// reason；跳过日志带发送者身份（from_is_bot）。
+func TestSkipReasonsLogged(t *testing.T) {
+	capture := newLogCapture()
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir()+"/test.db", testLog())
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	dump := dumpcache.New(nil, nil, st, func() int64 { return -100777 }, testLog())
+	l := New(ctx, Options{Log: slog.New(capture), Store: st, Dump: dump})
+	const chatID int64 = -1001234
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Title: "测试频道", Status: store.WatchPending, Enabled: true,
+	})
+
+	snd := &fakeCopySender{}
+	fromBot := &models.User{ID: 777, IsBot: true}
+
+	// 待审批源的媒体消息：带"待审批"原因
+	l.OnMessage(mediaMsg(chatID, 51, ""), snd, 0, "")
+	// 同一源的纯文本消息：待审批缓存命中，仍是待审批原因（缓存窗口内）
+	l.OnMessage(&models.Message{
+		ID: 52, Chat: models.Chat{ID: chatID, Type: models.ChatTypeSupergroup}, From: fromBot,
+	}, snd, 0, "")
+
+	waitFor(t, func() bool {
+		return capture.contains("源待审批") && capture.contains("from_is_bot=true")
+	})
+	if capture.contains("消息无媒体") {
+		t.Error("非生效源不应报告无媒体原因")
+	}
+	if got := snd.snapshot(); len(got) != 0 {
+		t.Fatalf("非生效源不应转储: %+v", got)
+	}
+
+	// 源生效后（新建服务绕开负缓存），同一源的文本消息报告"无媒体"
+	if _, err := st.UpsertWatchSource(ctx, store.WatchSource{
+		ChannelID: chatID, Title: "测试频道", Status: store.WatchApproved, Enabled: true,
+	}); err != nil {
+		t.Fatalf("更新源失败: %v", err)
+	}
+	l2 := New(ctx, Options{Log: slog.New(capture), Store: st, Dump: dump})
+	l2.OnMessage(&models.Message{
+		ID: 53, Chat: models.Chat{ID: chatID, Type: models.ChatTypeSupergroup}, From: fromBot,
+	}, snd, 0, "")
+	waitFor(t, func() bool { return capture.contains("消息无媒体") })
+}
+
+// 普通群组消息在 botapi 路由层就被跳过（带原因），不会进 listener。
+func TestBasicGroupRoutingSkipLogged(t *testing.T) {
+	// 该行为在 botapi handler 内联日志，核心断言在 botapi 包测试覆盖；
+	// 这里仅固化 listener 对 channel/supergroup 之外类型的防御性丢弃。
+	capture := newLogCapture()
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir()+"/test.db", testLog())
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	dump := dumpcache.New(nil, nil, st, func() int64 { return -100777 }, testLog())
+	l := New(ctx, Options{Log: slog.New(capture), Store: st, Dump: dump})
+
+	basic := &models.Message{ID: 61, Chat: models.Chat{ID: -99, Type: models.ChatTypeGroup},
+		Video: &models.Video{}}
+	l.OnMessage(basic, &fakeCopySender{}, 0, "")
+	waitFor(t, func() bool { return capture.contains("聊天类型不支持") })
+}
+
+// nil 接收者不得 panic（方法值在装配时序错误下会绑定 nil 接收者，
+// 2026-09-21 SIGSEGV 回归）。
+func TestNilReceiverDoesNotPanic(t *testing.T) {
+	var l *Service
+	l.OnMessage(mediaMsg(-1001234, 71, ""), &fakeCopySender{}, 0, "")
+}
+
+// containsSkip 检查服务日志中是否出现过指定子串（跳过原因断言用）。
+func (s *Service) containsSkip(substr string) bool {
+	lc, ok := s.log.Handler().(*logCapture)
+	if !ok {
+		return false
+	}
+	return lc.contains(substr)
+}

@@ -380,3 +380,24 @@ Bot 身份会话直接上传（gotd `uploader` + `InputMediaUploadedDocument`，
 - **静音用 `account.updateNotifySettings` + MuteUntil 远期时间戳**：等效客户端"永久静音"；`InputPeerNotifySettings` 的 MuteUntil 是条件字段，用 `SetMuteUntil` 助手设置（直接结构体赋值不带 Flags 无效）。
 - **creator 频道无法退出**：`channels.leaveChannel` 对创建者返回 `USER_CREATOR`，列表行须禁用退出操作。
 - **join_requests.invite_hash 是审批延时执行的必需数据**：审批时才能执行加入；但它是敏感值——Web 下发与审计一律 `tmeurl.MaskInviteHash` 脱敏，不入日志。
+
+## 2026-09-21 监听源消息未转发的排查清单
+
+现象：源内发了消息，但没有转发进缓存频道。按链路顺序排查：
+
+- **消息作者是另一个 bot（最常见）**：Telegram 平台硬规则——**任何 bot 都收不到其他 bot 发的群消息/频道帖**。用 bot 号发消息测试监听，系统侧连 update 都收不到，日志里不会有任何"监听"记录。测试必须用**人类账号**发。
+- **bot 在群里是普通成员（privacy mode）**：privacy 开启的 bot 在超级群里只收得到命令、对其消息的回复、服务消息；普通成员的普通消息收不到。监听的前提是 **bot 是该群管理员**（`/watch` 添加时校验的是主 bot；多 bot 池下其他 bot 也要管理员才能参与接收）。把 bot 升为管理员即可。
+- **到达了但被跳过（有观测日志）**：bot 收到的消息若被跳过，日志会打 `监听消息跳过`，带 `content`（消息实际内容，如 photo/video/sticker/text——**图片以链接预览形态出现在纯文本里时 Bot API 视为 text**，看着有图但无 photo 字段）与 `reason`：`消息无媒体（预热仅针对媒体消息）`/`源未配置`/`源待审批`/`源已拒绝`/`源已暂停`；普通群组（非超级群组）在路由层就跳过：`普通群组不支持监听`。可预热媒体：照片、视频、GIF、文件、音频、语音、视频笔记、贴纸、实况照片。
+- **到达了但复制失败**：日志打 `监听源转储复制失败`，带受理 bot 与缓存频道 ID——多 bot 池下消息可能由**非主 bot**受理，该 bot 也必须在缓存频道（Spore Dumps）有发帖权限。
+- **源配置缓存**：审批/暂停等配置变更最迟 1 分钟（sourceCacheTTL）生效。
+- **日志里完全没有"监听"相关记录** = 消息根本没到达任何 bot（上面两条平台限制），而不是系统过滤。
+
+## 2026-09-21 监听源私有邀请（/watch + 邀请链接）的机制边界
+
+- **邀请链接仍然只能让读取账号加入，不能让 Bot 入群**：/watch 接受 `t.me/+…`（仅链接形态——裸邀请码与公开用户名冲突，会被当作频道标识拒绝）。申请激活时读取账号经 `importChatInvite` 加入目标，但 Bot 必须仍由人工设为频道/群管理员；监听生效以 Bot 管理员校验通过为准。
+- **两段式等待是独立状态，不是卡死**：`waiting_telegram` = 已向频道发送加入请求（频道开启"加入需审核"）或读取账号暂不可用；`waiting_bot` = 读取账号已加入、等待 Bot 被设为管理员。后台对账每 5 分钟推进一轮（waiting_bot 只需 Bot 校验，不再触碰 Telegram 邀请），管理端"重试"可立即推进。
+- **hash 生命周期**：pending / waiting_telegram / failed 保留完整 hash（重试需要）；频道定位成功（waiting_bot 及之后）即清理——后续推进只需 channel_id。`masked_hash` 独立保存供展示；完整 hash 不进日志、审计与 API。
+- **watch_invite_requests.user_id=0 是管理员发起的邀请**（与 watch_sources.added_by=0 同约定），无外键；普通用户申请受每用户/总上限约束时，活动邀请申请与监听源**合并计数**。
+- **经邀请加入的频道在 joined_channels 留痕为 `watch_source`**：避免被"自动退出外部拉入"（join_auto_leave_external）误判为外部频道而自动退出；总览来源分布含该来源第四行。
+- **激活后重复提交同一邀请**：hash 已清理无法按 hash 查重，此时预检（checkChatInvite）回带频道 ID 且读取账号已加入，按既有监听源幂等返回，不会重复加入。
+- **MTProto 裸正 ID → Bot API ID 的转换单一来源是 `binding.BotChannelID`**（-100 前缀 + 内部 ID）；watch/watch_invite_requests 存 Bot API 形态，joined_channels 存裸正 ID，两表 channel_id 语义不同。

@@ -966,19 +966,23 @@ cloud-drive.json.enc
 
 ### GET /api/v1/watch-sources
 
-监听源配置列表（认证），不分页；待审批排最前。行包含源标识/类型/状态、申请人资料、受理 Bot 快照及预热条数/最近预热时间。
+监听源配置列表（认证），不分页；待审批排最前。行包含源标识/类型/状态、申请人资料、受理 Bot 快照及预热条数/最近预热时间。响应另含 `invite_requests`：全部私有邀请链接申请（`watch_invite_requests`，pending 优先，其余按申请时间倒序）。行字段：`id`、`user_id`（0 = 管理员发起）、`masked_hash`（脱敏邀请码，完整邀请链接绝不下发）、`status`（`pending` / `waiting_telegram` / `waiting_bot` / `approved` / `rejected` / `failed`）、`channel_id`（解析成功后的 Bot API `-100` ID，0 = 未解析）、`channel_title`、`participants`、`enabled`、`bot_id` / `bot_username`、`reviewed_by`、`note`、`created_at` / `updated_at`、`user_username` / `user_display_name`。
 
 ### POST /api/v1/watch-sources/add
 
-管理员直接添加监听源（认证 + CSRF）。请求体 `{"target":"@用户名/t.me 链接/-100 ID","enabled":true}`；不走用户准入/上限/审批。目标必须是频道或超级群组，且 Bot 已是管理员。
+管理员直接添加监听源（认证 + CSRF）。请求体 `{"target":"@用户名/t.me 链接/-100 ID 或 t.me/+… 私有邀请链接","enabled":true}`；不走用户准入/上限/审批。普通标识目标必须是频道或超级群组，且 Bot 已是管理员，响应含 `source`。`target` 为私有邀请链接时走邀请流程：读取账号加入 → Bot 管理员校验；响应含 `invite_request`（等待状态时）或同时含 `invite_request` + `source`（已激活）。邀请无效返回 `INVALID_INVITE_URL`（400），读取账号离线返回 `MTPROTO_OFFLINE`（503）。
 
 ### POST /api/v1/watch-sources/{id}/approve · /reject · /toggle · /delete · /leave
 
 监听源管理写操作（认证 + CSRF）：审批申请、暂停/恢复、仅删配置，或把池内全部 Bot `leaveChat` 退出源并删配置。已缓存副本保留。
 
+### POST /api/v1/watch-invite-requests/{id}/approve · /reject · /retry · /delete
+
+私有邀请链接申请的审批操作（认证 + CSRF）：`approve` 仅对 `pending` 生效，同意后立即推进状态机（读取账号加入 → Bot 校验 → 激活或转等待态），响应含最新 `invite_request` 与激活产出的 `source`（未激活时省略）；`reject` 对 `pending` / 等待态生效，清理邀请码并通知申请人；`retry` 对 `waiting_telegram` / `waiting_bot` / `failed` 生效，立即重试一轮；`delete` 任意状态硬删除记录。
+
 ### GET /api/v1/watch-events
 
-监听记录（认证，服务端分页）。查询参数：`channel_id`（可选）、`page`、`page_size`。响应行：
+监听记录（认证，服务端分页）。查询参数：`channel_id`（可选，按源筛选）、`path`（可选，`copy` / `fallback`，按转储方式筛选）、`page`、`page_size`。响应行：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -991,6 +995,10 @@ cloud-drive.json.enc
 | `bot_id` / `bot_username` | int64 / string | 执行转储的 Bot |
 | `path` | string | `copy`（服务端复制）或 `fallback`（受保护重传） |
 | `created_at` | int64 | Unix 毫秒 |
+
+### POST /api/v1/watch-events/delete
+
+删除预热事件留痕（认证 + CSRF，单条/批量共用）。请求体 `{"ids":[…]}`（1–100 个正整数事件 ID），响应 `{"ok":true,"deleted":<实际删除行数>}`。仅删除留痕记录，已缓存副本不受影响。
 
 ### GET /api/v1/watch-stats
 

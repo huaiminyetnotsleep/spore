@@ -104,6 +104,19 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		}
 	}()
 
+	// 监听源消息接收器：必须在 buildBot 之前创建——buildBot 把
+	// a.listener.OnMessage 作为方法值绑进 botapi.Options，方法值在创建时
+	// 捕获接收者；若此刻 a.listener 还是 nil，第一条监听群消息就会空指针
+	// 崩溃（2026-09-21 真机 SIGSEGV 回归）。dumpcache 的发送器按调用时
+	// 池状态惰性解析，提前创建安全。离线时聚合计时随 ctx 取消停止。
+	dumpSvc := a.newDumpService(ctx)
+	a.listener = listener.New(ctx, listener.Options{
+		Log:         a.log,
+		Store:       a.st,
+		Dump:        dumpSvc,
+		EnqueueDump: a.access.EnqueueSourceDump,
+	})
+
 	// 多机器人池：逐 token 构建 Bot 客户端与发送路由。单个 token 失效只产生
 	// 事件并跳过，不阻断其余 bot；全部失败时按原单 bot 语义结束本轮
 	//（触发 MTProto 状态机的重连/退避路径）。
@@ -135,19 +148,12 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	//（按受理 bot 复制）都经池取 Bot API 客户端
 	a.bindings.SetBots(a.pool.BotAPIs())
 	// 监听源：源校验用池内 Bot 客户端；审批结果按申请人最近活跃 bot 私聊
-	// 送达（joinmgr.SenderNotifier 结构性满足 watch.Notifier）
+	// 送达（joinmgr.SenderNotifier 结构性满足 watch.Notifier）。
+	// 私有邀请申请的周期对账与本轮 ready 会话同生命周期：waiting 态申请
+	//（频道侧审核、Bot 权限人工配置）最迟一个周期自动推进。
 	a.watch.SetBots(a.pool.BotAPIs())
 	a.watch.SetNotifier(joinmgr.SenderNotifier{Sender: botpool.UserRouter{Pool: a.pool}})
-
-	// 监听源消息接收器：与队列同生命周期（依赖 dumpcache 实例与 access
-	// 特权入队；离线时聚合计时随 ctx 取消停止）
-	dumpSvc := a.newDumpService(ctx)
-	a.listener = listener.New(ctx, listener.Options{
-		Log:         a.log,
-		Store:       a.st,
-		Dump:        dumpSvc,
-		EnqueueDump: a.access.EnqueueSourceDump,
-	})
+	go a.watch.RunReconcile(ctx)
 
 	// 业务发送走路由：未超过 Bot API 上限的媒体走 Bot API 上传，超限媒体经
 	// 受理 bot 的 MTProto 会话直传（不经 Bot API 服务器，上限 2000MB）；

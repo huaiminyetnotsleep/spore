@@ -332,6 +332,43 @@ created_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_watch_events_channel ON watch_events(channel_id, id);`,
+
+	// v19：私有邀请链接监听申请——watch_invite_requests 保存 /watch 私有
+	// invite hash 的异步处理状态。user_id=0 为管理员 Web 路径（与
+	// watch_sources.added_by 同约定，无数据库外键）；enabled 是独立监听
+	// 开关（由调用方显式传值，服务层用户路径传 true、管理员可预录入
+	// false 停用态），participants/reviewed_by/note 支撑管理列表展示与
+	// 审批留痕。完整 hash 只在活动阶段用于 Telegram/Bot 协作，进入终态
+	// 后由服务层清理；masked_hash 独立保留供 API 安全展示。channel_* 是
+	// 邀请解析成功后的频道快照，bot_* 是受理 bot 快照。
+	`CREATE TABLE watch_invite_requests (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL DEFAULT 0,
+	invite_hash TEXT,
+	masked_hash TEXT NOT NULL,
+	status TEXT NOT NULL,
+	channel_id INTEGER NOT NULL DEFAULT 0,
+	kind TEXT NOT NULL DEFAULT '',
+	username TEXT NOT NULL DEFAULT '',
+	title TEXT NOT NULL DEFAULT '',
+	participants INTEGER NOT NULL DEFAULT 0,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	reviewed_by TEXT NOT NULL DEFAULT '',
+	note TEXT NOT NULL DEFAULT '',
+	bot_id INTEGER NOT NULL DEFAULT 0,
+	bot_username TEXT NOT NULL DEFAULT '',
+	requested_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+	);
+
+	CREATE INDEX idx_watch_invite_requests_active
+	ON watch_invite_requests(status, requested_at, id);
+
+	CREATE INDEX idx_watch_invite_requests_user_active
+	ON watch_invite_requests(user_id, status, requested_at, id);
+
+	CREATE INDEX idx_watch_invite_requests_hash_active
+	ON watch_invite_requests(invite_hash, status);`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

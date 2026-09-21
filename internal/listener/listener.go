@@ -116,21 +116,29 @@ func New(ctx context.Context, opt Options) *Service {
 
 // OnMessage 接收一条源侧消息（channel_post 或 supergroup 群消息）。
 // botID/botUsername 是受理 bot 身份（事件留痕用：多 bot 池下记录哪个 bot
-// 收到并转储了本批）。非频道/超级群组类型直接忽略；非生效源（未配置/
-// 待审批/暂停）静默丢弃。纯文本等无媒体消息也在此丢弃（预热只对媒体有
-// 意义）。
+// 收到并转储了本批）。非生效源（未配置/待审批/暂停）与纯文本消息跳过并
+// 记跳过日志（观测面：源内消息未转发时可在日志直接定位原因）。
 func (s *Service) OnMessage(msg *models.Message, snd delivery.Sender, botID int64, botUsername string) {
-	if msg == nil || msg.Chat.ID == 0 || snd == nil {
+	// nil 接收者防御：botapi.Options.OnSourceMessage 是方法值，装配时序
+	// 错误会把 nil 接收者永久绑进回调（2026-09-21 SIGSEGV 回归）——崩溃
+	// 会带走整个 bot 进程，这里降级为静默忽略。
+	if s == nil || msg == nil || msg.Chat.ID == 0 || snd == nil {
 		return
 	}
 	if msg.Chat.Type != models.ChatTypeChannel && msg.Chat.Type != models.ChatTypeSupergroup {
+		s.log.Debug("监听消息跳过：聊天类型不支持",
+			"chat_id", msg.Chat.ID, "chat_type", msg.Chat.Type, "message_id", msg.ID)
+		return
+	}
+	// 先查源配置（TTL 缓存，非源聊天每分钟最多一次 DB 读），跳过原因才能
+	// 区分"未配置源的无媒体消息"（静默）与"已注册源的无媒体消息"（报告）。
+	src, active, reason := s.activeSource(msg.Chat.ID)
+	if !active {
+		s.logSkip(msg, reason)
 		return
 	}
 	if !hasMedia(msg) {
-		return
-	}
-	src, ok := s.activeSource(msg.Chat.ID)
-	if !ok {
+		s.logSkip(msg, "消息无媒体（预热仅针对媒体消息）")
 		return
 	}
 	group := msg.MediaGroupID
@@ -139,7 +147,6 @@ func (s *Service) OnMessage(msg *models.Message, snd delivery.Sender, botID int6
 		group = "m" + strconv.Itoa(msg.ID)
 	}
 	key := aggKey{chatID: msg.Chat.ID, group: group}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx.Err() != nil {
@@ -158,6 +165,20 @@ func (s *Service) OnMessage(msg *models.Message, snd delivery.Sender, botID int6
 	g.timer = time.AfterFunc(albumWindow, func() { s.flush(key) })
 }
 
+// logSkip 打印一条跳过记录（观测面：带发送者身份、实际内容与原因，用户
+// 可据此判断是平台限制——如其他 bot 发的消息 bot 收不到——还是配置问题，
+// 或内容本身不在预热范围）。
+func (s *Service) logSkip(msg *models.Message, reason string) {
+	fields := []any{
+		"chat_id", msg.Chat.ID, "chat_type", msg.Chat.Type, "message_id", msg.ID,
+		"content", describeContent(msg), "reason", reason,
+	}
+	if msg.From != nil {
+		fields = append(fields, "from_id", msg.From.ID, "from_is_bot", msg.From.IsBot)
+	}
+	s.log.Info("监听消息跳过", fields...)
+}
+
 // flush 取出并转储一个批次（计时器 goroutine 内执行）。
 func (s *Service) flush(key aggKey) {
 	s.mu.Lock()
@@ -173,35 +194,54 @@ func (s *Service) flush(key aggKey) {
 }
 
 // activeSource 查询频道是否为生效监听源（approved 且 enabled），带 TTL
-// 缓存（含负结果）。
-func (s *Service) activeSource(channelID int64) (store.WatchSource, bool) {
+// 缓存（含负结果）。reason 描述非生效原因：源未配置/待审批/已拒绝/已暂停
+// /查询失败。跳过日志只在缓存未命中（真实查库）时打印一次，命中负缓存
+// 的重复消息不再刷屏。
+func (s *Service) activeSource(channelID int64) (store.WatchSource, bool, string) {
 	now := time.Now()
 	s.srcMu.Lock()
 	if e, ok := s.srcCache[channelID]; ok && now.Before(e.expire) {
 		s.srcMu.Unlock()
-		return e.src, e.active
+		return e.src, e.active, ""
 	}
 	s.srcMu.Unlock()
 
 	src, err := s.st.GetWatchSource(s.ctx, channelID)
+	var reason string
 	active := err == nil && src.Status == store.WatchApproved && src.Enabled
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		reason = "源未配置"
+	case err != nil:
+		reason = "查询失败"
 		s.log.Warn("查询监听源失败", "channel_id", channelID, "error", err.Error())
-		return store.WatchSource{}, false
+	case src.Status == store.WatchPending:
+		reason = "源待审批"
+	case src.Status == store.WatchRejected:
+		reason = "源已拒绝"
+	case !src.Enabled:
+		reason = "源已暂停"
+	}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return store.WatchSource{}, false, reason
 	}
 	s.srcMu.Lock()
 	s.srcCache[channelID] = srcCacheEntry{src: src, active: active, expire: now.Add(sourceCacheTTL)}
 	s.srcMu.Unlock()
-	return src, active
+	return src, active, reason
 }
 
 // process 转储一个已聚齐的批次：查重 → 受保护分流 → 快路径复制 → 落条目。
 func (s *Service) process(ctx context.Context, g *aggGroup) {
 	if s.dump == nil || !s.dump.Enabled() {
+		s.log.Info("监听消息跳过：缓存频道未配置",
+			"chat_id", g.chat.ID, "message_id", g.msgs[0].ID, "reason", "缓存频道未配置")
 		return
 	}
 	channel, ok := s.dump.Channel()
 	if !ok {
+		s.log.Info("监听消息跳过：缓存频道不可用",
+			"chat_id", g.chat.ID, "message_id", g.msgs[0].ID, "reason", "缓存频道不可用")
 		return
 	}
 	media := make([]*models.Message, 0, len(g.msgs))
@@ -254,7 +294,9 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 			return
 		}
 		s.log.Warn("监听源转储复制失败（跳过本批，下一条消息自愈）",
-			"channel_id", g.chat.ID, "messages", len(ids), "error", err.Error())
+			"channel_id", g.chat.ID, "dump_channel", channel, "messages", len(ids),
+			"bot_id", g.botID, "bot_username", g.botUsername,
+			"hint", "请确认受理 bot 在缓存频道有发帖权限", "error", err.Error())
 		return
 	}
 	// 每个成员消息 ID 都落条目（用户可能链接相册任意成员）；公开源双键，
@@ -310,10 +352,56 @@ func keyOf(usernameKey, numericKey string) string {
 	return numericKey
 }
 
-// hasMedia 判断消息是否携带可预热的媒体（纯文本无预热价值）。
+// hasMedia 判断消息是否携带可预热的媒体。贴纸/实况照片按图片内容对待
+// （copyMessages 均支持，源内发出的贴纸同样有预热价值）。
 func hasMedia(m *models.Message) bool {
-	return m.Photo != nil || m.Video != nil || m.Animation != nil ||
-		m.Document != nil || m.Audio != nil || m.Voice != nil || m.VideoNote != nil
+	return len(m.Photo) > 0 || m.Video != nil || m.Animation != nil ||
+		m.Document != nil || m.Audio != nil || m.Voice != nil ||
+		m.VideoNote != nil || m.Sticker != nil || m.LivePhoto != nil
+}
+
+// describeContent 描述消息实际携带的内容（跳过日志观测用）：让"看着有图
+// 却没预热"的差异有据可查——典型如图片以链接预览形态出现在纯文本里
+//（Bot API 视为 text，无 photo 字段）。
+func describeContent(m *models.Message) string {
+	parts := make([]string, 0, 4)
+	if len(m.Photo) > 0 {
+		parts = append(parts, "photo")
+	}
+	if m.Video != nil {
+		parts = append(parts, "video")
+	}
+	if m.Animation != nil {
+		parts = append(parts, "gif")
+	}
+	if m.Document != nil {
+		parts = append(parts, "file")
+	}
+	if m.Audio != nil {
+		parts = append(parts, "audio")
+	}
+	if m.Voice != nil {
+		parts = append(parts, "voice")
+	}
+	if m.VideoNote != nil {
+		parts = append(parts, "video-note")
+	}
+	if m.Sticker != nil {
+		parts = append(parts, "sticker")
+	}
+	if m.LivePhoto != nil {
+		parts = append(parts, "live-photo")
+	}
+	if m.Text != "" {
+		parts = append(parts, "text")
+	}
+	if m.Caption != "" {
+		parts = append(parts, "caption")
+	}
+	if len(parts) == 0 {
+		return "empty"
+	}
+	return strings.Join(parts, "+")
 }
 
 // isForwardsRestricted 识别 Telegram 对受保护内容聊天的复制拒绝

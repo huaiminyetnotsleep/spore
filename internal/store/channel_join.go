@@ -20,9 +20,10 @@ const (
 
 // joinedVia 是频道加入来源（joined_channels.joined_via）。
 const (
-	JoinedViaCommand  = "join_command" // owner 经 /join 即时加入
-	JoinedViaApproved = "approved"     // 普通用户申请经审批加入
-	JoinedViaExternal = "external"     // 检测到的外部拉入（非本系统加入）
+	JoinedViaCommand     = "join_command" // owner 经 /join 即时加入
+	JoinedViaApproved    = "approved"     // 普通用户申请经审批加入
+	JoinedViaExternal    = "external"     // 检测到的外部拉入（非本系统加入）
+	JoinedViaWatchSource = "watch_source" // 私有邀请监听源流程加入
 )
 
 // joinStatusSet 合法状态白名单。
@@ -32,7 +33,10 @@ var joinStatusSet = map[string]bool{
 
 // joinedViaSet 合法来源白名单。
 var joinedViaSet = map[string]bool{
-	JoinedViaCommand: true, JoinedViaApproved: true, JoinedViaExternal: true,
+	JoinedViaCommand:     true,
+	JoinedViaApproved:    true,
+	JoinedViaExternal:    true,
+	JoinedViaWatchSource: true,
 }
 
 // JoinRequest 是 join_requests 表的行模型。
@@ -370,22 +374,24 @@ func (s *Store) TallyJoinRequests(ctx context.Context) (JoinRequestTally, error)
 // JoinedChannelTally 是已加入频道按来源拆分的"当前加入/已退出"计数
 // （留痕表全量，总览快照口径）。
 type JoinedChannelTally struct {
-	CommandActive  int
-	CommandLeft    int
-	ApprovedActive int
-	ApprovedLeft   int
-	ExternalActive int
-	ExternalLeft   int
+	CommandActive     int
+	CommandLeft       int
+	ApprovedActive    int
+	ApprovedLeft      int
+	ExternalActive    int
+	ExternalLeft      int
+	WatchSourceActive int
+	WatchSourceLeft   int
 }
 
-// Active 返回当前加入中的频道总数（三来源合计）。
+// Active 返回当前加入中的频道总数（全部来源合计）。
 func (t JoinedChannelTally) Active() int {
-	return t.CommandActive + t.ApprovedActive + t.ExternalActive
+	return t.CommandActive + t.ApprovedActive + t.ExternalActive + t.WatchSourceActive
 }
 
-// Left 返回已退出的频道总数（三来源合计）。
+// Left 返回已退出的频道总数（全部来源合计）。
 func (t JoinedChannelTally) Left() int {
-	return t.CommandLeft + t.ApprovedLeft + t.ExternalLeft
+	return t.CommandLeft + t.ApprovedLeft + t.ExternalLeft + t.WatchSourceLeft
 }
 
 // TallyJoinedChannels 按 joined_via 分组统计已加入频道的当前加入/已退出
@@ -412,6 +418,8 @@ func (s *Store) TallyJoinedChannels(ctx context.Context) (JoinedChannelTally, er
 			out.ApprovedActive, out.ApprovedLeft = active, left
 		case JoinedViaExternal:
 			out.ExternalActive, out.ExternalLeft = active, left
+		case JoinedViaWatchSource:
+			out.WatchSourceActive, out.WatchSourceLeft = active, left
 		}
 	}
 	return out, wrapDB("遍历已加入频道来源计数", rows.Err())
