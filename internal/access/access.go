@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -386,28 +385,7 @@ func ChannelKey(ref tmeurl.SourceRef) string {
 // RefFromRequest 从请求行重建来源链接定位符（SourceKind/ChannelKey 的逆变换），
 // 供受控重试复用同一行重新入队。私有频道键格式损坏时返回 false（数据异常防御）。
 func RefFromRequest(r store.Request) (tmeurl.SourceRef, bool) {
-	if r.SourceKind == store.SourcePrivate {
-		if !strings.HasPrefix(r.ChannelKey, "-100") || len(r.ChannelKey) <= len("-100") {
-			return tmeurl.SourceRef{}, false
-		}
-		id, err := strconv.ParseInt(r.ChannelKey[len("-100"):], 10, 64)
-		if err != nil || id <= 0 {
-			return tmeurl.SourceRef{}, false
-		}
-		return tmeurl.SourceRef{
-			Kind:      tmeurl.PeerChannelID,
-			ChannelID: id,
-			MessageID: r.MessageID,
-		}, true
-	}
-	if r.ChannelKey == "" {
-		return tmeurl.SourceRef{}, false
-	}
-	return tmeurl.SourceRef{
-		Kind:      tmeurl.PeerUsername,
-		Username:  r.ChannelKey,
-		MessageID: r.MessageID,
-	}, true
+	return refFromChannelKey(r.SourceKind, r.ChannelKey, r.MessageID)
 }
 
 // ---- 运营设置（时区 / 去重窗口）----

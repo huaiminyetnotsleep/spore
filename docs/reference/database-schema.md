@@ -63,6 +63,8 @@
 | `system_metric_samples` | 进程资源与传输速率低频采样 | v7 |
 | `cloud_uploads` | 云盘上传逐文件记录 | v10 |
 | `dump_entries` | 缓存频道"干净副本"消息坐标（复用来源） | v13 |
+| `watch_sources` | 监听源（/watch）配置与申请审批（预热缓存频道） | v17 |
+| `watch_events` | 监听转储逐次留痕（哪个 bot 在哪个源转发了哪些消息） | v18 |
 
 ## 3. 表数据字典
 
@@ -282,6 +284,43 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `format_version` | INTEGER | NOT NULL DEFAULT 0 | 副本布局格式版本（v16）：0 = 历史行（相册多 caption 旧形态），1 = "恰好组首一条合并 caption"；查询只命中当前版本，历史坐标保留供审计，复用回落完整投递后自愈重写 |
 | `created_at` | INTEGER | NOT NULL | 写入时间 |
 
+### 3.14 watch_sources
+
+监听源（/watch，v17；v18 增补 `kind`/`bot_id`/`bot_username`）：配置的源频道/超级群组由 Bot 接收新帖并自动转储缓存频道预热 `dump_entries`（重复链接直接命中复用）。管理员 Web 添加天然 approved；用户 `/watch` 申请按配置走审批（pending → approved/rejected）。`added_by=0` 表示管理员添加（无外键：0 语义不是用户行）。listener 按 `status='approved' AND enabled=1` 过滤生效源。只存标识与状态，不存消息内容（数据范围红线）。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `channel_id` | INTEGER | PRIMARY KEY | 源频道/超级群组数字 ID（Bot API -100 形态） |
+| `kind` | TEXT | NOT NULL DEFAULT '' | `channel` / `supergroup`（展示用；配置时快照） |
+| `username` | TEXT | NULL | 公开源用户名（无 @；私有源为空）。供公开源双键复用（t.me/username 与 t.me/c 两种链接形态都命中条目） |
+| `title` | TEXT | NULL | 展示标题（配置时快照） |
+| `status` | TEXT | NOT NULL | `pending` / `approved` / `rejected`（DAO 白名单校验；Review 仅允许 pending → approved/rejected） |
+| `enabled` | INTEGER | NOT NULL DEFAULT 1 | approved 行的独立暂停开关 |
+| `added_by` | INTEGER | NOT NULL DEFAULT 0 | 0 = 管理员 Web 添加；>0 = 申请人用户 ID |
+| `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 用户 /watch 的受理 bot ID（与 `requests.bot_id` v15 同语义；0 = Web 添加） |
+| `bot_username` | TEXT | NOT NULL DEFAULT '' | 受理 bot 用户名快照（展示自持，bot 移出池后历史仍可读） |
+| `reviewed_by` | TEXT | NULL | 审批人（session idHash 或 admin）；未审批为空 |
+| `created_at` | INTEGER | NOT NULL | 首次写入时间（Upsert 冲突更新不重置） |
+| `updated_at` | INTEGER | NOT NULL | 最近更新时间 |
+
+### 3.15 watch_events
+
+监听转储逐次留痕（业务统计与「监听记录」页的事实表）：哪个 bot、在哪个源、转发了哪些消息、缓存频道落点与路径。每次转储成功（copy）或回退入队（fallback）各落一行；已存在条目的跳过不落。只存 ID 与元数据（数据范围红线）；源标题/用户名与 bot 用户名存快照，源或 bot 删除后记录仍可读。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 事件 ID |
+| `channel_id` | INTEGER | NOT NULL | 源频道/群组 ID（-100 形态） |
+| `username` / `title` | TEXT | NOT NULL DEFAULT '' | 源快照（NOT NULL 列直接存空串，不经 nullStr） |
+| `message_id` | INTEGER | NOT NULL | 定位消息 ID（相册取首条成员） |
+| `member_ids_json` | TEXT | NOT NULL | 转发的源消息 ID 数组（相册为全部成员） |
+| `dump_ids_json` | TEXT | NOT NULL | 缓存频道落点消息 ID 数组（fallback 为空数组） |
+| `request_id` | INTEGER | NOT NULL DEFAULT 0 | 关联 `requests` 行（仅 fallback；0 = 无） |
+| `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 执行转储的 bot |
+| `bot_username` | TEXT | NOT NULL DEFAULT '' | bot 用户名快照 |
+| `path` | TEXT | NOT NULL | `copy`（服务端复制）\| `fallback`（受保护重传，DAO 白名单校验） |
+| `created_at` | INTEGER | NOT NULL | 事件时间 |
+
 ## 4. 表关系与约束
 
 ### 4.1 数据库外键（均指向 `users(id)`，均 NO ACTION）
@@ -306,6 +345,8 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 - `users.status`、`requests.status`、`join_requests.status`、`cloud_uploads.status`、`events.status` 等枚举由 DAO 白名单校验，无 CHECK 约束。
 - `users.is_owner` 全局唯一性由设置 owner 的业务语句维护。
 - `join_requests` 无 `(user_id, invite_hash, status)` 唯一索引，pending 去重靠应用层查重。
+- `watch_sources.status` 由 DAO 白名单校验；重复审批（非 pending 行）返回 STORE_CONSTRAINT；上限校验（总数/每用户）在 watch 服务应用层完成。
+- `watch_events` 只增不改；`watch_events.request_id` 关联行可能不存在（请求可被清理），仅做展示跳转。
 - 频道无独立表：管理端"频道统计/频道详情"是 `requests` 的纯聚合；删除频道 = 删除该频道的全部 `requests` 行。
 
 ## 5. 索引清单

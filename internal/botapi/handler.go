@@ -20,6 +20,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
 // helpText 渲染帮助文案：系统名称可配置（internal/syscfg，管理端修改即时生效），
@@ -45,8 +46,13 @@ func helpText(name string) string {
 /unbind 频道 — 解绑我的频道
 /channels — 查看我绑定的频道
 /join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
+/watch 频道 — 监听源频道/群组，新消息自动预热缓存（先把我加为该频道/群管理员）
+/watch — 查看我的监听源
+/unwatch 频道 — 移除我的监听源
 
 绑定频道后，每次提取的内容会在发给你之后同步发送一份到你的频道。
+
+监听源生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我，都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
 
 /download 可指定目的地：/download 目的地 链接；不带目的地时使用默认目的地。可用目的地由管理员配置；纯文本消息不支持网盘下载。
 
@@ -64,12 +70,30 @@ const (
 	multiCancelNotice = "一次只取消一条链接，已取第一条有效链接。"
 )
 
-// updateHandler 默认处理器：仅处理私聊文本。
-// 白名单与额度校验经访问控制服务（access）完成，再分流命令与链接入队。
+// updateHandler 默认处理器：私聊文本 + 监听源消息。
+// 私聊的白名单与额度校验经访问控制服务（access）完成，再分流命令与链接
+// 入队；监听源消息（channel_post 与超级群组）交 OnSourceMessage 回调
+// （listener 聚合转储，源白名单在回调内过滤）。
 // 发送/删除一律经 delivery.Sender（统一错误分类与限流重试）。
 func updateHandler(opt Options) tgbot.HandlerFunc {
 	cleaner := commandCleaner{states: make(map[commandScopeKey]bool)}
 	return func(ctx context.Context, b *tgbot.Bot, update *models.Update) {
+		// 监听源消息：频道帖（bot 为频道管理员）与超级群组消息（bot 为
+		// 群管理员，privacy 旁路可见全部）。回调内自行做源白名单过滤，
+		// 未配置监听时是廉价的缓存查询后丢弃。
+		if opt.OnSourceMessage != nil {
+			var srcMsg *models.Message
+			if update.ChannelPost != nil {
+				srcMsg = update.ChannelPost
+			} else if update.Message != nil && update.Message.Chat.Type == models.ChatTypeSupergroup {
+				srcMsg = update.Message
+			}
+			if srcMsg != nil {
+				bi := opt.Bot.Get()
+				opt.OnSourceMessage(srcMsg, senderFor(opt, b), bi.ID, bi.Username)
+				return
+			}
+		}
 		msg := update.Message
 		if msg == nil || msg.Chat.Type != models.ChatTypePrivate {
 			return
@@ -132,6 +156,10 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 		handleMyChannels(ctx, opt, snd, from.ID, chatID)
 	case "/join":
 		handleJoin(ctx, opt, snd, from, chatID, text)
+	case "/watch":
+		handleWatch(ctx, opt, snd, from, chatID, text)
+	case "/unwatch":
+		handleUnwatch(ctx, opt, snd, from, chatID, text)
 	default:
 		handleLinkWithProfile(ctx, opt, snd, from, chatID, text)
 	}
@@ -644,6 +672,148 @@ func handleJoin(ctx context.Context, opt Options, snd delivery.Sender, from mode
 	default:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInternal))
 	}
+}
+
+// watchUsage 是 /watch 与 /unwatch 共用的参数提示。
+const watchUsage = "用法：/watch 频道（@mychannel、t.me/频道 链接或 -100 开头的 ID）\n\n" +
+	"仅支持频道与超级群组，且需先把本机器人加为该频道/群的管理员" +
+	"（管理员身份保证我能收到全部消息）。不带参数发送 /watch 可查看我的监听源。"
+
+// handleWatch 处理 /watch：无参数列出本人监听源；带参数提交申请
+// （准入/审批/上限校验在 watch.Service 内完成）。owner 判定失败按非
+// owner 处理（保守，与 /join 一致）。
+func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
+	if opt.Watch == nil {
+		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		return
+	}
+	arg := commandArgument(text)
+	if arg == "" {
+		rows, err := opt.Watch.ListByUser(ctx, from.ID)
+		if err != nil {
+			ae := apperr.From(err)
+			opt.Log.Warn("/watch 列表查询失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
+			sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+			return
+		}
+		if len(rows) == 0 {
+			sendText(ctx, opt, snd, chatID, "你还没有监听源。发送 /watch 频道 添加。")
+			return
+		}
+		var b strings.Builder
+		b.WriteString("我的监听源：\n")
+		for _, r := range rows {
+			name := r.Title
+			if name == "" {
+				name = r.Username
+			}
+			if name == "" {
+				name = fmt.Sprintf("频道 %d", r.ChannelID)
+			}
+			switch r.Status {
+			case store.WatchPending:
+				fmt.Fprintf(&b, "• %s（待审批）\n", name)
+			case store.WatchApproved:
+				state := "监听中"
+				if !r.Enabled {
+					state = "已暂停"
+				}
+				fmt.Fprintf(&b, "• %s（%s）\n", name, state)
+			}
+		}
+		sendText(ctx, opt, snd, chatID, b.String())
+		return
+	}
+
+	isOwner := false
+	if opt.IsOwner != nil {
+		ok, err := opt.IsOwner(ctx, from.ID)
+		if err != nil {
+			opt.Log.Warn("/watch 号主判定失败，按普通用户处理",
+				"user_id", from.ID, "error", err.Error())
+		} else {
+			isOwner = ok
+		}
+	}
+	botInfo := opt.Bot.Get()
+	outcome, err := opt.Watch.Submit(ctx, from.ID, isOwner, arg, botInfo.ID, botInfo.Username)
+	if err != nil {
+		ae := apperr.From(err)
+		opt.Log.Warn("/watch 提交失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
+		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+		return
+	}
+	title := outcome.Title
+	if title == "" {
+		title = "该源"
+	}
+	switch outcome.Kind {
+	case watch.SubmitDisabled:
+		sendText(ctx, opt, snd, chatID, "监听源自助申请当前未开放。")
+	case watch.SubmitUserNotAllowed:
+		sendText(ctx, opt, snd, chatID, "请先 /start 通过审核后再使用本功能。")
+	case watch.SubmitInvalid:
+		sendText(ctx, opt, snd, chatID, "无法识别目标：请发送频道/超级群组的 @用户名、t.me 链接或 -100 开头的 ID。")
+	case watch.SubmitNotAdmin:
+		sendText(ctx, opt, snd, chatID, "我还不在这个频道/群里，或不是管理员：请先把我加为该频道/群的管理员再试。")
+	case watch.SubmitAlreadyMine:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf("「%s」已在你的监听列表中（资料已刷新）。", title))
+	case watch.SubmitAlreadyOthers:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf("「%s」已由其他人添加。", title))
+	case watch.SubmitUserLimit:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"已达每用户监听上限（%d/%d），可先 /unwatch 移除部分源。", outcome.Count, outcome.Limit))
+	case watch.SubmitSourceLimit:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"监听源总数已达上限（%d/%d），请联系管理员。", outcome.Count, outcome.Limit))
+	case watch.SubmitPending:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"已提交监听「%s」的申请，等待管理员审批，通过后会通知你。", title))
+	case watch.SubmitActive:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"「%s」已开始监听：源内新消息会自动预热缓存，之后把该源的消息链接发给我可秒回。", title))
+	default:
+		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInternal))
+	}
+}
+
+// handleUnwatch 处理 /unwatch 频道：移除本人的监听源（号主可移除任意源）。
+func handleUnwatch(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
+	if opt.Watch == nil {
+		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		return
+	}
+	arg := commandArgument(text)
+	if arg == "" {
+		sendText(ctx, opt, snd, chatID, watchUsage)
+		return
+	}
+	isOwner := false
+	if opt.IsOwner != nil {
+		ok, err := opt.IsOwner(ctx, from.ID)
+		if err != nil {
+			opt.Log.Warn("/unwatch 号主判定失败，按普通用户处理",
+				"user_id", from.ID, "error", err.Error())
+		} else {
+			isOwner = ok
+		}
+	}
+	removed, err := opt.Watch.Unwatch(ctx, from.ID, isOwner, arg)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendText(ctx, opt, snd, chatID, "没有找到你添加的这个监听源（/watch 查看列表）。")
+			return
+		}
+		ae := apperr.From(err)
+		opt.Log.Warn("/unwatch 失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
+		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+		return
+	}
+	title := removed.Title
+	if title == "" {
+		title = "该源"
+	}
+	sendText(ctx, opt, snd, chatID, fmt.Sprintf("已移除监听源「%s」。", title))
 }
 
 // bindUsage 是 /bind 与 /unbind 共用的参数提示。

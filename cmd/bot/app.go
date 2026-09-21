@@ -23,6 +23,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
+	"github.com/huaiminyetnotsleep/spore/internal/listener"
 	"github.com/huaiminyetnotsleep/spore/internal/media"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/notify"
@@ -31,6 +32,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 	"github.com/huaiminyetnotsleep/spore/internal/web"
 )
 
@@ -44,6 +46,8 @@ type app struct {
 	access      *access.Service
 	bindings    *binding.Service
 	join        *joinmgr.Service
+	watch       *watch.Service    // 监听源（/watch）：申请/审批/管理，Bot 与 Web 共用
+	listener    *listener.Service // 监听源消息接收与缓存预热（ready 生命周期内重建）
 	hub         *notify.Hub
 	userClient  *mtproto.Client
 	pool        *botpool.Pool                // 多机器人池：ready 生命周期内 Reset 重建
@@ -130,6 +134,20 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	// 频道绑定校验（/bind 与 Web 绑定对全部 bot 校验发帖权限）与副本投递
 	//（按受理 bot 复制）都经池取 Bot API 客户端
 	a.bindings.SetBots(a.pool.BotAPIs())
+	// 监听源：源校验用池内 Bot 客户端；审批结果按申请人最近活跃 bot 私聊
+	// 送达（joinmgr.SenderNotifier 结构性满足 watch.Notifier）
+	a.watch.SetBots(a.pool.BotAPIs())
+	a.watch.SetNotifier(joinmgr.SenderNotifier{Sender: botpool.UserRouter{Pool: a.pool}})
+
+	// 监听源消息接收器：与队列同生命周期（依赖 dumpcache 实例与 access
+	// 特权入队；离线时聚合计时随 ctx 取消停止）
+	dumpSvc := a.newDumpService(ctx)
+	a.listener = listener.New(ctx, listener.Options{
+		Log:         a.log,
+		Store:       a.st,
+		Dump:        dumpSvc,
+		EnqueueDump: a.access.EnqueueSourceDump,
+	})
 
 	// 业务发送走路由：未超过 Bot API 上限的媒体走 Bot API 上传，超限媒体经
 	// 受理 bot 的 MTProto 会话直传（不经 Bot API 服务器，上限 2000MB）；
@@ -137,7 +155,7 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	// Bot API。worker 按 Job.BotID 经池解析路由（Deps.SenderFor）。
 	// 队列可观测地结束：轮询停止后等 drain（退出通知+状态清理）完成再退出本轮
 	queueDone := make(chan struct{})
-	deps := a.queueDeps(ctx, fetcher)
+	deps := a.queueDeps(ctx, fetcher, dumpSvc)
 	go func() {
 		a.q.Run(ctx, a.cfg.WorkerCount, queuepkg.Process(deps), queuepkg.Discard(deps))
 		close(queueDone)
@@ -214,6 +232,10 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		// /join：joinmgr 统一处理开关/上限/审核分流；owner 判定经
 		// users 表全局唯一 owner（未设置时按普通用户走审核）
 		ChannelJoin: a.join,
+		// /watch、/unwatch：监听源申请/移除（watch 服务内做准入/审批/上限）
+		Watch: a.watch,
+		// 监听源消息（channel_post 与超级群组）→ listener 聚合转储
+		OnSourceMessage: a.listener.OnMessage,
 		// /download：云盘状态与目的地解析（Manager 快照 + rclone 实时探测）
 		CloudStatus: cloudDriveStatus{mgr: a.cloud},
 		IsOwner: func(ctx context.Context, userID int64) (bool, error) {
@@ -310,20 +332,25 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	return member, nil
 }
 
-// queueDeps 组装队列消费依赖：Sender 回退主 bot（BotID=0 的存量任务/Web
-// 补存），SenderFor 按任务受理 bot 经池解析。
-func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher) queuepkg.Deps {
-	primary := a.pool.SenderFor(0)
-	// 缓存频道（转存频道复用）：channelID 闭包实时读取——Web 端 settings
-	// 优先，环境变量 DUMP_CHANNEL_ID 兜底（均为 0 时复用关闭；之后可在
-	// Web 端随时配置启用，无需重启）
+// newDumpService 构建缓存频道服务：channelID 闭包实时读取——Web 端 settings
+// 优先，环境变量 DUMP_CHANNEL_ID 兜底（均为 0 时复用关闭；之后可在 Web
+// 端随时配置启用，无需重启）。每 MTProto 生命周期一份，队列与监听源共用。
+func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
 	dumpChannel := func() int64 {
 		return web.LoadEffectiveDumpChannelID(ctx, a.st, a.cfg.DumpChannelID)
 	}
-	dumpSvc := dumpcache.New(primary, a.pool.SenderFor, a.st, dumpChannel, a.log)
+	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannel, a.log)
 	if dumpChannel() != 0 {
 		a.log.Info("缓存频道复用已启用", "channel_id", dumpChannel())
 	}
+	return dumpSvc
+}
+
+// queueDeps 组装队列消费依赖：Sender 回退主 bot（BotID=0 的存量任务/Web
+// 补存），SenderFor 按任务受理 bot 经池解析。dumpSvc 由本生命周期统一
+// 构造（newDumpService），队列与监听源共享同一实例。
+func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher, dumpSvc *dumpcache.Service) queuepkg.Deps {
+	primary := a.pool.SenderFor(0)
 	return queuepkg.Deps{
 		Fetcher: fetcher,
 		Sender:  primary, // 回退通道：存量任务 / Web 补存（BotID=0）走主 bot

@@ -10,6 +10,8 @@
  */
 import {
   ApiOutlined,
+  EyeOutlined,
+  FileSearchOutlined,
   AuditOutlined,
   CheckCircleOutlined,
   BarChartOutlined,
@@ -67,6 +69,16 @@ const BindingsPage = lazy(() =>
 const ChannelSettingsPage = lazy(() =>
   import("../features/channel-settings/ChannelSettingsPage").then((m) => ({
     default: m.ChannelSettingsPage,
+  })),
+);
+const WatchSourcesPage = lazy(() =>
+  import("../features/watch-sources/WatchSourcesPage").then((m) => ({
+    default: m.WatchSourcesPage,
+  })),
+);
+const WatchEventsPage = lazy(() =>
+  import("../features/watch-sources/WatchEventsPage").then((m) => ({
+    default: m.WatchEventsPage,
   })),
 );
 const CloudDrivePage = lazy(() =>
@@ -226,6 +238,24 @@ export const routeMeta = [
     menuVisible: true,
   },
   {
+    key: "watch-sources",
+    path: "/watch-sources",
+    label: "监听源配置",
+    title: "监听源配置",
+    groupKey: "watch-group",
+    icon: <EyeOutlined />,
+    menuVisible: true,
+  },
+  {
+    key: "watch-events",
+    path: "/watch-events",
+    label: "监听记录",
+    title: "监听记录",
+    groupKey: "watch-group",
+    icon: <FileSearchOutlined />,
+    menuVisible: true,
+  },
+  {
     key: "cloud-drive",
     path: "/cloud-drive",
     label: "云盘下载",
@@ -372,6 +402,11 @@ export const navigationGroups = [
     routeKeys: ["requests", "channels", "channel-bindings", "channel-settings", "cloud-drive"],
   },
   {
+    key: "watch-group",
+    label: "监听源",
+    routeKeys: ["watch-events", "watch-sources"],
+  },
+  {
     key: "channel-invited",
     label: "MTProto受邀管理",
     routeKeys: ["invite-approvals", "joined-channels", "join-settings"],
@@ -479,6 +514,8 @@ export function AppRoutes() {
         <Route path="/channels/:key" element={<ChannelDetailPage />} />
         <Route path="/channel-bindings" element={<BindingsPage />} />
         <Route path="/channel-settings" element={<ChannelSettingsPage />} />
+        <Route path="/watch-sources" element={<WatchSourcesPage />} />
+        <Route path="/watch-events" element={<WatchEventsPage />} />
         <Route path="/cloud-drive" element={<CloudDrivePage />} />
         <Route path="/invite-approvals" element={<JoinApprovalsPage />} />
         <Route path="/joined-channels" element={<JoinedChannelsPage />} />

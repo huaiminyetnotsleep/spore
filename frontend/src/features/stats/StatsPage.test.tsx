@@ -5,7 +5,7 @@
  * 图表库 mock 为轻量占位。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import dayjs from "dayjs";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -144,6 +144,7 @@ function pickRange(since: string, until: string) {
 
 describe("业务统计页", () => {
   beforeEach(() => {
+    sessionStorage.clear();
     fetchStatsMock.mockReset();
     fetchOverviewMock.mockReset();
     fetchOverviewMock.mockResolvedValue(overviewResponse());
@@ -166,7 +167,7 @@ describe("业务统计页", () => {
     renderPage();
 
     // 请求总数在核心指标卡片标题行回显
-    expect(await screen.findByText("请求总数 12")).toBeInTheDocument();
+    expect(await screen.findByText(/请求总数 12/)).toBeInTheDocument();
     for (const title of ["请求结果", "成功率", "活跃用户"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
@@ -178,10 +179,15 @@ describe("业务统计页", () => {
     // fmtRate：9/11 → 81.8%
     expect(screen.getByText("81.8%")).toBeInTheDocument();
     // 生效范围在工具栏回显
-    expect(screen.getByText("统计范围：2026-08-21 ~ 2026-08-27")).toBeInTheDocument();
+    expect(screen.getByText(/统计范围：2026-08-21 ~ 2026-08-27/)).toBeInTheDocument();
 
-    // 柱状图移除：折线 + DC 堆叠柱状 + 两排行 + 四饼图 = 8 张 mock 占位（页级 mock 不区分类型）
-    expect(await screen.findAllByTestId("mock-plot")).toHaveLength(8);
+    // 图表 Tab 化后默认激活「趋势」页签：折线 + DC 趋势 = 2 张 mock 占位
+    //（排行/分布/监听源页签不渲染直到切换）
+    expect(await screen.findAllByTestId("mock-plot")).toHaveLength(2);
+    // 页签就位：四个随时间范围查询的模块
+    for (const tab of ["趋势", "排行", "分布", "监听源"]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
+    }
 
     // 全时段快照：用户计数 + 频道加入指标 + 上限后缀
     expect(screen.getByText("全时段快照")).toBeInTheDocument();
@@ -196,11 +202,33 @@ describe("业务统计页", () => {
     expect(fetchOverviewMock).toHaveBeenCalledTimes(1);
   });
 
+  it("页签与时间范围经 sessionStorage 持久化：重挂载（菜单往返）后保持", async () => {
+    fetchStatsMock.mockResolvedValue(statsResponse());
+
+    // 首挂：默认趋势页签，切到「分布」
+    renderPage();
+    await screen.findByText(/请求总数 12/);
+    fireEvent.click(screen.getByRole("tab", { name: "分布" }));
+    expect(screen.getAllByTestId("mock-plot").length).toBeGreaterThan(2);
+
+    // 菜单往返 = 卸载后重挂：页签与查询参数保持，不回到默认趋势
+    cleanup();
+    renderPage();
+    await screen.findByText(/请求总数 12/);
+    const activeTab = screen.getByRole("tab", { name: "分布" });
+    expect(activeTab).toHaveAttribute("aria-selected", "true");
+    // 持久化落盘（快捷范围按当天重算，范围对象始终非空）
+    const saved = JSON.parse(sessionStorage.getItem("stats-page-state-v1") ?? "{}");
+    expect(saved.activeTab).toBe("dist");
+    expect(saved.preset).toBe("last7");
+    expect(fetchStatsMock).toHaveBeenCalledWith({});
+  });
+
   it("点击快捷范围立即生效（显式日期查询）", async () => {
     fetchStatsMock.mockResolvedValue(statsResponse());
 
     renderPage();
-    await screen.findByText("请求总数 12");
+    await screen.findByText(/请求总数 12/);
 
     const today = dayjs();
     fireEvent.click(screen.getByText("近 30 天"));
@@ -217,12 +245,12 @@ describe("业务统计页", () => {
     fetchStatsMock.mockResolvedValue(statsResponse({ since_day: "", until_day: "" }));
 
     renderPage();
-    await screen.findByText("请求总数 12");
+    await screen.findByText(/请求总数 12/);
 
     fireEvent.click(screen.getByText("全量"));
 
     await waitFor(() => expect(fetchStatsMock).toHaveBeenCalledWith({ all: "1" }));
-    expect(await screen.findByText("统计范围：全量")).toBeInTheDocument();
+    expect(await screen.findByText(/统计范围：全量/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("开始日期")).toBeDisabled();
     expect(screen.getByPlaceholderText("结束日期")).toBeDisabled();
   });
@@ -234,7 +262,7 @@ describe("业务统计页", () => {
     );
 
     renderPage();
-    await screen.findByText("统计范围：2026-08-21 ~ 2026-08-27");
+    await screen.findByText(/统计范围：2026-08-21 ~ 2026-08-27/);
 
     pickRange("2026-08-01", "2026-08-05");
 
@@ -245,7 +273,7 @@ describe("业务统计页", () => {
       }),
     );
     // 工具栏回显服务端生效范围（而非本地输入）
-    expect(await screen.findByText("统计范围：2026-08-01 ~ 2026-08-05")).toBeInTheDocument();
+    expect(await screen.findByText(/统计范围：2026-08-01 ~ 2026-08-05/)).toBeInTheDocument();
     // 自定义范围无需应用按钮
     expect(screen.queryByRole("button", { name: /应\s*用/ })).not.toBeInTheDocument();
   });
@@ -259,7 +287,7 @@ describe("业务统计页", () => {
     expect(await screen.findByText("数据加载失败")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /重\s*试/ }));
 
-    await waitFor(() => expect(screen.getByText("请求总数 12")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/请求总数 12/)).toBeInTheDocument());
     expect(fetchStatsMock).toHaveBeenCalledTimes(2);
   });
 
@@ -270,8 +298,8 @@ describe("业务统计页", () => {
     renderPage();
 
     // 统计区照常渲染
-    expect(await screen.findByText("请求总数 12")).toBeInTheDocument();
-    expect(screen.getByText("统计范围：2026-08-21 ~ 2026-08-27")).toBeInTheDocument();
+    expect(await screen.findByText(/请求总数 12/)).toBeInTheDocument();
+    expect(screen.getByText(/统计范围：2026-08-21 ~ 2026-08-27/)).toBeInTheDocument();
     // 快照区展示局部错误态
     expect(await screen.findByText("数据加载失败")).toBeInTheDocument();
 

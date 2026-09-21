@@ -247,6 +247,12 @@ type settingsUpdateInput struct {
 	JoinMaxChannels       *int
 	JoinMuteEnabled       *bool
 	JoinArchiveEnabled    *bool
+	// 监听源（/watch）配置；nil 表示不变更，合并当前值后整体写入
+	//（syscfg.WatchConfig 单一来源）。
+	WatchApplyEnabled    *bool
+	WatchRequireApproval *bool
+	WatchMaxSources      *int
+	WatchPerUserLimit    *int
 	// MaxRequestAttempts 为单个请求累计尝试上限（含首次）；nil 表示不变更。
 	// 即时生效（syscfg 直查，重试校验与详情展示无缓存）。
 	MaxRequestAttempts     *int
@@ -451,6 +457,37 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				return res, &settingsParamError{err.Error()}
 			}
 			s.audit(ctx, "settings.channel_join", "settings", map[string]any{
+				"before": before, "after": after, "effect": "即时生效"})
+		}
+	}
+
+	// 监听源配置（即时生效）：合并当前值整体写入；任一项变更即审计
+	if in.WatchApplyEnabled != nil || in.WatchRequireApproval != nil ||
+		in.WatchMaxSources != nil || in.WatchPerUserLimit != nil {
+		before := syscfg.LoadWatchConfig(ctx, s.st)
+		after := before
+		changed := false
+		if in.WatchApplyEnabled != nil && *in.WatchApplyEnabled != before.ApplyEnabled {
+			after.ApplyEnabled = *in.WatchApplyEnabled
+			changed = true
+		}
+		if in.WatchRequireApproval != nil && *in.WatchRequireApproval != before.RequireApproval {
+			after.RequireApproval = *in.WatchRequireApproval
+			changed = true
+		}
+		if in.WatchMaxSources != nil && *in.WatchMaxSources != before.MaxSources {
+			after.MaxSources = *in.WatchMaxSources
+			changed = true
+		}
+		if in.WatchPerUserLimit != nil && *in.WatchPerUserLimit != before.PerUserLimit {
+			after.PerUserLimit = *in.WatchPerUserLimit
+			changed = true
+		}
+		if changed {
+			if err := syscfg.SaveWatchConfig(ctx, s.st, after); err != nil {
+				return res, &settingsParamError{err.Error()}
+			}
+			s.audit(ctx, "settings.watch", "settings", map[string]any{
 				"before": before, "after": after, "effect": "即时生效"})
 		}
 	}

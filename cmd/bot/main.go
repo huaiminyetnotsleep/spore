@@ -38,6 +38,7 @@ import (
 	queuepkg "github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 	"github.com/huaiminyetnotsleep/spore/internal/web"
 )
 
@@ -326,6 +327,13 @@ func main() {
 		logger.Error("初始化频道加入服务失败", "error", err.Error())
 		os.Exit(1)
 	}
+	// 监听源服务（Bot /watch 与 Web 管理端共用）：源校验用的 Bot 客户端与
+	// 审批结果通知在 MTProto ready 内经 SetBots / SetNotifier 注入。
+	watchSvc, err := watch.New(watch.Options{Store: st, Log: logger})
+	if err != nil {
+		logger.Error("初始化监听源服务失败", "error", err.Error())
+		os.Exit(1)
+	}
 	// 接入机器人身份（总览页展示）：直接读多机器人池成员快照，Bot 客户端
 	// 在 MTProto 就绪后才入池（重连会重建），未就绪时总览页显示"未接入"。
 	botIdentity := newBotIdentityStore(pool)
@@ -360,6 +368,7 @@ func main() {
 		Bindings:          bindingSvc,       // 频道绑定管理页（列表/绑定/解绑）
 
 		ChannelJoin:    joinSvc,                // 频道加入管理页（审批/已加入/退出）
+		Watch:          watchSvc,               // 监听源管理页（列表/审批/添加/删除）
 		Transfer:       transferRuntime,        // 四项传输并发的原子运行时配置
 		CloudCfg:       cloudMgr,               // 云盘下载页（配置视图/保存）与补存端点
 		CloudSink:      rcloneSink,             // 云盘目的地连通性测试通道
@@ -398,6 +407,7 @@ func main() {
 		access:      accessSvc,
 		bindings:    bindingSvc,
 		join:        joinSvc,
+		watch:       watchSvc,
 		hub:         hub,
 		userClient:  m,
 		pool:        pool,

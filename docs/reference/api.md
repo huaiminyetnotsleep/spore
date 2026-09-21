@@ -963,6 +963,46 @@ cloud-drive.json.enc
 
 `ok` 为是否至少退出一个频道；创建者频道、未加入的 ID 与 Telegram 离线按行失败并带 `error`。错误：`400`（数量越界/ID 非法/请求体非法）；`503`（join 服务未注入）。
 
+
+### GET /api/v1/watch-sources
+
+监听源配置列表（认证），不分页；待审批排最前。行包含源标识/类型/状态、申请人资料、受理 Bot 快照及预热条数/最近预热时间。
+
+### POST /api/v1/watch-sources/add
+
+管理员直接添加监听源（认证 + CSRF）。请求体 `{"target":"@用户名/t.me 链接/-100 ID","enabled":true}`；不走用户准入/上限/审批。目标必须是频道或超级群组，且 Bot 已是管理员。
+
+### POST /api/v1/watch-sources/{id}/approve · /reject · /toggle · /delete · /leave
+
+监听源管理写操作（认证 + CSRF）：审批申请、暂停/恢复、仅删配置，或把池内全部 Bot `leaveChat` 退出源并删配置。已缓存副本保留。
+
+### GET /api/v1/watch-events
+
+监听记录（认证，服务端分页）。查询参数：`channel_id`（可选）、`page`、`page_size`。响应行：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | int64 | 事件 ID |
+| `channel_id` / `username` / `title` | int64 / string | 源标识与快照 |
+| `message_id` / `member_ids` | int / int[] | 定位消息及转发成员（相册为全部成员） |
+| `message_url` | string | 规范化源消息链接 |
+| `dump_ids` | int[] | 缓存频道落点；fallback 时为空 |
+| `request_id` | int64 | 受保护内容回退管线关联的请求行（0 = 无） |
+| `bot_id` / `bot_username` | int64 / string | 执行转储的 Bot |
+| `path` | string | `copy`（服务端复制）或 `fallback`（受保护重传） |
+| `created_at` | int64 | Unix 毫秒 |
+
+### GET /api/v1/watch-stats
+
+业务统计页「监听源」Tab 的统计接口（认证）。查询参数与 `GET /api/v1/stats` 完全同款：`since` / `until`（运营时区 `YYYY-MM-DD`）、`all=1`、`bot_id`。响应包含：
+
+- `sources`：当前监听源状态计数；
+- `by_source`：按源的转储批次、消息条数、最近转储；
+- `by_bot`：各 Bot 转储批次；
+- `by_user`：按监听源归属用户聚合；
+- `trend`：按运营时区自然日的转储趋势（升序，范围缺日由前端补零）；
+- `since_day` / `until_day`：实际生效范围回显。
+
 ---
 
 ## 7. 事件中心
@@ -1054,6 +1094,10 @@ cloud-drive.json.enc
 | `join_max_channels` | int | 活跃加入频道数量上限（0–200，0 = 不限；缺省 20） |
 | `join_mute_enabled` | bool | 加入后静音（缺省 `true`） |
 | `join_archive_enabled` | bool | 加入后归档（缺省 `true`） |
+| `watch_apply_enabled` | bool | 监听源用户自助申请（/watch）开关（即时生效；缺省 `false`；管理员添加不受限） |
+| `watch_require_approval` | bool | 用户申请需审批后生效（缺省 `true`；false = 免审批直接生效；号主恒直接生效） |
+| `watch_max_sources` | int | 监听源总数上限（0–200，0 = 不限；仅约束用户申请；缺省 20） |
+| `watch_per_user_limit` | int | 每用户申请上限（0–20，0 = 不限；缺省 3） |
 | `max_request_attempts` | int | 单个请求累计尝试上限（1–10，含首次；即时生效；缺省 3） |
 | `download_threads` / `upload_threads` / `download_connections` / `upload_connections` | int | 传输并发当前生效值（1–16） |
 | `download_threads_env` / `upload_threads_env` / `download_connections_env` / `upload_connections_env` | int | 对应环境变量默认值 |
@@ -1074,6 +1118,9 @@ cloud-drive.json.enc
 | `dump_channel` | string | 缓存频道目标：`@用户名` / `t.me` 链接 / `-100` 数字 ID；经 Bot 校验（频道存在且 Bot 可发帖）后保存数字 ID；空串清除配置（显式 `0` 覆盖环境变量） |
 | `join_enabled` / `join_auto_leave_external` / `join_require_approval` / `join_mute_enabled` / `join_archive_enabled` | bool | 频道加入配置，逐项可选 |
 | `join_max_channels` | int | 0–200（0 = 不限） |
+| `watch_apply_enabled` / `watch_require_approval` | bool | 监听源（/watch）申请配置，逐项可选 |
+| `watch_max_sources` | int | 0–200（0 = 不限） |
+| `watch_per_user_limit` | int | 0–20（0 = 不限） |
 | `max_request_attempts` | int | 1–10（累计含首次）；缺省保持不变，保存后即时影响重试校验 |
 | `queue_capacity` | int | 1–4096；缺省保持不变 |
 | `worker_count` | int | 1–16；缺省保持不变 |

@@ -85,6 +85,18 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/channel-join/requests/{id}/reject", s.handleAPIJoinRequestReview(false))
 	mux.Handle("GET /api/v1/channel-join/channels", s.apiAuth(s.handleAPIJoinedChannelsList))
 	s.mountAPIWrite(mux, "/api/v1/channel-join/channels/leave", s.handleAPIJoinedChannelsLeave)
+
+	// 监听源（/watch）：列表 / 管理员添加 / 审批 / 暂停开关 / 删除 / 移出 bot /
+	// 监听记录（预热事件）
+	mux.Handle("GET /api/v1/watch-sources", s.apiAuth(s.handleAPIWatchSourcesList))
+	mux.Handle("GET /api/v1/watch-events", s.apiAuth(s.handleAPIWatchEventsList))
+	mux.Handle("GET /api/v1/watch-stats", s.apiAuth(s.handleAPIWatchStats))
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/add", s.handleAPIWatchSourcesAdd)
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/approve", s.handleAPIWatchSourceReview(true))
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/reject", s.handleAPIWatchSourceReview(false))
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/toggle", s.handleAPIWatchSourceToggle)
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/delete", s.handleAPIWatchSourceDelete)
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/leave", s.handleAPIWatchSourceLeave)
 	// 审计页迁移：只读查询端点，分页与时间
 	// 倒序语义对齐 SSR /audit；before/after 原始 JSON 原样下发。
 	mux.Handle("GET /api/v1/audit", s.apiAuth(s.handleAPIAuditList))

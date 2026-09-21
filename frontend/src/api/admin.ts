@@ -654,6 +654,15 @@ export interface SettingsView {
   join_mute_enabled: boolean;
   join_archive_enabled: boolean;
 
+  /** 监听源（/watch）配置（即时生效；watch_apply_enabled 缺省 false）。 */
+  watch_apply_enabled: boolean;
+  /** 用户申请需审批（false = 免审批直接生效）。 */
+  watch_require_approval: boolean;
+  /** 监听源总数上限（0 = 不限；仅约束用户申请，管理员添加不受限）。 */
+  watch_max_sources: number;
+  /** 每用户申请上限（0 = 不限；号主经 Bot 提交不受限）。 */
+  watch_per_user_limit: number;
+
   /** 单个请求累计尝试上限（含首次；即时生效；缺省 3，可配 1–10）。 */
   max_request_attempts: number;
 
@@ -980,6 +989,130 @@ export interface JoinedChannelRow {
 
 export function fetchJoinedChannels(): Promise<{ items: JoinedChannelRow[] }> {
   return apiRequest<{ items: JoinedChannelRow[] }>("/api/v1/channel-join/channels");
+}
+
+// ---- 监听源（/watch，预热缓存频道） ----
+
+/**
+ * 监听源列表行（GET /api/v1/watch-sources）：含各状态（pending/approved/
+ * rejected，待审批排最前）与申请人展示资料（管理员添加 added_by=0 时为空）。
+ */
+export interface WatchSourceRow {
+  /** Bot API -100 形态频道/群组 ID。 */
+  channel_id: number;
+  /** channel=频道 / supergroup=超级群组（空 = 旧数据）。 */
+  kind: string;
+  /** 公开源用户名（无 @）；私有源为空。 */
+  username: string;
+  title: string;
+  /** pending=待审批 / approved=生效 / rejected=已拒绝。 */
+  status: "pending" | "approved" | "rejected";
+  /** approved 行的独立暂停开关。 */
+  enabled: boolean;
+  /** 0 = 管理员 Web 添加；>0 = 申请人用户 ID。 */
+  added_by: number;
+  /** 用户 /watch 的受理 bot ID；0 = Web 管理端添加。 */
+  bot_id: number;
+  /** 受理 bot 用户名快照（bot 移出池后历史仍可读）。 */
+  bot_username: string;
+  reviewed_by: string;
+  created_at: number;
+  updated_at: number;
+  /** 申请人展示资料（LEFT JOIN；管理员添加或用户已删除时为空）。 */
+  user_username: string;
+  user_display_name: string;
+  /** 该源累计写入缓存频道的条目数（双键合并；健康度指标）。 */
+  prewarm_count: number;
+  /** 最近一次预热时间（Unix 毫秒；0 = 从未预热）。 */
+  prewarm_last_at: number;
+}
+
+export function fetchWatchSources(): Promise<{ items: WatchSourceRow[] }> {
+  return apiRequest<{ items: WatchSourceRow[] }>("/api/v1/watch-sources");
+}
+
+/**
+ * 监听记录行（GET /api/v1/watch-events）：一次预热转储的留痕——哪个 bot、
+ * 在哪个源、转发了哪些消息、走哪条路径、缓存落点与关联请求。
+ */
+export interface WatchEventRow {
+  id: number;
+  channel_id: number;
+  /** 源快照（源删除后仍可读）。 */
+  username: string;
+  title: string;
+  /** 定位消息 ID（相册取首条成员）。 */
+  message_id: number;
+  /** 转发的源消息 ID（相册为全部成员）。 */
+  member_ids: number[];
+  /** 缓存频道落点消息 ID（回退入队时为空）。 */
+  dump_ids: number[];
+  /** 关联 requests 行（仅 fallback；0 = 无）。 */
+  request_id: number;
+  bot_id: number;
+  bot_username: string;
+  /** copy=服务端复制 / fallback=受保护内容重传管线。 */
+  path: "copy" | "fallback";
+  created_at: number;
+  /** 规范化源消息链接（与 requests 的 message_url 同一归一规则）。 */
+  message_url: string;
+}
+
+/** 监听记录分页列表参数。 */
+export interface WatchEventsParams {
+  channel_id?: number;
+  page?: number;
+  page_size?: number;
+}
+
+export interface WatchEventsResult {
+  items: WatchEventRow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export function fetchWatchEvents(params: WatchEventsParams): Promise<WatchEventsResult> {
+  const qs = new URLSearchParams();
+  if (params.channel_id) qs.set("channel_id", String(params.channel_id));
+  if (params.page) qs.set("page", String(params.page));
+  if (params.page_size) qs.set("page_size", String(params.page_size));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return apiRequest<WatchEventsResult>(`/api/v1/watch-events${suffix}`);
+}
+
+/** 监听模块统计视图（GET /api/v1/watch-stats）。 */
+export interface WatchStatsView {
+  sources: { approved: number; pending: number; rejected: number };
+  by_source: {
+    channel_id: number;
+    title: string;
+    username: string;
+    events: number;
+    messages: number;
+    last_at: number;
+  }[];
+  by_bot: { bot_id: number; bot_username: string; events: number }[];
+  by_user: {
+    added_by: number;
+    user_username: string;
+    user_display_name: string;
+    events: number;
+  }[];
+  /** 最近 N 天趋势（缺日补零，升序）。 */
+  trend: { day: string; events: number }[];
+}
+
+/** 监听统计响应：视图 + 实际生效时间范围回显（all 时为空串）。 */
+export interface WatchStatsResult extends WatchStatsView {
+  since_day: string;
+  until_day: string;
+}
+
+/** 监听模块统计（时间段/bot 筛选与 fetchStats 同款参数）。 */
+export function fetchWatchStats(params: RangeParams = {}): Promise<WatchStatsResult> {
+  // 与 fetchStats / parseTimeRange 使用同一参数名：since / until / all / bot_id。
+  return apiRequest<WatchStatsResult>(`/api/v1/watch-stats${toQuery(params)}`);
 }
 
 // ---- 机器人池管理（多机器人池） ----

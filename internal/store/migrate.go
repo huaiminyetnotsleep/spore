@@ -266,6 +266,72 @@ ALTER TABLE users ADD COLUMN source_bot_username TEXT NOT NULL DEFAULT '';`,
 	// 历史坐标保留供审计，复用回落完整投递后由 WriteClean 自愈重写。
 	// 只存整数版本号，非正文/caption（数据范围红线不变）。
 	`ALTER TABLE dump_entries ADD COLUMN format_version INTEGER NOT NULL DEFAULT 0;`,
+
+	// v17：监听源预热缓存（watch_sources，/watch 指令 + Web 管理端）——
+	// 管理端配置或用户申请（可审批）的源频道/超级群组，bot 以管理员身份
+	// 接收新帖并自动转储缓存频道预热 dump_entries，重复链接直接命中复用。
+	// channel_id 为 Bot API -100 形态主键；username 供公开源双键复用
+	//（t.me/username 与 t.me/c 两种链接形态都命中）。status 区分用户申请
+	//（pending 待审批 / approved / rejected）；added_by=0 为管理员 Web 直接
+	// 添加（天然 approved），>0 为申请人用户 ID（无 FK：0 语义不是用户行）。
+	// enabled 是独立暂停开关（approved 但暂停监听）。
+	// 注意：本条必须保持 2026-09-21 首次发布的字节形态——有部署在首个
+	// 形态上启动过（缺 kind/bot 列），后续增量一律走 v18+ 追加。
+	`CREATE TABLE watch_sources (
+channel_id INTEGER PRIMARY KEY,
+username TEXT,
+title TEXT,
+status TEXT NOT NULL,
+enabled INTEGER NOT NULL DEFAULT 1,
+added_by INTEGER NOT NULL DEFAULT 0,
+reviewed_by TEXT,
+created_at INTEGER NOT NULL,
+updated_at INTEGER NOT NULL
+);`,
+
+	// v18：监听源结构收尾（部分部署的 v17 库缺列/缺表）。重建 watch_sources
+	// 为最终形态——INSERT 只引用 v17 全形态共有的列，兼容缺 kind、缺
+	// bot_id/bot_username 或两者皆缺的中间结构（既有行保留，新增列取默认
+	// 值）；watch_events 用 IF NOT EXISTS 幂等创建（新库 v17 后本迁移同样
+	// 适用，两种路径收敛到同一最终结构）。
+	`CREATE TABLE watch_sources_v18 (
+channel_id INTEGER PRIMARY KEY,
+kind TEXT NOT NULL DEFAULT '',
+username TEXT,
+title TEXT,
+status TEXT NOT NULL,
+enabled INTEGER NOT NULL DEFAULT 1,
+added_by INTEGER NOT NULL DEFAULT 0,
+bot_id INTEGER NOT NULL DEFAULT 0,
+bot_username TEXT NOT NULL DEFAULT '',
+reviewed_by TEXT,
+created_at INTEGER NOT NULL,
+updated_at INTEGER NOT NULL
+);
+
+INSERT INTO watch_sources_v18 (channel_id, username, title, status, enabled, added_by, reviewed_by, created_at, updated_at)
+SELECT channel_id, username, title, status, enabled, added_by, reviewed_by, created_at, updated_at FROM watch_sources;
+
+DROP TABLE watch_sources;
+
+ALTER TABLE watch_sources_v18 RENAME TO watch_sources;
+
+CREATE TABLE IF NOT EXISTS watch_events (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+channel_id INTEGER NOT NULL,
+username TEXT NOT NULL DEFAULT '',
+title TEXT NOT NULL DEFAULT '',
+message_id INTEGER NOT NULL,
+member_ids_json TEXT NOT NULL DEFAULT '',
+dump_ids_json TEXT NOT NULL DEFAULT '',
+request_id INTEGER NOT NULL DEFAULT 0,
+bot_id INTEGER NOT NULL DEFAULT 0,
+bot_username TEXT NOT NULL DEFAULT '',
+path TEXT NOT NULL,
+created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_watch_events_channel ON watch_events(channel_id, id);`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

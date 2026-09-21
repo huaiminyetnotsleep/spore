@@ -172,7 +172,8 @@ openssl rand -hex 32
 | `dump_channel_id` / `dump_channel_title` | 0 / 空 | 即时生效；显式 0 可覆盖环境变量；标题仅展示 |
 | `system_name` | `Spore` | 不缓存，每次读取；Bot 文案、事件标题、页面标题即时生效 |
 | `max_request_attempts` | 3；合法 1–10（累计含首次） | 即时生效（重试校验与详情展示直查）；已达上限的失败请求可在消息记录详情页重置尝试计数（attempt 清回 1，不入队） |
-| `join_enabled` 等 `join_*` 六项 | 关 / 关 / 需审核 / 20 / 开 / 开 | 即时生效（语义见[使用指南](../guide/usage.md)第 10 节） |
+| `join_enabled` 等 `join_*` 六项 | 关 / 关 / 需审核 / 20 / 开 / 开 | 即时生效（语义见[使用指南](../guide/usage.md)第 11 节） |
+| `watch_apply_enabled` / `watch_require_approval` / `watch_max_sources` / `watch_per_user_limit` | 关 / 需审核 / 20 / 3 | 监听源用户申请配置，即时生效；管理员 Web 添加与号主不受数量上限（语义见[使用指南](../guide/usage.md)第 10 节） |
 | 传输四项（数据库覆盖值） | 各自环境默认（通常 4） | 事务内整体发布；线程/连接语义见第 3.2 节 |
 | `last_backup_at` | 0 | 数据库备份导出后写入 Unix 毫秒时间；仅页面状态展示 |
 | `access_key_hash` | 首次启动自动生成 | 只存 SHA-256 哈希；明文仅在生成时输出一次；重置会使全部 Web 会话失效 |

@@ -551,31 +551,54 @@ function BotDistributionChart({ rows, total }: { rows: StatsBot[]; total: number
   );
 }
 
-export function StatsCharts({ requests }: { requests: StatsRequests }) {
+/** 趋势区块（随时间范围查询）。 */
+export function TrendCharts({ requests }: { requests: StatsRequests }) {
   const navigate = useNavigate();
   return (
+    <SectionCard title="趋势">
+      <Space direction="vertical" size="middle" className="field-width-full">
+        <ErrorRateChart trend={requests.trend} navigate={navigate} />
+        <DCTrendChart points={requests.dc_trend} />
+      </Space>
+    </SectionCard>
+  );
+}
+
+/** 排行区块（业务统计页 Tab 之一）。 */
+export function RankCharts({ requests }: { requests: StatsRequests }) {
+  return (
+    <SectionCard title="排行">
+      <div className="chart-grid">
+        <ChannelRankChart channels={requests.top_channels} />
+        <UserRankChart users={requests.top_users} />
+      </div>
+    </SectionCard>
+  );
+}
+
+/** 分布区块（业务统计页 Tab 之一）。 */
+export function DistCharts({ requests }: { requests: StatsRequests }) {
+  const navigate = useNavigate();
+  return (
+    <SectionCard title="分布">
+      <div className="chart-grid">
+        <MediaDistributionChart rows={requests.media_dist} total={requests.total} navigate={navigate} />
+        <DeliveryModeDistributionChart rows={requests.delivery_dist} total={requests.total} navigate={navigate} />
+        <ErrorDistributionChart rows={requests.error_dist} navigate={navigate} />
+        <DCDistributionChart rows={requests.dc_dist} total={requests.total} />
+        <BotDistributionChart rows={requests.bot_dist} total={requests.total} />
+      </div>
+    </SectionCard>
+  );
+}
+
+/** 原整版组合（趋势 + 排行 + 分布纵向排列）；页面已改用 StatsTabs 分页签。 */
+export function StatsCharts({ requests }: { requests: StatsRequests }) {
+  return (
     <Space direction="vertical" size="middle" className="field-width-full">
-      <SectionCard title="趋势">
-        <Space direction="vertical" size="middle" className="field-width-full">
-          <ErrorRateChart trend={requests.trend} navigate={navigate} />
-          <DCTrendChart points={requests.dc_trend} />
-        </Space>
-      </SectionCard>
-      <SectionCard title="排行">
-        <div className="chart-grid">
-          <ChannelRankChart channels={requests.top_channels} />
-          <UserRankChart users={requests.top_users} />
-        </div>
-      </SectionCard>
-      <SectionCard title="分布">
-        <div className="chart-grid">
-          <MediaDistributionChart rows={requests.media_dist} total={requests.total} navigate={navigate} />
-          <DeliveryModeDistributionChart rows={requests.delivery_dist} total={requests.total} navigate={navigate} />
-          <ErrorDistributionChart rows={requests.error_dist} navigate={navigate} />
-          <DCDistributionChart rows={requests.dc_dist} total={requests.total} />
-          <BotDistributionChart rows={requests.bot_dist} total={requests.total} />
-        </div>
-      </SectionCard>
+      <TrendCharts requests={requests} />
+      <RankCharts requests={requests} />
+      <DistCharts requests={requests} />
     </Space>
   );
 }
