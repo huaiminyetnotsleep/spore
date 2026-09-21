@@ -2,6 +2,20 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.24.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.23.0...v1.24.0) (2026-09-21)
+
+
+### Features
+
+* **pin:** 置顶确认文案带原消息链接与逐目标明细 ([919af0f](https://github.com/huaiminyetnotsleep/spore/commit/919af0f3bcc80bf8cab51385703450c4a7cfc1a6))
+* **pin:** 置顶确认文案带原消息链接与逐目标明细 ([52a9ab9](https://github.com/huaiminyetnotsleep/spore/commit/52a9ab9df97a74f3c5b6bab2773daa33c6fd168f))
+
+
+### Bug Fixes
+
+* **watch:** 监听转储批内按消息 ID 升序去重，修复 copyMessages 严格递增被拒 ([d352ca8](https://github.com/huaiminyetnotsleep/spore/commit/d352ca8a0d1604471660fa695e3dd8d4e9a61ed5))
+* **watch:** 监听转储批内按消息 ID 升序去重，修复 copyMessages 严格递增被拒 ([023b329](https://github.com/huaiminyetnotsleep/spore/commit/023b329cf2d128adbec59be6d04e072dbf1e8c21))
+
 ## [1.23.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.22.0...v1.23.0) (2026-09-21)
 
 
