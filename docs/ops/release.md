@@ -24,6 +24,19 @@ CI 与发版由五个 GitHub Actions workflow 分工完成；日常 PR 先通过
 部署仍只发生在正式 release。Docker 检查的 GHA cache 仅是性能优化，缓存
 reservation 或后端故障会被忽略，不会把已成功的镜像构建误判为失败。
 
+**release PR 无需人工审核**：release PR 由 `github-actions[bot]` 用
+`GITHUB_TOKEN` 创建，而 GitHub 防循环规则规定 **`GITHUB_TOKEN` 创建的 PR 不
+触发任何 `pull_request` workflow**——两项 build-check 在 release PR 上不会
+运行，required 状态会永远停在 Expected。因此 `release` workflow 在创建/更新
+release PR 后，按与 build-check 相同的路径判定预填两项门禁状态：release PR
+只含 CHANGELOG（release-please 无 extra-files），判定"不影响镜像/文档站"
+并标记 success，合并门禁随即放行，由维护者手动合并，全程无人工审核。若未来
+release PR 含真正影响镜像或文档的文件，状态不预填（合并框会显示等待）——
+由维护者向 release 分支推一个空提交（人工 push 会触发真实 CI）后再合并。
+ruleset 姿态：只勾 **Require status checks**（两项 build-check）、不勾
+Require approvals。注意 ruleset 的 Bypass Apps 列表只收录安装到仓库的
+GitHub App，内置的 `github-actions[bot]` 无法入选——平台限制，不是配置缺失。
+
 ## 1. 日常提交与版本号规则
 
 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)，
