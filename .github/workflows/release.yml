@@ -48,23 +48,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pr=$(gh pr list --state open --base main \
-            --author "app/github-actions" \
-            --search "chore(main): release in:title" \
-            --json number,headRefOid --jq '.[0] // empty')
+          # 本 job 无 checkout，必须用纯 gh api（gh pr list/diff 会调用本地
+          # git 而失败）。仓库路径取 GITHUB_REPOSITORY，显式指定。
+          repo="$GITHUB_REPOSITORY"
+          pr=$(gh api "repos/$repo/pulls?state=open&base=main&per_page=50" \
+            --jq '.[]
+              | select(.user.login == "github-actions[bot]"
+                and (.title | startswith("chore(main): release")))
+              | "\(.number) \(.head.sha)"' \
+            | head -1)
           if [ -z "$pr" ]; then
             echo "没有打开的 release PR，跳过"
             exit 0
           fi
-          num=$(echo "$pr" | jq -r '.number')
-          sha=$(echo "$pr" | jq -r '.headRefOid')
+          num=${pr%% *}
+          sha=${pr##* }
           echo "release PR #$num (head $sha)"
-          files=$(gh pr diff "$num" --name-only)
+          files=$(gh api "repos/$repo/pulls/$num/files?per_page=100" \
+            --paginate --jq '.[].filename')
           echo "$files" | sed 's/^/  变更文件: /'
           if echo "$files" | grep -qE '^(cmd/|internal/|frontend/|public/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.dockerignore$|\.github/workflows/docker-.*\.yml$)'; then
             echo "检测到影响镜像的变更，不预填 docker 门禁状态（需人工推空提交触发真实 CI）"
           else
-            gh api -X POST "repos/${{ github.repository }}/statuses/$sha" \
+            gh api -X POST "repos/$repo/statuses/$sha" \
               -f state=success -f context="docker-build-check / build-check" \
               -f description="CHANGELOG-only，不影响镜像，自动跳过" >/dev/null
             echo "docker 门禁状态已置 success"
@@ -72,7 +78,7 @@ jobs:
           if echo "$files" | grep -qE '^(docs/|public/|\.github/workflows/docs-.*\.yml$)'; then
             echo "检测到影响文档站的变更，不预填 docs 门禁状态（需人工推空提交触发真实 CI）"
           else
-            gh api -X POST "repos/${{ github.repository }}/statuses/$sha" \
+            gh api -X POST "repos/$repo/statuses/$sha" \
               -f state=success -f context="docs-build-check / build-check" \
               -f description="CHANGELOG-only，不影响文档站，自动跳过" >/dev/null
             echo "docs 门禁状态已置 success"
