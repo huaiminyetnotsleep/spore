@@ -16,6 +16,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  statuses: write
 
 # 连续 push main 时串行执行：release-please 会读写同一个 release PR，
 # 两个运行重叠可能竞态（重复分析/互相覆盖 PR 内容）
@@ -35,6 +36,47 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # GITHUB_TOKEN 创建的 PR 不会触发 pull_request workflow（GitHub 防循环
+      # 规则），两项 required check 在 release PR 上永远等不到状态、会一直卡
+      # 在 Expected。这里按与 build-check 相同的路径判定预填状态：release PR
+      # 只含 CHANGELOG（release-please 无 extra-files）→ 两项均判定"不影响"
+      # 并标记 success，合并门禁随即放行。若未来 release PR 含真正影响镜像
+      # 或文档的文件，则不预填——由维护者向 release 分支推一个空提交（人工
+      # push 会触发真实 CI）后再合并。
+      - name: 预填 release PR 门禁状态（bot PR 不触发 CI）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr=$(gh pr list --state open --base main \
+            --author "app/github-actions" \
+            --search "chore(main): release in:title" \
+            --json number,headRefOid --jq '.[0] // empty')
+          if [ -z "$pr" ]; then
+            echo "没有打开的 release PR，跳过"
+            exit 0
+          fi
+          num=$(echo "$pr" | jq -r '.number')
+          sha=$(echo "$pr" | jq -r '.headRefOid')
+          echo "release PR #$num (head $sha)"
+          files=$(gh pr diff "$num" --name-only)
+          echo "$files" | sed 's/^/  变更文件: /'
+          if echo "$files" | grep -qE '^(cmd/|internal/|frontend/|public/|go\.mod$|go\.sum$|Makefile$|Dockerfile$|\.dockerignore$|\.github/workflows/docker-.*\.yml$)'; then
+            echo "检测到影响镜像的变更，不预填 docker 门禁状态（需人工推空提交触发真实 CI）"
+          else
+            gh api -X POST "repos/${{ github.repository }}/statuses/$sha" \
+              -f state=success -f context="docker-build-check / build-check" \
+              -f description="CHANGELOG-only，不影响镜像，自动跳过" >/dev/null
+            echo "docker 门禁状态已置 success"
+          fi
+          if echo "$files" | grep -qE '^(docs/|public/|\.github/workflows/docs-.*\.yml$)'; then
+            echo "检测到影响文档站的变更，不预填 docs 门禁状态（需人工推空提交触发真实 CI）"
+          else
+            gh api -X POST "repos/${{ github.repository }}/statuses/$sha" \
+              -f state=success -f context="docs-build-check / build-check" \
+              -f description="CHANGELOG-only，不影响文档站，自动跳过" >/dev/null
+            echo "docs 门禁状态已置 success"
+          fi
 
   # GITHUB_TOKEN 创建的 tag 其 push 事件不会触发其他 workflow（GitHub 防循环
   # 规则），镜像与文档的发版构建必须经 repository_dispatch 中转——这是官方
