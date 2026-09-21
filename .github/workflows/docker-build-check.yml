@@ -4,49 +4,65 @@
 name: docker-build-check
 
 on:
+  # main 的合并提交与直接 push 都重新做完整镜像验证，作为主分支兜底。
   push:
     branches: [main]
-    paths:
-      - "cmd/**"
-      - "internal/**"
-      - "frontend/**"
-      - "public/**"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/workflows/docker-build-check.yml"
+  # 合并到 main 前必须完成完整镜像构建；不设 paths，保证 required check
+  # 对每个 PR 都会产生状态，不会因跳过而一直停在 Expected/Pending。
   pull_request:
-    paths:
-      - "cmd/**"
-      - "internal/**"
-      - "frontend/**"
-      - "public/**"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/workflows/docker-build-check.yml"
+    branches: [main]
   workflow_dispatch:
+
+# 同一 PR/ref 的新提交取消旧构建，避免昂贵的前端/Go/FFmpeg 构建并发争用缓存。
+concurrency:
+  group: docker-build-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   build-check:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - name: 检出源码
         uses: actions/checkout@v5
 
+      # Workflow 对每个 main PR/main push 都产生 required status；实际镜像构建
+      # 只在构建上下文、Dockerfile 或本 workflow 变化时执行。
+      - name: 检测 Docker 构建相关变更
+        id: changes
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docker:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'frontend/**'
+              - 'public/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - '.github/workflows/docker-build-check.yml'
+              - '.github/workflows/docker-release.yml'
+
+      - name: 无 Docker 相关变更，跳过构建
+        if: github.event_name != 'workflow_dispatch' && steps.changes.outputs.docker != 'true'
+        run: echo "没有影响 Docker 镜像的变更，required check 通过。"
+
       - name: 设置 Buildx
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docker == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: 构建镜像（不推送）
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docker == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -54,5 +70,10 @@ jobs:
           build-args: |
             SPORE_VERSION=${{ github.sha }}
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 显式声明只校验构建并写缓存，不导出/加载镜像，消除 Buildx
+          # docker-container driver 的“未指定输出”提示。
+          outputs: type=cacheonly
+          # GHA cache 只是性能优化：独立 scope 避免与 release 默认缓存争用，
+          # mode=min 降低配额；reservation/后端故障不得否定已成功的构建。
+          cache-from: type=gha,scope=spore-docker-build-check
+          cache-to: type=gha,scope=spore-docker-build-check,mode=min,ignore-error=true

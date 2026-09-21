@@ -37,7 +37,7 @@ make frontend-build
 - 说明变更动机、实现范围、兼容性/迁移影响和测试结果。
 - 用户可见行为变化要同步更新 README 或 `docs/`。
 - 不提交构建缓存、`node_modules`、`data/`、`.env`、Session 或凭据。
-- 通过自动检查后再请求审核；维护者可能要求补充测试或文档。
+- 每个目标为 `main` 的 PR 都必须通过 `docker-build-check / build-check` 与 `docs-build-check / build-check` 后才能合并；两项 workflow 始终产生 required status，但只有确实影响镜像或文档站的变更才执行对应构建，其余明确跳过并成功。检查不推镜像、不部署文档；直接 push 到 `main` 时同样执行路径判定与检查，作为主分支兜底。维护者可能要求补充测试或文档。
 
 ## 代码与文档约定
 

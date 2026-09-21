@@ -5,13 +5,24 @@
 > 版本标签的升级与回滚操作见 [operations.md](./operations.md)，常见问题见
 > [troubleshooting.md](./troubleshooting.md)。
 
-发版由三个 GitHub Actions workflow 协作完成，人工只参与一步——**合并 release PR**：
+CI 与发版由五个 GitHub Actions workflow 分工完成；日常 PR 先通过构建门禁，正式发版仍只需人工**合并 release PR**：
 
 | Workflow | 职责 | 触发时机 |
 | --- | --- | --- |
+| `docker-build-check` | 完整验证 Dockerfile（前端、Go、FFmpeg、运行时镜像），不产出、不推送镜像 | **所有目标为 main 的 Pull Request**；**所有 push 到 main（含直接 push）**；手动 |
+| `docs-build-check` | 执行 `npm ci && npm run build` 验证 VitePress，不部署 Pages | **所有目标为 main 的 Pull Request**；**所有 push 到 main（含直接 push）**；手动 |
 | `release` | 运行 release-please：分析提交、计算版本号、维护 CHANGELOG，以 release PR 呈现；合并后创建 tag 与 GitHub Release | 每次 push 到 main |
 | `docker-release` | 构建并推送**全部镜像**：`vX.Y.Z` / `vX.Y` / `vX` / `latest` / `sha-<commit>` | 版本 tag 出现时（自动发版经 `release` 派发的事件中转） |
-| `docker-build-check` | 仅验证 Dockerfile 可构建，不产出、不推送任何镜像 | main push（带路径过滤）、Pull Request、手动 |
+| `docs-release` | 构建并部署该版本文档到 GitHub Pages | 版本 tag 出现时（自动发版经 `release` 派发的事件中转） |
+
+`main` 的仓库 ruleset/branch protection 应把 `docker-build-check / build-check` 与
+`docs-build-check / build-check` 设为 required status checks：任一失败都不得合并。
+两个 workflow 对每个 main PR 和 main push 都启动，以保证 required status 始终存在；
+内部先按变更路径判断，只有确实影响镜像（cmd/internal/frontend/public/Dockerfile 等）
+或文档站（docs/public）的变更才执行昂贵构建，其余走明确的成功跳过步骤。手动触发
+始终执行完整构建。两个检查只读源码，不拥有 GHCR/Pages 写权限；镜像推送与文档
+部署仍只发生在正式 release。Docker 检查的 GHA cache 仅是性能优化，缓存
+reservation 或后端故障会被忽略，不会把已成功的镜像构建误判为失败。
 
 ## 1. 日常提交与版本号规则
 
