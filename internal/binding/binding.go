@@ -20,6 +20,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
+	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -421,24 +422,26 @@ func (s *Service) bindLimitReached(ctx context.Context, userID int64) bool {
 // ID 按 bot 隔离），必须由同一 bot 执行复制；未命中回退主 bot。
 // pin 为 true 时对每个副本发送成功的目标静音置顶组首消息（CopyMessages
 // 保序，返回首条即对应私聊 caption 主消息的副本；客户端置顶组首会自动
-// 展开展示整个相册）。
-// 返回置顶结果：ok = 置顶成功的目标数，total = 参与本轮的目标数（绑定
-// 列表，含副本发送失败的）；pin 为 false 时返回 (0,0)。
+// 展开展示整个相册），并返回逐目标置顶结果——Label 为目标显示名（标题
+// 优先，回退 @用户名 / 数字 ID），供 worker 置顶确认文案展示。
+// pin 为 false 时返回零值。
 // 实现 queue.ChannelCopier；尽力而为：单频道失败只记日志，不中断其余频道，
 // 更不向调用方传播错误（worker 以此保证副本不影响任务结果）。
-func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) (ok, total int) {
+func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) queue.PinOutcome {
+	var outcome queue.PinOutcome
 	b := s.botFor(botID)
 	if b == nil || userID <= 0 || userChatID == 0 || len(msgIDs) == 0 {
-		return 0, 0
+		return outcome
 	}
 	bindings, err := s.store.ListChannelBindingsByUser(ctx, userID)
 	if err != nil {
 		s.log.Warn("频道副本：读取绑定失败", "user_id", userID, "error", err.Error())
-		return 0, 0
+		return outcome
 	}
 	for _, bnd := range bindings {
 		if pin {
-			total++
+			outcome.Total++
+			outcome.Targets = append(outcome.Targets, queue.PinTarget{Label: bindingLabel(bnd)})
 		}
 		sent, err := b.CopyMessages(ctx, &tgbot.CopyMessagesParams{
 			ChatID:     bnd.ChannelID,
@@ -463,12 +466,22 @@ func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID 
 				"user_id", userID, "channel_id", bnd.ChannelID, "error", err.Error())
 			continue
 		}
-		ok++
+		outcome.OK++
+		outcome.Targets[len(outcome.Targets)-1].Pinned = true
 	}
-	if !pin {
-		return 0, 0
+	return outcome
+}
+
+// bindingLabel 渲染绑定目标的显示名：标题优先，回退 @用户名，
+// 两者皆空（私有且无标题快照）时退化为数字 ID。
+func bindingLabel(bnd store.ChannelBinding) string {
+	if bnd.Title != "" {
+		return bnd.Title
 	}
-	return ok, total
+	if bnd.Username != "" {
+		return "@" + bnd.Username
+	}
+	return strconv.FormatInt(bnd.ChannelID, 10)
 }
 
 // PinCapabilityHint 检查该用户全部绑定目标的置顶可行性并返回软提示文案：

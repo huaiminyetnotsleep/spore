@@ -33,7 +33,9 @@ func newPinJobWithRequest(t *testing.T, s *store.Store) (Job, store.Request) {
 func TestProcessPinTaskBypassesSwitchAndRecordsResult(t *testing.T) {
 	s := openStore(t)
 	job, r := newPinJobWithRequest(t, s)
-	copier := &fakeCopier{pinOK: 2, pinTotal: 3}
+	copier := &fakeCopier{outcome: PinOutcome{OK: 2, Total: 3, Targets: []PinTarget{
+		{Label: "我的频道", Pinned: true}, {Label: "我的群组", Pinned: true}, {Label: "第三个", Pinned: false},
+	}}}
 	deps := Deps{
 		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
 		Sender:  &fakeSender{},
@@ -58,12 +60,15 @@ func TestProcessPinTaskBypassesSwitchAndRecordsResult(t *testing.T) {
 	}
 }
 
-// TestProcessPinTaskPartialResultText：置顶部分失败时确认文案带计数与失败提示。
+// TestProcessPinTaskPartialResultText：部分置顶失败时确认文案带原消息链接、
+// 成功目标名与失败目标名。
 func TestProcessPinTaskPartialResultText(t *testing.T) {
 	s := openStore(t)
 	job, _ := newPinJobWithRequest(t, s)
 	sender := &fakeSender{}
-	copier := &fakeCopier{pinOK: 1, pinTotal: 2}
+	copier := &fakeCopier{outcome: PinOutcome{OK: 1, Total: 2, Targets: []PinTarget{
+		{Label: "我的频道", Pinned: true}, {Label: "我的群组", Pinned: false},
+	}}}
 	deps := Deps{
 		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
 		Sender:  sender,
@@ -80,13 +85,18 @@ func TestProcessPinTaskPartialResultText(t *testing.T) {
 			confirm = text
 		}
 	}
-	if confirm == "" || !strings.Contains(confirm, "已置顶到 1/2") {
-		t.Fatalf("应回复带计数的置顶确认，得到 %q", sender.texts())
+	// 原消息链接 + 成功目标 + 失败目标缺一不可（用户要知道置顶了什么、到了哪）
+	if confirm == "" ||
+		!strings.Contains(confirm, `href="https://t.me/example/7"`) ||
+		!strings.Contains(confirm, "已置顶原消息") ||
+		!strings.Contains(confirm, "我的频道") ||
+		!strings.Contains(confirm, "置顶失败：我的群组") {
+		t.Fatalf("确认文案应含原消息链接与逐目标明细，得到 %q", sender.texts())
 	}
 }
 
-// TestProcessPinTaskZeroBindingsHint：完成时无绑定（0/0）提示绑定前提，
-// 结果照常回写。
+// TestProcessPinTaskZeroBindingsHint：完成时无绑定（0/0）提示绑定前提与
+// 原消息链接，结果照常回写。
 func TestProcessPinTaskZeroBindingsHint(t *testing.T) {
 	s := openStore(t)
 	job, r := newPinJobWithRequest(t, s)
@@ -115,7 +125,7 @@ func TestProcessPinTaskZeroBindingsHint(t *testing.T) {
 			confirm = text
 		}
 	}
-	if confirm == "" {
-		t.Fatalf("应回复零绑定提示，得到 %q", sender.texts())
+	if confirm == "" || !strings.Contains(confirm, "https://t.me/example/7") {
+		t.Fatalf("应回复零绑定提示并带原消息链接，得到 %q", sender.texts())
 	}
 }

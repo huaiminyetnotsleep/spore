@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -66,15 +68,28 @@ type EventSink interface {
 	CheckTempDir(ctx context.Context)
 }
 
+// PinTarget 描述单个置顶目标（绑定频道/群组）的置顶结果。
+type PinTarget struct {
+	Label  string // 目标显示名（标题优先，回退 @用户名 / 数字 ID）
+	Pinned bool   // 置顶是否成功（副本发送失败与置顶失败均为 false）
+}
+
+// PinOutcome 汇总一轮置顶结果：OK 为 Targets 中 Pinned 的计数，Total 为
+// 参与置顶的目标总数（含副本发送失败的）。非置顶调用返回零值。
+type PinOutcome struct {
+	OK      int
+	Total   int
+	Targets []PinTarget
+}
+
 // ChannelCopier 把已成功发送给用户的消息复制到该用户绑定的频道（频道副本）。
 // 由装配层提供实现（internal/binding.Service）；nil 表示未配置频道绑定，
 // worker 跳过全部副本投递。实现必须尽力而为：内部失败只记日志，
 // 不向调用方传播错误，更不得影响任务结果。
 // pin 为 true 时实现须对每个副本发送成功的目标执行静音置顶（组首消息），
-// 并返回置顶结果：ok = 置顶成功的目标数，total = 参与本轮的目标数
-// （绑定列表，含副本发送失败的）；pin 为 false 时返回值无意义（零值即可）。
+// 并返回逐目标置顶结果（Label 供确认文案展示）；pin 为 false 时返回零值。
 type ChannelCopier interface {
-	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) (ok, total int)
+	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome
 }
 
 // ChannelLinksProvider 提供该用户绑定频道的脚注跳转链接（消息末尾的
@@ -340,9 +355,9 @@ func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int, pin bool)
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
 	defer cancel()
-	ok, total := d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs, pin)
+	outcome := d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs, pin)
 	if pin {
-		d.finishPin(cctx, j, ok, total)
+		d.finishPin(cctx, j, outcome)
 	}
 }
 
@@ -361,33 +376,56 @@ func (d Deps) requestPin(ctx context.Context, j Job) bool {
 }
 
 // finishPin 是置顶任务的收尾：回写置顶结果（管理端详情展示）并给用户发
-// 一条简短确认。均尽力而为：失败只记日志，不影响任务结果。total 为 0
-// （完成时无绑定）时提示绑定前提；失败文案不区分副本失败与置顶失败
-// （原因可能是权限被撤、bot 被移出目标等，引导检查权限即可）。
-func (d Deps) finishPin(ctx context.Context, j Job, ok, total int) {
+// 确认文案——带原消息链接与逐目标置顶明细，让用户知道哪条消息被置顶、
+// 置顶到了哪个频道/群组。均尽力而为：失败只记日志，不影响任务结果。
+// total 为 0（完成时无绑定）时提示绑定前提；失败目标单独列出并引导检查
+// 权限（原因可能是权限被撤、bot 被移出目标等，无法细分）。
+func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 	if d.Store != nil && j.RequestID != 0 {
-		if err := d.Store.SetRequestPinResult(ctx, j.RequestID, ok, total); err != nil {
+		if err := d.Store.SetRequestPinResult(ctx, j.RequestID, outcome.OK, outcome.Total); err != nil {
 			d.Log.Warn("置顶结果回写失败", "request_id", j.RequestID, "error", err.Error())
 		}
 	}
-	text := pinResultText(ok, total)
-	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, text); err != nil {
+	sourceURL, _ := j.Ref.URL()
+	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, pinResultText(sourceURL, outcome)); err != nil {
 		d.Log.Warn("置顶确认发送失败", "job_id", j.ID, "error", err.Error())
 	}
 }
 
-// pinResultText 渲染置顶结果确认文案（受控中文，与 Bot 侧文案同风格）。
-func pinResultText(ok, total int) string {
-	switch {
-	case total == 0:
-		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。"
-	case ok == total:
-		return fmt.Sprintf("已置顶到 %d 个目标。", total)
-	case ok == 0:
-		return fmt.Sprintf("置顶失败：共 %d 个目标均未成功，请检查机器人的发帖与置顶权限。", total)
-	default:
-		return fmt.Sprintf("已置顶到 %d/%d 个目标，其余目标置顶失败，请检查机器人的置顶权限。", ok, total)
+// pinResultText 渲染置顶结果确认文案（HTML：原消息链接与目标名逐个列出，
+// 频道/群组名可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。
+func pinResultText(sourceURL string, o PinOutcome) string {
+	link := "原消息链接不可用"
+	if sourceURL != "" {
+		link = fmt.Sprintf(`<a href="%s">%s</a>`, sourceURL, sourceURL)
 	}
+	if o.Total == 0 {
+		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n原消息：" + link
+	}
+	var pinned, failed []string
+	for _, t := range o.Targets {
+		label := html.EscapeString(t.Label)
+		if t.Pinned {
+			pinned = append(pinned, label)
+		} else {
+			failed = append(failed, label)
+		}
+	}
+	var b strings.Builder
+	if len(pinned) > 0 {
+		fmt.Fprintf(&b, "📌 已置顶原消息 %s 到：%s", link, strings.Join(pinned, "、"))
+	}
+	if len(failed) > 0 {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		if len(pinned) == 0 {
+			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：%s（请检查机器人的发帖与置顶权限）", link, strings.Join(failed, "、"))
+		} else {
+			fmt.Fprintf(&b, "置顶失败：%s（请检查机器人的置顶权限）", strings.Join(failed, "、"))
+		}
+	}
+	return b.String()
 }
 
 // writeCleanDump 在任务成功后向缓存频道写无脚注干净副本（dumpcache）。
