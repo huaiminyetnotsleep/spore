@@ -70,8 +70,11 @@ type EventSink interface {
 // 由装配层提供实现（internal/binding.Service）；nil 表示未配置频道绑定，
 // worker 跳过全部副本投递。实现必须尽力而为：内部失败只记日志，
 // 不向调用方传播错误，更不得影响任务结果。
+// pin 为 true 时实现须对每个副本发送成功的目标执行静音置顶（组首消息），
+// 并返回置顶结果：ok = 置顶成功的目标数，total = 参与本轮的目标数
+// （绑定列表，含副本发送失败的）；pin 为 false 时返回值无意义（零值即可）。
 type ChannelCopier interface {
-	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int)
+	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) (ok, total int)
 }
 
 // ChannelLinksProvider 提供该用户绑定频道的脚注跳转链接（消息末尾的
@@ -298,8 +301,11 @@ func Process(d Deps) Processor {
 				// 缓存频道干净副本：同链接后续提交直接复制的来源（尽力而为）
 				d.writeCleanDump(ctx, j, meta)
 				// 频道副本：任务整体成功后，把刚发给用户的消息复制到该用户
-				// 绑定的频道（尽力而为，失败只记日志不影响任务结果）
-				d.copyToChannels(ctx, j, meta.SentIDs)
+				// 绑定的频道（尽力而为，失败只记日志不影响任务结果）。
+				// pin 任务置顶副本组首并回写结果：标记读自请求行（/pin <链接>
+				// 或用户 auto_pin 偏好），重试与进程重启后依然继承。
+				pin := d.requestPin(ctx, j)
+				d.copyToChannels(ctx, j, meta.SentIDs, pin)
 			}
 		}
 		d.Log.Info("任务结束", "job_id", j.ID)
@@ -322,18 +328,66 @@ func Process(d Deps) Processor {
 // copyToChannels 在任务成功后把已发送消息复制到该用户绑定的频道。
 // 使用剥离取消信号的 ctx 与独立时间窗：任务收尾（含进程退出）时副本投递
 // 仍可完成；Copier 自身尽力而为，失败不向任务结果传播。
-// 运行设置的频道同步开关关闭时跳过（绑定关系保留，重开即恢复）。
-func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int) {
+// pin 为 true 时绕过频道同步开关（显式置顶意图优先于全局设置）并回写置顶
+// 结果、给用户发简短确认；无媒体消息（纯文本任务）时整体跳过。
+func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int, pin bool) {
 	if d.Copier == nil || len(msgIDs) == 0 {
 		return
 	}
-	if d.ChannelCopyEnabled != nil && !d.ChannelCopyEnabled() {
+	if !pin && d.ChannelCopyEnabled != nil && !d.ChannelCopyEnabled() {
 		d.Log.Info("频道同步开关已关闭，跳过副本投递", "job_id", j.ID, "user_id", j.UserID)
 		return
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
 	defer cancel()
-	d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs)
+	ok, total := d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs, pin)
+	if pin {
+		d.finishPin(cctx, j, ok, total)
+	}
+}
+
+// requestPin 读取任务的置顶标记（requests.pin，/pin <链接> 或用户 auto_pin
+// 偏好写入）。无持久化记录或读取失败视为不置顶，与引入本标记前的行为一致。
+func (d Deps) requestPin(ctx context.Context, j Job) bool {
+	if d.Store == nil || j.RequestID == 0 {
+		return false
+	}
+	r, err := d.Store.GetRequest(ctx, j.RequestID)
+	if err != nil {
+		d.Log.Warn("读取置顶标记失败，本任务不置顶", "request_id", j.RequestID, "error", err.Error())
+		return false
+	}
+	return r.Pin
+}
+
+// finishPin 是置顶任务的收尾：回写置顶结果（管理端详情展示）并给用户发
+// 一条简短确认。均尽力而为：失败只记日志，不影响任务结果。total 为 0
+// （完成时无绑定）时提示绑定前提；失败文案不区分副本失败与置顶失败
+// （原因可能是权限被撤、bot 被移出目标等，引导检查权限即可）。
+func (d Deps) finishPin(ctx context.Context, j Job, ok, total int) {
+	if d.Store != nil && j.RequestID != 0 {
+		if err := d.Store.SetRequestPinResult(ctx, j.RequestID, ok, total); err != nil {
+			d.Log.Warn("置顶结果回写失败", "request_id", j.RequestID, "error", err.Error())
+		}
+	}
+	text := pinResultText(ok, total)
+	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, text); err != nil {
+		d.Log.Warn("置顶确认发送失败", "job_id", j.ID, "error", err.Error())
+	}
+}
+
+// pinResultText 渲染置顶结果确认文案（受控中文，与 Bot 侧文案同风格）。
+func pinResultText(ok, total int) string {
+	switch {
+	case total == 0:
+		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。"
+	case ok == total:
+		return fmt.Sprintf("已置顶到 %d 个目标。", total)
+	case ok == 0:
+		return fmt.Sprintf("置顶失败：共 %d 个目标均未成功，请检查机器人的发帖与置顶权限。", total)
+	default:
+		return fmt.Sprintf("已置顶到 %d/%d 个目标，其余目标置顶失败，请检查机器人的置顶权限。", ok, total)
+	}
 }
 
 // writeCleanDump 在任务成功后向缓存频道写无脚注干净副本（dumpcache）。

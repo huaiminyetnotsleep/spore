@@ -313,6 +313,8 @@ export interface UserRow {
   cloud_download: number;
   /** 生效值（raw 0 时后端按角色解析：owner true / 普通用户 false）。 */
   effective_cloud_download: boolean;
+  /** 自动置顶偏好：true = 该用户普通任务提交即默认置顶。 */
+  auto_pin: boolean;
   /** 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。 */
   source_bot_id: number;
   source_bot_username?: string;
@@ -353,6 +355,8 @@ export interface UserDetail {
   cloud_download: number;
   /** 生效值（raw 0 时后端按角色解析：owner true / 普通用户 false）。 */
   effective_cloud_download: boolean;
+  /** 自动置顶偏好：true = 该用户普通任务提交即默认置顶。 */
+  auto_pin: boolean;
   total_requests: number;
   /** 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。 */
   source_bot_id: number;
@@ -402,6 +406,12 @@ export interface RequestRow {
   bot_id: number;
   /** 受理时的 bot 用户名快照（不含 @）。 */
   bot_username?: string;
+  /** 自动置顶：true = 任务成功后会在绑定频道/群组置顶副本组首。 */
+  pin: boolean;
+  /** 置顶成功的目标数（worker 收尾回写；未回写为 0）。 */
+  pin_ok: number;
+  /** 参与置顶的目标总数（含副本发送失败的；0 = 完成时无绑定）。 */
+  pin_total: number;
   requested_at: number;
   duration_ms: number;
   /**
@@ -421,6 +431,8 @@ export interface RequestListParams {
   error_code?: string;
   /** 投递方式（reference | upload | mixed | text | reuse | cloud | dump）。 */
   delivery_mode?: string;
+  /** 仅置顶任务（pin=1）；缺省 = 全部。 */
+  pin?: string;
   since?: string;
   until?: string;
   page?: number;

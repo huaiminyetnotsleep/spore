@@ -42,7 +42,8 @@ func helpText(name string) string {
 /usage — 查看今日额度
 /cancel 链接 — 取消该链接的下载/上传任务
 /download 链接 — 把消息媒体下载到网盘（不重发到聊天）
-/bind 频道 — 绑定我的频道（先把我拉进频道并设为管理员）
+/pin 链接 — 提交任务并自动置顶到绑定的频道/群组
+/bind 频道 — 绑定我的频道或超级群组（先把我拉进去并设为管理员）
 /unbind 频道 — 解绑我的频道
 /channels — 查看我绑定的频道
 /join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
@@ -50,7 +51,7 @@ func helpText(name string) string {
 /watch — 查看我的监听源
 /unwatch 频道 — 移除我的监听源
 
-绑定频道后，每次提取的内容会在发给你之后同步发送一份到你的频道。
+绑定频道后，每次提取的内容会在发给你之后同步发送一份到你的频道；/pin 提交的任务还会自动置顶该消息。
 
 监听源生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我，都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
 
@@ -153,6 +154,8 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 		handleCancel(ctx, opt, snd, from.ID, chatID, text)
 	case "/download":
 		handleDownload(ctx, opt, snd, from, chatID, text)
+	case "/pin":
+		handlePin(ctx, opt, snd, from, chatID, text)
 	case "/status":
 		handleStatus(ctx, opt, snd, chatID)
 	case "/health":
@@ -369,7 +372,7 @@ func batchSubmitSummary(succeeded int, failures []submitFailure) string {
 }
 
 func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64,
-	refs []tmeurl.SourceRef, prompt, cloudDest string) {
+	refs []tmeurl.SourceRef, prompt, cloudDest string, pin bool) {
 	multi := len(refs) > 1
 	succeeded := 0
 	failures := make([]submitFailure, 0)
@@ -404,6 +407,7 @@ func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from mode
 			CloudDest:         cloudDest,
 			BotID:             botInfo.ID,
 			BotUsername:       botInfo.Username,
+			Pin:               pin,
 		})
 		if err != nil {
 			ae := apperr.From(err)
@@ -443,7 +447,7 @@ func handleLinkWithProfile(ctx context.Context, opt Options, snd delivery.Sender
 	if rejectTooManyLinks(ctx, opt, snd, chatID, refs) {
 		return
 	}
-	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "")
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", false)
 }
 
 const cancelUsage = "用法：/cancel 消息链接（即当初提交的那条链接）"
@@ -586,7 +590,47 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 	}
 
 	// 4–5. 每条链接独立创建云盘占位并经同一六步链提交到相同目的地。
-	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest)
+	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest, false)
+}
+
+// pinUsage 是 /pin 的参数提示：说明命令形式与置顶落点、前提。
+const pinUsage = "用法：/pin 消息链接（可一次多条）\n\n" +
+	"• 提交转发任务，完成后自动同步到您绑定的频道/群组并置顶\n" +
+	"• 置顶落在任务完工时的绑定目标上，未绑定时不置顶（/bind 绑定）\n" +
+	"• 需要机器人在目标拥有置顶权限（频道「编辑消息」/群组「置顶消息」）"
+
+// handlePin 处理 /pin <链接>：与裸链接完全同一提交链（requireEnabled 准入、
+// 六步校验、批量语义），仅额外标记自动置顶——任务成功后副本到绑定频道/
+// 群组并静音置顶组首。零绑定时任务照常提交并附提示（完成后绑定的目标仍
+// 会收到副本与置顶）；空参回用法提示。
+func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
+	args := strings.Fields(text)
+	if len(args) < 2 {
+		sendText(ctx, opt, snd, chatID, pinUsage)
+		return
+	}
+	if !requireEnabled(ctx, opt, snd, from.ID, chatID) {
+		return
+	}
+	refs := tmeurl.ParseAll(strings.Join(args[1:], " "))
+	if len(refs) == 0 {
+		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInvalidURL))
+		return
+	}
+	if rejectTooManyLinks(ctx, opt, snd, chatID, refs) {
+		return
+	}
+	noBindingHint := false
+	if opt.Channels != nil {
+		if bindings, err := opt.Channels.ListByUser(ctx, from.ID); err == nil && len(bindings) == 0 {
+			noBindingHint = true
+		}
+	}
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", true)
+	if noBindingHint {
+		sendText(ctx, opt, snd, chatID,
+			"提示：您尚未绑定频道/群组，本任务不会置顶；/bind 绑定后对新任务生效。")
+	}
 }
 
 // handleWhoami 经 MTProto 查询自身账号并回显，用于验证用户通道；调试命令，不在帮助文本列出。
@@ -884,9 +928,10 @@ func handleUnwatch(ctx context.Context, opt Options, snd delivery.Sender, from m
 }
 
 // bindUsage 是 /bind 与 /unbind 共用的参数提示。
-const bindUsage = "用法：/bind 频道用户名（@mychannel）、t.me/频道 链接或 -100 开头的频道 ID\n\n" +
+const bindUsage = "用法：/bind 频道/群组用户名（@mychannel）、t.me/频道 链接或 -100 开头的 ID\n\n" +
 	"私有频道没有用户名，请发送 t.me/c/… 链接或 -100 开头的频道 ID。" +
-	"请先把本机器人拉进频道并设置为管理员（需有发言权限），再发送绑定命令。"
+	"请先把本机器人拉进频道/群组并设置为管理员，再发送绑定命令：" +
+	"频道需发言权限（置顶还需「编辑消息」），超级群组需置顶权限；话题群暂不支持。"
 
 // requireEnabled 复用 /usage 的状态查询做频道指令准入：
 // 未授权/待审批/停用用户返回 false 并已回复对应文案。
@@ -931,7 +976,13 @@ func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, c
 		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
 		return
 	}
-	sendText(ctx, opt, snd, chatID, bindSuccessText(bound))
+	success := bindSuccessText(bound)
+	// 置顶可行性软提示：频道缺「编辑消息」权限时置顶必然失败，绑定本身
+	// 不受阻（尽力而为查询，失败不提示）。
+	if hint := opt.Channels.PinCapabilityHint(ctx, userID); hint != "" {
+		success += "\n\n" + hint
+	}
+	sendText(ctx, opt, snd, chatID, success)
 }
 
 // bindSuccessText 渲染绑定成功文案：标题 + 用户名/ID + 后续行为说明。

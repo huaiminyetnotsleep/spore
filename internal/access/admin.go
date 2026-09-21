@@ -209,6 +209,29 @@ func (s *Service) SetUserCloudDownload(ctx context.Context, actor string, userID
 	})
 }
 
+// SetUserAutoPin 调整单用户的自动置顶偏好并写审计；即时生效（下一次普通
+// 提交即默认标记置顶，/pin 单次指定不受影响；云盘/缓存补写任务不适用）。
+// 幂等（状态一致不写审计）。
+func (s *Service) SetUserAutoPin(ctx context.Context, actor string, userID int64, on bool) error {
+	before, err := s.store.GetUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if before.AutoPin == on {
+		return nil // 幂等：不写审计
+	}
+	if err := s.store.UpdateUserAutoPin(ctx, userID, on); err != nil {
+		return err
+	}
+	return s.store.AppendAudit(ctx, store.AuditEntry{
+		Actor:      actor,
+		Action:     "user.set_auto_pin",
+		Target:     fmt.Sprintf("user:%d", userID),
+		BeforeJSON: mustJSON(map[string]bool{"auto_pin": before.AutoPin}),
+		AfterJSON:  mustJSON(map[string]bool{"auto_pin": on}),
+	})
+}
+
 // ResetDailyUsage 置零用户当日（运营时区）已用额度并写审计；
 // 仅影响当日分桶，限额上限不变。
 func (s *Service) ResetDailyUsage(ctx context.Context, actor string, userID int64) error {

@@ -63,6 +63,9 @@ type User struct {
 	// CloudDownload 是用户级云盘下载权限三态；0 表示跟随角色默认
 	//（见 EffectiveCloudDownload），与全局开关是 AND 关系。
 	CloudDownload int
+	// AutoPin 是用户级自动置顶偏好：开启后该用户的普通任务提交即默认
+	// 标记置顶（/pin 单次指定不受影响；云盘/缓存补写任务不适用）。
+	AutoPin bool
 	// SourceBotID/SourceBotUsername 是来源 bot（首次 /start 的受理 bot）：
 	// ID 为 Telegram bot 账号数字 ID，用户名为受理时快照。0/空 = 存量行或
 	// Web 管理端手动添加（非 Bot 通道）。
@@ -80,7 +83,7 @@ type User struct {
 const selectUser = `SELECT id, status, is_owner,
 	COALESCE(username, ''), COALESCE(display_name, ''), COALESCE(note, ''),
 	submit_interval_sec, daily_limit, concurrent_limit, bind_limit,
-	cloud_download,
+	cloud_download, auto_pin,
 	source_bot_id, source_bot_username,
 	created_at, COALESCE(first_used_at, 0), COALESCE(last_used_at, 0),
 	COALESCE(archived_at, 0), COALESCE(last_denied_at, 0), COALESCE(last_denied_reason, '')
@@ -97,7 +100,7 @@ func scanUser(row scanner) (User, error) {
 		owner int64
 	)
 	err := row.Scan(&u.ID, &u.Status, &owner, &u.Username, &u.DisplayName, &u.Note,
-		&u.SubmitIntervalSec, &u.DailyLimit, &u.ConcurrentLimit, &u.BindLimit, &u.CloudDownload,
+		&u.SubmitIntervalSec, &u.DailyLimit, &u.ConcurrentLimit, &u.BindLimit, &u.CloudDownload, &u.AutoPin,
 		&u.SourceBotID, &u.SourceBotUsername,
 		&u.CreatedAt, &u.FirstUsedAt, &u.LastUsedAt, &u.ArchivedAt,
 		&u.LastDeniedAt, &u.LastDeniedReason)
@@ -255,6 +258,12 @@ func (u User) EffectiveCloudDownload() bool {
 func (s *Store) UpdateUserCloudDownload(ctx context.Context, id int64, mode int) error {
 	res, err := s.ex.ExecContext(ctx, "UPDATE users SET cloud_download = ? WHERE id = ?", mode, id)
 	return affected(res, err, "更新云盘下载权限")
+}
+
+// UpdateUserAutoPin 调整单用户的自动置顶偏好（on/off）。审计由调用方记录。
+func (s *Store) UpdateUserAutoPin(ctx context.Context, id int64, on bool) error {
+	res, err := s.ex.ExecContext(ctx, "UPDATE users SET auto_pin = ? WHERE id = ?", on, id)
+	return affected(res, err, "更新自动置顶偏好")
 }
 
 // UpdateUserNote 更新管理员备注；传空字符串即清空。

@@ -62,12 +62,15 @@ type CloudStatus interface {
 // Channels 是频道绑定服务（binding.Service）在 Bot 侧所需的最小接口。
 // 绑定校验、归属限制（只能操作自己的绑定）与审计都在服务内完成。
 type Channels interface {
-	// BindBot 为用户绑定一个频道（校验机器人为该频道管理员且有发言权限）。
+	// BindBot 为用户绑定一个频道/超级群组（校验机器人管理员权限，类型
+	// 与权限语义按目标类型区分）。
 	BindBot(ctx context.Context, userID int64, target string) (store.ChannelBinding, error)
 	// UnbindBot 解除该用户的频道绑定；目标不存在或不属于该用户返回 store.ErrNotFound。
 	UnbindBot(ctx context.Context, userID int64, target string) (store.ChannelBinding, error)
 	// ListByUser 返回该用户名下的全部绑定。
 	ListByUser(ctx context.Context, userID int64) ([]store.ChannelBinding, error)
+	// PinCapabilityHint 返回绑定目标的置顶可行性软提示文案；全部可行返回空串。
+	PinCapabilityHint(ctx context.Context, userID int64) string
 }
 
 // ChannelJoin 是频道加入服务（joinmgr.Service）在 Bot 侧所需的最小接口。
@@ -270,7 +273,8 @@ func RegisterCommands(ctx context.Context, b *tgbot.Bot) error {
 			{Command: "usage", Description: "查看今日额度"},
 			{Command: "cancel", Description: "取消下载/上传任务"},
 			{Command: "download", Description: "下载消息媒体到网盘"},
-			{Command: "bind", Description: "绑定我的频道（需先把我设为频道管理员）"},
+			{Command: "pin", Description: "提交任务并自动置顶到绑定频道/群组"},
+			{Command: "bind", Description: "绑定我的频道/超级群组（需先设我为管理员）"},
 			{Command: "unbind", Description: "解绑我的频道"},
 			{Command: "channels", Description: "查看我绑定的频道"},
 			{Command: "join", Description: "请系统账号加入私有频道（t.me/+ 邀请链接）"},

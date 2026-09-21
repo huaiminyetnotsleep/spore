@@ -123,6 +123,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/users/{id}/reset-quota", s.handleAPIUserResetQuota)
 	s.mountAPIWrite(mux, "/api/v1/users/{id}/set-owner", s.handleAPIUserSetOwner)
 	s.mountAPIWrite(mux, "/api/v1/users/{id}/cloud-download", s.handleAPIUserSetCloudDownload)
+	s.mountAPIWrite(mux, "/api/v1/users/{id}/auto-pin", s.handleAPIUserSetAutoPin)
 	s.mountAPIWrite(mux, "/api/v1/requests/{id}/retry", s.handleAPIRequestRetry)
 	// 尝试计数重置：仅 failed 可重置，attempt 清回 1，不入队（清零后由
 	// 管理员显式重试），配合 /retry 给已达上限的请求定向放行

@@ -32,6 +32,8 @@ type apiUserRow struct {
 	// owner true / 普通用户 false），供前端直接回显。
 	CloudDownload          int  `json:"cloud_download"`
 	EffectiveCloudDownload bool `json:"effective_cloud_download"`
+	// AutoPin 是自动置顶偏好（v20）：true = 该用户普通任务提交即默认置顶。
+	AutoPin bool `json:"auto_pin"`
 }
 
 // apiUserDetail 是用户详情 DTO：覆盖 SSR 用户详情页展示的业务字段
@@ -66,7 +68,9 @@ type apiUserDetail struct {
 	// CloudDownload / EffectiveCloudDownload 同列表行语义（raw 三态 + 生效 bool）。
 	CloudDownload          int  `json:"cloud_download"`
 	EffectiveCloudDownload bool `json:"effective_cloud_download"`
-	TotalRequests          int  `json:"total_requests"`
+	// AutoPin 是自动置顶偏好（v20）：true = 该用户普通任务提交即默认置顶。
+	AutoPin       bool `json:"auto_pin"`
+	TotalRequests int  `json:"total_requests"`
 	// 来源 bot（首次 /start 的受理 bot）；0 = 存量行/Web 手动添加。
 	SourceBotID       int64  `json:"source_bot_id"`
 	SourceBotUsername string `json:"source_bot_username,omitempty"`
@@ -126,6 +130,7 @@ func (s *Server) handleAPIUsersList(w http.ResponseWriter, r *http.Request, _ se
 			Status: u.Status, IsOwner: u.IsOwner, Note: u.Note,
 			LastUsedAt: u.LastUsedAt, TotalRequests: total, HasTotalRequests: ok,
 			CloudDownload: u.CloudDownload, EffectiveCloudDownload: u.EffectiveCloudDownload(),
+			AutoPin:     u.AutoPin,
 			SourceBotID: u.SourceBotID, SourceBotUsername: u.SourceBotUsername,
 		})
 	}
@@ -172,6 +177,7 @@ func (s *Server) handleAPIUserDetail(w http.ResponseWriter, r *http.Request, _ s
 		EffectiveBindLimit:     u.EffectiveBindLimit(),
 		CloudDownload:          u.CloudDownload,
 		EffectiveCloudDownload: u.EffectiveCloudDownload(),
+		AutoPin:                u.AutoPin,
 		TotalRequests:          totals.Total,
 		SourceBotID:            u.SourceBotID,
 		SourceBotUsername:      u.SourceBotUsername,

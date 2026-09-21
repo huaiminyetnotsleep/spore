@@ -56,6 +56,7 @@ function userRow(overrides: Partial<UserRow>): UserRow {
     has_total_requests: true,
     cloud_download: 0,
     effective_cloud_download: false,
+    auto_pin: false,
     ...overrides,
   };
 }

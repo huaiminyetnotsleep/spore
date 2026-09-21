@@ -171,6 +171,14 @@ export const setUserCloudDownload = (
     cloud_download: mode,
   });
 
+export interface UserAutoPinResult extends WriteOK {
+  auto_pin: boolean;
+}
+
+/** 自动置顶偏好开关：开启后该用户普通任务提交即默认置顶。 */
+export const setUserAutoPin = (id: number, autoPin: boolean): Promise<UserAutoPinResult> =>
+  postJSON<UserAutoPinResult>(`/api/v1/users/${id}/auto-pin`, { auto_pin: autoPin });
+
 export const refreshUserProfile = (id: number): Promise<WriteOK> =>
   postJSON<WriteOK>(`/api/v1/users/${id}/refresh-profile`);
 

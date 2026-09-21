@@ -88,7 +88,7 @@ func TestAPIWriteEndpointsUnauthenticated(t *testing.T) {
 		"/api/v1/applications/1/approve", "/api/v1/users",
 		"/api/v1/users/1/enable", "/api/v1/users/1/limits",
 		"/api/v1/users/1/reset-quota", "/api/v1/users/1/set-owner",
-		"/api/v1/users/1/cloud-download",
+		"/api/v1/users/1/cloud-download", "/api/v1/users/1/auto-pin",
 		"/api/v1/users/1/refresh-profile", "/api/v1/requests/1/retry",
 		"/api/v1/requests/1/delete", "/api/v1/requests/delete",
 		"/api/v1/channels/example/delete", "/api/v1/audit/delete", "/api/v1/audit/clear",

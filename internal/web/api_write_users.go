@@ -160,6 +160,37 @@ func (s *Server) handleAPIUserSetCloudDownload(w http.ResponseWriter, r *http.Re
 	}{apiWriteOK{OK: true}, u.CloudDownload, u.EffectiveCloudDownload()})
 }
 
+// handleAPIUserSetAutoPin 处理用户级自动置顶偏好开关（开启后该用户普通
+// 任务提交即默认置顶；云盘/缓存补写任务不适用，/pin 单次指定不受影响）。
+func (s *Server) handleAPIUserSetAutoPin(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.users.set_auto_pin"
+	if !s.apiRequireAccess(w, r, op) {
+		return
+	}
+	id, ok := s.apiPathID(w, r, op)
+	if !ok {
+		return
+	}
+	var in struct {
+		AutoPin *bool `json:"auto_pin"`
+	}
+	if !s.apiReadJSON(w, r, op, &in) {
+		return
+	}
+	if in.AutoPin == nil {
+		s.apiBadRequest(w, r, op, "auto_pin 取值必须为布尔。")
+		return
+	}
+	if err := s.access.SetUserAutoPin(r.Context(), "admin", id, *in.AutoPin); err != nil {
+		s.writeAPIUserOpErr(w, r, op, err)
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, struct {
+		apiWriteOK
+		AutoPin bool `json:"auto_pin"`
+	}{apiWriteOK{OK: true}, *in.AutoPin})
+}
+
 // handleAPIUserResetQuota 处理重置当日已用额度。
 func (s *Server) handleAPIUserResetQuota(w http.ResponseWriter, r *http.Request, _ session) {
 	const op = "api.users.reset_quota"

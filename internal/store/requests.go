@@ -65,6 +65,12 @@ type Request struct {
 	CloudDestination string // 云盘请求的目的地名称；重试/补存重新入队时据此恢复 Job.CloudDest
 	BotID            int64  // 受理 bot 的 Telegram 账号 ID（getMe）；0 = 存量行/非 Bot 通道创建
 	BotUsername      string // 受理时的 bot 用户名快照（展示自持，bot 移出池后历史行仍可读）
+	// Pin 标记任务成功后是否需要在用户绑定的频道/群组置顶副本组首
+	//（/pin <链接> 单次指定或用户 auto_pin 偏好）；PinOK/PinTotal 是
+	// worker 收尾回写的置顶结果（成功数/参与置顶的目标总数）。
+	Pin      bool
+	PinOK    int
+	PinTotal int
 	// 复用坐标（v12，遗留）：用户聊天 copyMessages 复用时代的列，自转存
 	// 频道方案起停止写入；保留读取兼容已部署库的历史行。复用现走
 	// dump_entries（缓存频道干净副本坐标）。
@@ -106,6 +112,7 @@ type RequestFilter struct {
 	MediaType    string
 	DeliveryMode string // 投递方式（DeliveryMode* 常量值）
 	ErrorCode    string
+	OnlyPin      bool  // 仅置顶任务（pin = 1）
 	Since        int64 // requested_at >= Since（Unix 毫秒）
 	Until        int64 // requested_at < Until（Unix 毫秒）
 	Limit        int   // <=0 时取 defaultRequestLimit
@@ -119,6 +126,7 @@ const selectRequest = `SELECT id, user_id, COALESCE(source_kind, ''), channel_ke
 		COALESCE(file_size, 0), COALESCE(file_name, ''), delivery_mode, source_media_dc_ids_json,
 		COALESCE(parent_request_id, 0), cloud_destination,
 		bot_id, bot_username,
+		pin, pin_ok, pin_total,
 		sent_chat_id, sent_message_ids_json,
 		requested_at, COALESCE(queued_at, 0), COALESCE(started_at, 0),
 		COALESCE(finished_at, 0), COALESCE(duration_ms, 0)
@@ -131,6 +139,7 @@ func scanRequest(row scanner) (Request, error) {
 		&r.Status, &r.Attempt, &r.ErrorCode, &r.MediaType, &mediaTypesJSON, &r.FileSize, &r.FileName,
 		&r.DeliveryMode, &dcJSON, &r.ParentRequestID, &r.CloudDestination,
 		&r.BotID, &r.BotUsername,
+		&r.Pin, &r.PinOK, &r.PinTotal,
 		&r.SentChatID, &sentIDsJSON,
 		&r.RequestedAt, &r.QueuedAt, &r.StartedAt, &r.FinishedAt, &r.DurationMs)
 	if err != nil {
@@ -147,6 +156,7 @@ const selectRequestWithUser = `SELECT r.id, r.user_id, COALESCE(r.source_kind, '
 		COALESCE(r.file_size, 0), COALESCE(r.file_name, ''), r.delivery_mode, r.source_media_dc_ids_json,
 		COALESCE(r.parent_request_id, 0), r.cloud_destination,
 		r.bot_id, r.bot_username,
+		r.pin, r.pin_ok, r.pin_total,
 		r.sent_chat_id, r.sent_message_ids_json,
 		r.requested_at, COALESCE(r.queued_at, 0), COALESCE(r.started_at, 0),
 		COALESCE(r.finished_at, 0), COALESCE(r.duration_ms, 0),
@@ -161,6 +171,7 @@ func scanRequestWithUser(row scanner) (RequestWithUser, error) {
 		&out.Status, &out.Attempt, &out.ErrorCode, &out.MediaType, &mediaTypesJSON, &out.FileSize, &out.FileName,
 		&out.DeliveryMode, &dcJSON, &out.ParentRequestID, &out.CloudDestination,
 		&out.BotID, &out.BotUsername,
+		&out.Pin, &out.PinOK, &out.PinTotal,
 		&out.SentChatID, &sentIDsJSON, &out.RequestedAt, &out.QueuedAt, &out.StartedAt,
 		&out.FinishedAt, &out.DurationMs, &out.UserUsername, &out.UserDisplayName)
 	if err != nil {
@@ -292,11 +303,11 @@ func (s *Store) CreateRequest(ctx context.Context, in Request) (Request, error) 
 	}
 	res, err := s.ex.ExecContext(ctx, `INSERT INTO requests
 		(user_id, source_kind, channel_key, message_id, status, attempt, delivery_mode,
-		 parent_request_id, cloud_destination, bot_id, bot_username, requested_at, queued_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 parent_request_id, cloud_destination, bot_id, bot_username, pin, requested_at, queued_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.UserID, nullStr(in.SourceKind), in.ChannelKey, in.MessageID,
 		in.Status, in.Attempt, in.DeliveryMode, nullInt64(in.ParentRequestID),
-		in.CloudDestination, in.BotID, in.BotUsername, in.RequestedAt, in.QueuedAt)
+		in.CloudDestination, in.BotID, in.BotUsername, in.Pin, in.RequestedAt, in.QueuedAt)
 	if err != nil {
 		if isConstraintErr(err) {
 			return Request{}, apperr.Wrap(apperr.CodeStoreConstraint,
@@ -429,7 +440,8 @@ func (s *Store) RetryRequest(ctx context.Context, id int64, queuedAt int64) erro
 	}
 	res, err := s.ex.ExecContext(ctx, `UPDATE requests SET
 		status = ?, attempt = attempt + 1, queued_at = ?,
-		started_at = NULL, finished_at = NULL, duration_ms = NULL, error_code = NULL
+		started_at = NULL, finished_at = NULL, duration_ms = NULL, error_code = NULL,
+		pin_ok = 0, pin_total = 0
 		WHERE id = ? AND status IN (?, ?, ?)`, RequestQueued, queuedAt, id, RequestFailed, RequestSucceeded, RequestQueued)
 	if err != nil {
 		return wrapDB("重试请求", err)
@@ -459,6 +471,16 @@ func (s *Store) ResetRequestAttempts(ctx context.Context, id int64, attempt int)
 		return nil
 	}
 	return requestUpdateConflict(ctx, s, id, "重置尝试计数")
+}
+
+// SetRequestPinResult 回写置顶结果（PinOK/PinTotal：成功数/参与置顶的目标
+// 总数）。仅在 pin 任务（pin = 1）上行生效，非 pin 行不受影响；未命中
+// （请求不存在或非 pin 行）归一为 ErrNotFound，由 best-effort 调用方记日志。
+func (s *Store) SetRequestPinResult(ctx context.Context, id int64, ok, total int) error {
+	res, err := s.ex.ExecContext(ctx,
+		"UPDATE requests SET pin_ok = ?, pin_total = ? WHERE id = ? AND pin = 1",
+		ok, total, id)
+	return affected(res, err, "回写置顶结果")
 }
 
 func requestStateConflict(id int64, status, op string) error {
@@ -579,6 +601,9 @@ func (f RequestFilter) whereWithPrefix(prefix string) (string, []any) {
 	if f.ErrorCode != "" {
 		conds = append(conds, col("error_code")+" = ?")
 		args = append(args, f.ErrorCode)
+	}
+	if f.OnlyPin {
+		conds = append(conds, col("pin")+" = 1")
 	}
 	if f.Since > 0 {
 		conds = append(conds, col("requested_at")+" >= ?")

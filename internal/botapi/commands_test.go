@@ -402,7 +402,7 @@ func TestCommandCleanupLogsRedactedFailures(t *testing.T) {
 	}
 }
 
-func TestRegisterCommandsDefaultNineUnchanged(t *testing.T) {
+func TestRegisterCommandsDefaultListUnchanged(t *testing.T) {
 	var calls atomic.Int32
 	b := commandTestBot(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -422,7 +422,7 @@ func TestRegisterCommandsDefaultNineUnchanged(t *testing.T) {
 		if err := json.Unmarshal([]byte(r.FormValue("commands")), &commands); err != nil {
 			t.Error(err)
 		}
-		want := []string{"start", "help", "status", "health", "usage", "cancel", "download", "bind", "unbind", "channels", "join", "watch", "unwatch"}
+		want := []string{"start", "help", "status", "health", "usage", "cancel", "download", "pin", "bind", "unbind", "channels", "join", "watch", "unwatch"}
 		var got []string
 		for _, cmd := range commands {
 			got = append(got, cmd.Command)
