@@ -2,6 +2,16 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.21.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.21.0...v1.21.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **release:** 预填 release PR 门禁状态，防 bot PR 卡在 Expected ([c74d788](https://github.com/huaiminyetnotsleep/spore/commit/c74d788b4792b0f8506461211c65cef0cdf27b5b))
+* **release:** 预填 release PR 门禁状态，防 bot PR 卡在 Expected ([c30db6f](https://github.com/huaiminyetnotsleep/spore/commit/c30db6fad02ad0f7f6edb7939ec11e77f786f788))
+* **release:** 预填脚本改纯 gh api，修复无 checkout 目录下 git 报错 ([4c6e96a](https://github.com/huaiminyetnotsleep/spore/commit/4c6e96abba086f72ef71273a512c1bd4d9e200c3))
+* **release:** 预填脚本改纯 gh api，修复无 checkout 目录下 git 报错 ([7a3f1eb](https://github.com/huaiminyetnotsleep/spore/commit/7a3f1eb24f380b4f616f2afe750486c48856aac5))
+
 ## [1.21.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.20.0...v1.21.0) (2026-09-21)
 
 
