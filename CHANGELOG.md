@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.23.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.22.0...v1.23.0) (2026-09-21)
+
+
+### Features
+
+* **pin:** /pin 命令自动置顶与超级群组绑定，Web 置顶标识与用户级偏好 ([b6356ad](https://github.com/huaiminyetnotsleep/spore/commit/b6356ad9a9c055b1d0bde7136e232e25951b131c))
+* **pin:** /pin 命令自动置顶与超级群组绑定，Web 置顶标识与用户级偏好 ([7fdd4d3](https://github.com/huaiminyetnotsleep/spore/commit/7fdd4d331588e3e5e6ba3da2db80da5da166f82b))
+
 ## [1.22.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.21.1...v1.22.0) (2026-09-21)
 
 
