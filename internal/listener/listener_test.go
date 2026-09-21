@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -393,4 +394,44 @@ func (s *Service) containsSkip(substr string) bool {
 		return false
 	}
 	return lc.contains(substr)
+}
+
+// 多 bot 池重复/交错投递：同一相册被两个受理 bot 各投递一遍（成员重复、
+// 乱序到达）时，批内按消息 ID 升序去重，仍只整组复制一次——copyMessages
+// 要求 message_ids 严格递增，乱序重复会被 Telegram 整批拒绝。
+func TestDuplicateInterleavedDeliveryCopiesOnce(t *testing.T) {
+	l, snd, st, enqueued := newFixture(t)
+	const chatID int64 = -1002345
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "DupChan", Title: "重复投递",
+		Status: store.WatchApproved, Enabled: true,
+	})
+	// bot_a 与 bot_b 的更新交错：11 重复、13 先于 12 到达
+	l.OnMessage(mediaMsg(chatID, 11, "g9"), snd, 42, "bot_a")
+	l.OnMessage(mediaMsg(chatID, 11, "g9"), snd, 43, "bot_b")
+	l.OnMessage(mediaMsg(chatID, 13, "g9"), snd, 42, "bot_a")
+	l.OnMessage(mediaMsg(chatID, 12, "g9"), snd, 43, "bot_b")
+
+	// 等待点对准条目落库（复制返回之后才写）
+	ctx := context.Background()
+	waitFor(t, func() bool {
+		for _, id := range []int{11, 12, 13} {
+			for _, key := range []string{"dupchan", "-1002345"} {
+				if _, ok := l.dump.Entry(ctx, key, id); !ok {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	copies := snd.snapshot()
+	if len(copies) != 1 || copies[0].from != chatID || copies[0].to != -100777 {
+		t.Fatalf("应只整组复制一次: %+v", copies)
+	}
+	if !sort.IntsAreSorted(copies[0].ids) || len(copies[0].ids) != 3 {
+		t.Fatalf("复制 ID 应去重后严格递增: %+v", copies[0].ids)
+	}
+	if calls := enqueued.snapshot(); len(calls) != 0 {
+		t.Fatalf("不应触发回退: %+v", calls)
+	}
 }
