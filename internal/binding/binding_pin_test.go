@@ -117,9 +117,12 @@ func TestCopyToChannelsPin(t *testing.T) {
 		svc, _ := New(Options{Store: s, Log: testLog()})
 		svc.SetBots([]*tgbot.Bot{b})
 
-		ok, total := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, true)
-		if ok != 1 || total != 1 {
-			t.Fatalf("置顶结果应为 1/1，得到 %d/%d", ok, total)
+		outcome := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, true)
+		if outcome.OK != 1 || outcome.Total != 1 {
+			t.Fatalf("置顶结果应为 1/1，得到 %d/%d", outcome.OK, outcome.Total)
+		}
+		if len(outcome.Targets) != 1 || !outcome.Targets[0].Pinned || outcome.Targets[0].Label != "我的频道" {
+			t.Fatalf("置顶结果应带目标显示名: %+v", outcome.Targets)
 		}
 		joined := strings.Join(*methods, ",")
 		if !strings.Contains(joined, "copyMessages") || !strings.Contains(joined, "pinChatMessage") {
@@ -132,9 +135,9 @@ func TestCopyToChannelsPin(t *testing.T) {
 		svc, _ := New(Options{Store: s, Log: testLog()})
 		svc.SetBots([]*tgbot.Bot{b})
 
-		ok, total := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, false)
-		if ok != 0 || total != 0 {
-			t.Fatalf("非 pin 调用结果应为零值，得到 %d/%d", ok, total)
+		outcome := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, false)
+		if outcome.OK != 0 || outcome.Total != 0 || len(outcome.Targets) != 0 {
+			t.Fatalf("非 pin 调用结果应为零值，得到 %+v", outcome)
 		}
 		for _, m := range *methods {
 			if strings.HasSuffix(m, "pinChatMessage") {

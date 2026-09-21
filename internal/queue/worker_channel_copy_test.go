@@ -11,25 +11,24 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
-// fakeCopier 记录频道副本投递调用；pinOK/pinTotal 模拟置顶结果返回值。
+// fakeCopier 记录频道副本投递调用；outcome 模拟置顶结果返回值。
 type fakeCopier struct {
 	mu       sync.Mutex
 	userIDs  []int64
 	chatIDs  []int64
 	msgLists [][]int
 	pins     []bool
-	pinOK    int
-	pinTotal int
+	outcome  PinOutcome
 }
 
-func (f *fakeCopier) CopyToChannels(_ context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) (int, int) {
+func (f *fakeCopier) CopyToChannels(_ context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userIDs = append(f.userIDs, userID)
 	f.chatIDs = append(f.chatIDs, userChatID)
 	f.msgLists = append(f.msgLists, append([]int(nil), msgIDs...))
 	f.pins = append(f.pins, pin)
-	return f.pinOK, f.pinTotal
+	return f.outcome
 }
 
 func TestProcessSuccessCopiesToBoundChannels(t *testing.T) {
