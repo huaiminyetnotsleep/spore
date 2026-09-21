@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.20.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.19.0...v1.20.0) (2026-09-21)
+
+
+### Features
+
+* **watch:** 新增监听源预热、记录与统计 ([fa9de68](https://github.com/huaiminyetnotsleep/spore/commit/fa9de6861db652c2488a741832b713e48eeb1c89))
+* **watch:** 新增监听源预热、记录与统计 ([5167ab7](https://github.com/huaiminyetnotsleep/spore/commit/5167ab711ce2fe705eb926f1819890178fbecbf2))
+
 ## [1.19.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.18.0...v1.19.0) (2026-09-20)
 
 
