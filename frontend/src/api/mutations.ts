@@ -10,6 +10,7 @@ import { getCSRFToken } from "./session";
 import { PROJECT_IDENTITY } from "../shared/projectIdentity.generated";
 import type {
   BackupView,
+  WatchEventsDeleteResult,
   WatchInviteRequestRow,
   WatchSourceRow,
   CloudDriveBackupCandidate,
@@ -359,6 +360,10 @@ export const retryWatchInviteRequest = (id: number): Promise<WatchInviteRequestO
 
 export const deleteWatchInviteRequest = (id: number): Promise<WriteOK> =>
   postJSON<WriteOK>(`/api/v1/watch-invite-requests/${id}/delete`);
+
+/** 删除预热事件（单条/批量共用，单条传单元素数组）。 */
+export const deleteWatchEvents = (ids: number[]): Promise<WatchEventsDeleteResult> =>
+  postJSON<WatchEventsDeleteResult>("/api/v1/watch-events/delete", { ids });
 
 // ---- 系统设置（系统身份） ----
 

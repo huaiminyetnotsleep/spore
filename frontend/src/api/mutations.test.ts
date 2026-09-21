@@ -63,3 +63,40 @@ describe("watch source mutations", () => {
     }
   });
 });
+
+describe("watch events mutations", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true, deleted: 2 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    setCSRFToken("watch-events-csrf");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setCSRFToken("");
+  });
+
+  it("批量删除预热事件提交 ids 到 delete 端点", async () => {
+    const { deleteWatchEvents } = await import("./mutations");
+    const result = await deleteWatchEvents([3, 7]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/watch-events/delete",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ids: [3, 7] }),
+      }),
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("watch-events-csrf");
+    expect(result.deleted).toBe(2);
+  });
+});

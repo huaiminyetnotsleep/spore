@@ -90,6 +90,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// 监听记录（预热事件）；私有邀请链接申请的审批/拒绝/重试/删除
 	mux.Handle("GET /api/v1/watch-sources", s.apiAuth(s.handleAPIWatchSourcesList))
 	mux.Handle("GET /api/v1/watch-events", s.apiAuth(s.handleAPIWatchEventsList))
+	s.mountAPIWrite(mux, "/api/v1/watch-events/delete", s.handleAPIWatchEventsDelete)
 	mux.Handle("GET /api/v1/watch-stats", s.apiAuth(s.handleAPIWatchStats))
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/add", s.handleAPIWatchSourcesAdd)
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/approve", s.handleAPIWatchSourceReview(true))

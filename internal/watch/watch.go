@@ -554,7 +554,8 @@ func (s *Service) notifyUser(ctx context.Context, userID int64, text string) {
 
 // EventsQuery 是监听记录列表查询（Web「监听记录」页）。
 type EventsQuery struct {
-	ChannelID int64 // 0 = 全部源
+	ChannelID int64  // 0 = 全部源
+	Path      string // 空 = 全部路径（copy/fallback）
 	Page      int
 	PageSize  int
 }
@@ -573,7 +574,7 @@ func (s *Service) ListEvents(ctx context.Context, q EventsQuery) ([]EventView, i
 		q.PageSize = 20
 	}
 	rows, total, err := s.st.ListWatchEvents(ctx, store.WatchEventsQuery{
-		ChannelID: q.ChannelID, Page: q.Page, PageSize: q.PageSize,
+		ChannelID: q.ChannelID, Path: q.Path, Page: q.Page, PageSize: q.PageSize,
 	})
 	if err != nil {
 		return nil, 0, err
@@ -583,6 +584,17 @@ func (s *Service) ListEvents(ctx context.Context, q EventsQuery) ([]EventView, i
 		out = append(out, EventView{WatchEvent: e, MessageURL: eventMessageURL(e)})
 	}
 	return out, total, nil
+}
+
+// DeleteEvents 按 ID 批量删除预热事件（管理端单条/批量共用，单条传单元素
+// 切片），返回实际删除行数。删除只影响留痕记录，不影响缓存副本。
+func (s *Service) DeleteEvents(ctx context.Context, ids []int64) (int64, error) {
+	n, err := s.st.DeleteWatchEvents(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	s.log.Info("预热事件已删除", "requested", len(ids), "deleted", n)
+	return n, nil
 }
 
 // eventMessageURL 渲染事件的源消息链接：优先 username（公开源），否则

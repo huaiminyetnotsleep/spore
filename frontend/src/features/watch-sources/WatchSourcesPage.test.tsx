@@ -4,7 +4,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App as AntApp } from "antd";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,7 @@ import {
   addWatchSource,
   approveWatchInviteRequest,
   deleteWatchInviteRequest,
+  deleteWatchSource,
   rejectWatchInviteRequest,
   retryWatchInviteRequest,
   reviewWatchSource,
@@ -39,6 +40,7 @@ vi.mock("../../api/mutations", async () => {
     addWatchSource: vi.fn(),
     approveWatchInviteRequest: vi.fn(),
     deleteWatchInviteRequest: vi.fn(),
+    deleteWatchSource: vi.fn(),
     rejectWatchInviteRequest: vi.fn(),
     retryWatchInviteRequest: vi.fn(),
     reviewWatchSource: vi.fn(),
@@ -54,6 +56,7 @@ const mockRejectInvite = vi.mocked(rejectWatchInviteRequest);
 const mockRetryInvite = vi.mocked(retryWatchInviteRequest);
 const mockReview = vi.mocked(reviewWatchSource);
 const mockToggle = vi.mocked(toggleWatchSource);
+const mockDeleteSource = vi.mocked(deleteWatchSource);
 
 function sampleSource(overrides: Partial<WatchSourceRow> = {}): WatchSourceRow {
   return {
@@ -270,6 +273,113 @@ describe("监听源管理页", () => {
     fireEvent.click(pauseBtn);
     await waitFor(() => {
       expect(mockToggle).toHaveBeenCalledWith(-100222, false);
+    });
+  });
+
+  it("邀请申请支持状态与关键词查询（草稿态 + 查询按钮生效）", async () => {
+    mockFetchSources.mockResolvedValue({
+      items: [],
+      invite_requests: [
+        sampleInviteRequest({ id: 21, status: "pending", channel_title: "待审频道" }),
+        sampleInviteRequest({ id: 22, status: "waiting_bot", channel_title: "私有群" }),
+      ],
+    });
+
+    renderPage();
+    await screen.findByText("待审频道");
+
+    const inviteCard = screen.getByText(/邀请申请（/).closest(".ant-card");
+    expect(inviteCard).not.toBeNull();
+    const scope = within(inviteCard as HTMLElement);
+
+    // 关键词（草稿态输入不立即生效，点「查 询」才过滤）
+    fireEvent.change(scope.getByLabelText("邀请关键词筛选"), {
+      target: { value: "私有群" },
+    });
+    expect(screen.getByText("待审频道")).toBeInTheDocument();
+    fireEvent.click(scope.getByRole("button", { name: "查 询" }));
+    await waitFor(() => {
+      expect(screen.queryByText("待审频道")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("私有群")).toBeInTheDocument();
+
+    // 重置恢复全部
+    fireEvent.click(scope.getByRole("button", { name: "重 置" }));
+    await waitFor(() => {
+      expect(screen.getByText("待审频道")).toBeInTheDocument();
+    });
+  });
+
+  it("监听源列表支持状态与关键词查询", async () => {
+    mockFetchSources.mockResolvedValue({
+      items: [
+        sampleSource({ channel_id: -100111, title: "待审批源", status: "pending" }),
+        sampleSource({ channel_id: -100222, title: "生效中源", status: "approved" }),
+      ],
+    });
+
+    renderPage();
+    await screen.findByText("待审批源");
+
+    const sourcesCard = screen.getByText(/监听源列表（/).closest(".ant-card");
+    expect(sourcesCard).not.toBeNull();
+    const scope = within(sourcesCard as HTMLElement);
+
+    fireEvent.change(scope.getByLabelText("监听源关键词筛选"), {
+      target: { value: "生效中" },
+    });
+    fireEvent.click(scope.getByRole("button", { name: "查 询" }));
+    await waitFor(() => {
+      expect(screen.queryByText("待审批源")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("生效中源")).toBeInTheDocument();
+
+    fireEvent.click(scope.getByRole("button", { name: "重 置" }));
+    await waitFor(() => {
+      expect(screen.getByText("待审批源")).toBeInTheDocument();
+    });
+  });
+
+  it("监听源列表支持批量同意与批量删除", async () => {
+    mockFetchSources.mockResolvedValue({
+      items: [
+        sampleSource({ channel_id: -100111, title: "待审批源", status: "pending" }),
+        sampleSource({ channel_id: -100222, title: "生效中源", status: "approved" }),
+      ],
+    });
+    mockReview.mockResolvedValue({ ok: true, source: sampleSource({ status: "approved" }) });
+    mockDeleteSource.mockResolvedValue({ ok: true });
+
+    renderPage();
+    await screen.findByText("待审批源");
+
+    const sourcesCard = screen.getByText(/监听源列表（/).closest(".ant-card");
+
+    // 表头全选两行，出现批量操作条
+    const allBoxes = (sourcesCard as HTMLElement).querySelectorAll<HTMLInputElement>(
+      ".ant-checkbox-input",
+    );
+    expect(allBoxes.length).toBeGreaterThanOrEqual(3);
+    fireEvent.click(allBoxes[0]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "批量同意（1）" }));
+    await waitFor(() => {
+      expect(mockReview).toHaveBeenCalledWith(-100111, true);
+    });
+    // 批量同意成功后清空选择，重新全选再批量删除
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "批量删除" })).not.toBeInTheDocument();
+    });
+    const allBoxesAgain = (sourcesCard as HTMLElement).querySelectorAll<HTMLInputElement>(
+      ".ant-checkbox-input",
+    );
+    fireEvent.click(allBoxesAgain[0]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "批量删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删 除" }));
+    await waitFor(() => {
+      const calls = mockDeleteSource.mock.calls.map(([id]) => id);
+      expect(calls).toEqual(expect.arrayContaining([-100111, -100222]));
     });
   });
 });

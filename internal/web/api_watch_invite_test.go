@@ -48,6 +48,10 @@ type fakeWatchManager struct {
 
 	deleteID  int64
 	deleteErr error
+
+	eventDeleteIDs []int64
+	eventDeleted   int64
+	eventDeleteErr error
 }
 
 func (f *fakeWatchManager) ListAll(context.Context) ([]watch.SourceView, error) {
@@ -81,6 +85,11 @@ func (f *fakeWatchManager) RetryInviteRequest(_ context.Context, id int64) (stor
 func (f *fakeWatchManager) DeleteInviteRequest(_ context.Context, id int64) error {
 	f.deleteID = id
 	return f.deleteErr
+}
+
+func (f *fakeWatchManager) DeleteEvents(_ context.Context, ids []int64) (int64, error) {
+	f.eventDeleteIDs = ids
+	return f.eventDeleted, f.eventDeleteErr
 }
 
 func newWatchEnv(t *testing.T) (*testEnv, *jar, *fakeWatchManager, string) {
@@ -260,5 +269,41 @@ func TestAPIWatchInviteRejectRetryDelete(t *testing.T) {
 	fake.deleteErr = errors.Join(store.ErrNotFound)
 	if resp := e.apiPost(j, "/api/v1/watch-invite-requests/6/delete", csrf, "{}"); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("删除不存在应 400，得到 %d", resp.StatusCode)
+	}
+}
+
+func TestAPIWatchEventsDelete(t *testing.T) {
+	e, j, fake, csrf := newWatchEnv(t)
+	fake.eventDeleted = 2
+
+	resp := e.apiPost(j, "/api/v1/watch-events/delete", csrf, `{"ids":[3,7]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("删除应 200，得到 %d: %s", resp.StatusCode, bodyOf(t, resp))
+	}
+	if len(fake.eventDeleteIDs) != 2 || fake.eventDeleteIDs[0] != 3 {
+		t.Fatalf("事件 ID 未透传: %v", fake.eventDeleteIDs)
+	}
+	var got struct {
+		OK      bool  `json:"ok"`
+		Deleted int64 `json:"deleted"`
+	}
+	decodeAPIJSON(t, bodyOf(t, resp), &got)
+	if !got.OK || got.Deleted != 2 {
+		t.Fatalf("响应信封不符: %+v", got)
+	}
+
+	// 空 / 超限 / 非法 ID → 400；缺 CSRF → 403
+	if resp := e.apiPost(j, "/api/v1/watch-events/delete", csrf, `{"ids":[]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("空 ids 应 400，得到 %d", resp.StatusCode)
+	}
+	long := `{"ids":[` + strings.TrimSuffix(strings.Repeat("1,", 101), ",") + `]}`
+	if resp := e.apiPost(j, "/api/v1/watch-events/delete", csrf, long); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("超 100 个 ids 应 400，得到 %d", resp.StatusCode)
+	}
+	if resp := e.apiPost(j, "/api/v1/watch-events/delete", csrf, `{"ids":[-1]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("负数 ID 应 400，得到 %d", resp.StatusCode)
+	}
+	if resp := e.apiPost(j, "/api/v1/watch-events/delete", "", `{"ids":[3]}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺 CSRF 应 403，得到 %d", resp.StatusCode)
 	}
 }

@@ -165,6 +165,8 @@ type WatchManager interface {
 	// ListEvents 返回预热事件页（监听记录页：哪个 bot 在哪个源转发了
 	// 哪些消息、走哪条路径、关联请求）。
 	ListEvents(ctx context.Context, q watch.EventsQuery) ([]watch.EventView, int, error)
+	// DeleteEvents 按 ID 批量删除预热事件（单条传单元素切片），返回删除行数。
+	DeleteEvents(ctx context.Context, ids []int64) (int64, error)
 	// Stats 聚合监听模块统计（业务统计页：源计数/按源/按 bot/按用户/趋势；
 	// 时间/bot 界与请求统计同语义）。
 	Stats(ctx context.Context, q watch.StatsQuery, utcOffsetSec int64) (watch.WatchStatsView, error)

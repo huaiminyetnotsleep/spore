@@ -982,7 +982,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/watch-events
 
-监听记录（认证，服务端分页）。查询参数：`channel_id`（可选）、`page`、`page_size`。响应行：
+监听记录（认证，服务端分页）。查询参数：`channel_id`（可选，按源筛选）、`path`（可选，`copy` / `fallback`，按转储方式筛选）、`page`、`page_size`。响应行：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -995,6 +995,10 @@ cloud-drive.json.enc
 | `bot_id` / `bot_username` | int64 / string | 执行转储的 Bot |
 | `path` | string | `copy`（服务端复制）或 `fallback`（受保护重传） |
 | `created_at` | int64 | Unix 毫秒 |
+
+### POST /api/v1/watch-events/delete
+
+删除预热事件留痕（认证 + CSRF，单条/批量共用）。请求体 `{"ids":[…]}`（1–100 个正整数事件 ID），响应 `{"ok":true,"deleted":<实际删除行数>}`。仅删除留痕记录，已缓存副本不受影响。
 
 ### GET /api/v1/watch-stats
 

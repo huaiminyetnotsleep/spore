@@ -1098,6 +1098,8 @@ export interface WatchEventRow {
 /** 监听记录分页列表参数。 */
 export interface WatchEventsParams {
   channel_id?: number;
+  /** copy=服务端复制 / fallback=重传管线；缺省为全部。 */
+  path?: "copy" | "fallback";
   page?: number;
   page_size?: number;
 }
@@ -1112,10 +1114,18 @@ export interface WatchEventsResult {
 export function fetchWatchEvents(params: WatchEventsParams): Promise<WatchEventsResult> {
   const qs = new URLSearchParams();
   if (params.channel_id) qs.set("channel_id", String(params.channel_id));
+  if (params.path) qs.set("path", params.path);
   if (params.page) qs.set("page", String(params.page));
   if (params.page_size) qs.set("page_size", String(params.page_size));
   const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
   return apiRequest<WatchEventsResult>(`/api/v1/watch-events${suffix}`);
+}
+
+/** 预热事件删除响应（单条/批量共用）。 */
+export interface WatchEventsDeleteResult {
+  ok: boolean;
+  /** 实际删除行数（不存在的不计入）。 */
+  deleted: number;
 }
 
 /** 监听模块统计视图（GET /api/v1/watch-stats）。 */

@@ -2,11 +2,14 @@
  * 监听源管理页（/watch-sources）：添加源频道/超级群组，并在同页处理邀请链接申请。
  * direct source 保持原有审批、暂停与删除流程；私有邀请链接先让读取账号加入，
  * Bot 管理员权限仍由管理员在 Telegram 中人工配置。
+ * 两张表均支持「查询条件 + 查询按钮」（草稿态筛选，客户端过滤）；
+ * 监听源列表支持批量操作（逐条复用单条端点，allSettled 汇总结果）。
  */
 import { useState } from "react";
+import type { Key } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Button, Input, Space, Tag, Typography } from "antd";
+import { Button, Input, Select, Space, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import {
@@ -40,6 +43,12 @@ const STATUS_LABELS: Record<WatchSourceRow["status"], { label: string; color: st
   rejected: { label: "已拒绝", color: "default" },
 };
 
+const SOURCE_STATUS_OPTIONS = [
+  { value: "pending", label: "待审批" },
+  { value: "approved", label: "生效中" },
+  { value: "rejected", label: "已拒绝" },
+];
+
 const INVITE_STATUS_META: Record<
   WatchInviteRequestRow["status"],
   { label: string; tone: StatusTone; description: string }
@@ -60,12 +69,53 @@ const INVITE_STATUS_META: Record<
   failed: { label: "处理失败", tone: "error", description: "上次处理失败，可修正后重试" },
 };
 
+const INVITE_STATUS_OPTIONS = Object.entries(INVITE_STATUS_META).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}));
+
 type InviteActionKind = "approve" | "reject" | "retry" | "delete";
+
+/** 批量逐条执行的结果汇总。 */
+interface BatchSummary {
+  ok: number;
+  fail: number;
+}
+
+function summarizeSettled(results: PromiseSettledResult<unknown>[]): BatchSummary {
+  let ok = 0;
+  let fail = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled") ok += 1;
+    else fail += 1;
+  }
+  return { ok, fail };
+}
+
+/** 关键词匹配：任一字段包含即命中（大小写不敏感；空关键词全通过）。 */
+function matchesKeyword(keyword: string, fields: (string | number)[]): boolean {
+  const k = keyword.trim().toLowerCase();
+  if (!k) return true;
+  return fields.some((f) => String(f ?? "").toLowerCase().includes(k));
+}
 
 export function WatchSourcesPage() {
   const [target, setTarget] = useState("");
   const [actingInvite, setActingInvite] = useState<{ id: number; kind: InviteActionKind } | null>(null);
   const confirm = useConfirmAction();
+
+  // 监听源列表筛选（草稿态 + 「查询」生效）
+  const [draftSourceStatus, setDraftSourceStatus] = useState<WatchSourceRow["status"] | undefined>();
+  const [draftSourceKeyword, setDraftSourceKeyword] = useState("");
+  const [sourceStatus, setSourceStatus] = useState<WatchSourceRow["status"] | undefined>();
+  const [sourceKeyword, setSourceKeyword] = useState("");
+  // 邀请申请筛选（同款交互）
+  const [draftInviteStatus, setDraftInviteStatus] = useState<WatchInviteRequestRow["status"] | undefined>();
+  const [draftInviteKeyword, setDraftInviteKeyword] = useState("");
+  const [inviteStatus, setInviteStatus] = useState<WatchInviteRequestRow["status"] | undefined>();
+  const [inviteKeyword, setInviteKeyword] = useState("");
+  // 监听源批量选择
+  const [selectedSourceKeys, setSelectedSourceKeys] = useState<Key[]>([]);
 
   const sources = useQuery({ queryKey: ["watch-sources"], queryFn: fetchWatchSources });
 
@@ -129,8 +179,92 @@ export function WatchSourcesPage() {
     return inviteAction.run({ id, kind }).finally(() => setActingInvite(null));
   };
 
+  // ---- 监听源批量操作：逐条复用单条端点，allSettled 汇总 ----
+
+  const batchReview = useAdminAction<BatchSummary, { ids: number[]; approve: boolean }>({
+    action: ({ ids, approve }) =>
+      Promise.allSettled(ids.map((id) => reviewWatchSource(id, approve))).then(summarizeSettled),
+    invalidate: [["watch-sources"]],
+    successText: (r, vars) =>
+      r.fail === 0
+        ? `批量${vars.approve ? "同意" : "拒绝"}完成（${r.ok} 条）。`
+        : { type: "warning", text: `批量${vars.approve ? "同意" : "拒绝"}：成功 ${r.ok}，失败 ${r.fail}（仅待审批行可审批）。` },
+    onDone: () => setSelectedSourceKeys([]),
+  });
+
+  const batchToggle = useAdminAction<BatchSummary, { ids: number[]; enabled: boolean }>({
+    action: ({ ids, enabled }) =>
+      Promise.allSettled(ids.map((id) => toggleWatchSource(id, enabled))).then(summarizeSettled),
+    invalidate: [["watch-sources"]],
+    successText: (r, vars) =>
+      r.fail === 0
+        ? `批量${vars.enabled ? "恢复" : "暂停"}完成（${r.ok} 条）。`
+        : { type: "warning", text: `批量${vars.enabled ? "恢复" : "暂停"}：成功 ${r.ok}，失败 ${r.fail}（仅生效中行可切换）。` },
+    onDone: () => setSelectedSourceKeys([]),
+  });
+
+  const batchDelete = useAdminAction<BatchSummary, { ids: number[] }>({
+    action: ({ ids }) =>
+      Promise.allSettled(ids.map((id) => deleteWatchSource(id))).then(summarizeSettled),
+    invalidate: [["watch-sources"]],
+    successText: (r) =>
+      r.fail === 0
+        ? `批量删除完成（${r.ok} 条）。`
+        : { type: "warning", text: `批量删除：成功 ${r.ok}，失败 ${r.fail}。` },
+    onDone: () => setSelectedSourceKeys([]),
+  });
+
   const rows = sources.data?.items ?? [];
   const inviteRows = sources.data?.invite_requests ?? [];
+
+  const filteredSources = rows.filter(
+    (row) =>
+      (!sourceStatus || row.status === sourceStatus) &&
+      matchesKeyword(sourceKeyword, [
+        row.title,
+        row.username,
+        row.channel_id,
+        row.user_username,
+        row.user_display_name,
+        row.bot_username,
+      ]),
+  );
+  const filteredInvites = inviteRows.filter(
+    (row) =>
+      (!inviteStatus || row.status === inviteStatus) &&
+      matchesKeyword(inviteKeyword, [
+        row.channel_title,
+        row.masked_hash,
+        row.user_username,
+        row.user_display_name,
+      ]),
+  );
+
+  const selectedSources = rows.filter((row) => selectedSourceKeys.includes(row.channel_id));
+  const pendingIds = selectedSources.filter((r) => r.status === "pending").map((r) => r.channel_id);
+  const pausableIds = selectedSources.filter((r) => r.status === "approved" && r.enabled).map((r) => r.channel_id);
+  const resumableIds = selectedSources.filter((r) => r.status === "approved" && !r.enabled).map((r) => r.channel_id);
+
+  const applySourceFilters = () => {
+    setSourceStatus(draftSourceStatus);
+    setSourceKeyword(draftSourceKeyword);
+  };
+  const resetSourceFilters = () => {
+    setDraftSourceStatus(undefined);
+    setDraftSourceKeyword("");
+    setSourceStatus(undefined);
+    setSourceKeyword("");
+  };
+  const applyInviteFilters = () => {
+    setInviteStatus(draftInviteStatus);
+    setInviteKeyword(draftInviteKeyword);
+  };
+  const resetInviteFilters = () => {
+    setDraftInviteStatus(undefined);
+    setDraftInviteKeyword("");
+    setInviteStatus(undefined);
+    setInviteKeyword("");
+  };
 
   const columns: ColumnsType<WatchSourceRow> = [
     {
@@ -354,7 +488,7 @@ export function WatchSourcesPage() {
   return (
     <PageScaffold
       title="监听源管理"
-      description="管理直接监听源与私有邀请链接申请；支持审批、权限配置、重试、暂停、恢复与删除。"
+      description="管理直接监听源与私有邀请链接申请；支持查询、审批、批量操作、权限配置、重试、暂停、恢复与删除。"
     >
       <Space direction="vertical" size="middle" className="field-width-full">
         <PageSection title="添加监听源">
@@ -390,23 +524,158 @@ export function WatchSourcesPage() {
           onRetry={() => void sources.refetch()}
         >
           <Space direction="vertical" size="middle" className="field-width-full">
-            <PageSection title={`邀请申请（${inviteRows.length}）`}>
+            <PageSection
+              title={`邀请申请（${filteredInvites.length}）`}
+              extra={
+                <Space wrap>
+                  <Select
+                    allowClear
+                    placeholder="全部状态"
+                    className="filter-select"
+                    value={draftInviteStatus}
+                    options={INVITE_STATUS_OPTIONS}
+                    onChange={(v) => setDraftInviteStatus(v)}
+                    aria-label="邀请状态筛选"
+                  />
+                  <Input
+                    allowClear
+                    placeholder="标题 / 邀请码 / 申请人"
+                    className="filter-input"
+                    value={draftInviteKeyword}
+                    onChange={(e) => setDraftInviteKeyword(e.target.value)}
+                    onPressEnter={applyInviteFilters}
+                    aria-label="邀请关键词筛选"
+                  />
+                  <Button type="primary" onClick={applyInviteFilters}>
+                    查询
+                  </Button>
+                  <Button onClick={resetInviteFilters}>重置</Button>
+                </Space>
+              }
+            >
               <DataTable
                 rowKey="id"
                 columns={inviteColumns}
-                dataSource={inviteRows}
+                dataSource={filteredInvites}
                 loading={sources.isFetching}
                 emptyText="暂无邀请申请"
               />
             </PageSection>
 
-            <PageSection title={`监听源列表（${rows.length}）`}>
+            <PageSection
+              title={`监听源列表（${filteredSources.length}）`}
+              extra={
+                <Space wrap>
+                  <Select
+                    allowClear
+                    placeholder="全部状态"
+                    className="filter-select"
+                    value={draftSourceStatus}
+                    options={SOURCE_STATUS_OPTIONS}
+                    onChange={(v) => setDraftSourceStatus(v)}
+                    aria-label="监听源状态筛选"
+                  />
+                  <Input
+                    allowClear
+                    placeholder="标题 / 用户名 / ID / 申请人 / Bot"
+                    className="filter-input"
+                    value={draftSourceKeyword}
+                    onChange={(e) => setDraftSourceKeyword(e.target.value)}
+                    onPressEnter={applySourceFilters}
+                    aria-label="监听源关键词筛选"
+                  />
+                  <Button type="primary" onClick={applySourceFilters}>
+                    查询
+                  </Button>
+                  <Button onClick={resetSourceFilters}>重置</Button>
+                </Space>
+              }
+            >
+              {selectedSourceKeys.length > 0 ? (
+                <Space wrap className="batch-action-bar">
+                  <Text>已选 {selectedSourceKeys.length} 项</Text>
+                  {pendingIds.length > 0 ? (
+                    <>
+                      <Button
+                        type="primary"
+                        loading={batchReview.pending}
+                        onClick={() =>
+                          void batchReview.run({ ids: pendingIds, approve: true })
+                        }
+                      >
+                        批量同意（{pendingIds.length}）
+                      </Button>
+                      <Button
+                        danger
+                        loading={batchReview.pending}
+                        onClick={() =>
+                          confirm({
+                            intent: "warning",
+                            title: "批量拒绝监听源",
+                            content: `确定拒绝选中的 ${pendingIds.length} 条待审批申请？`,
+                            action: () => batchReview.run({ ids: pendingIds, approve: false }),
+                          })
+                        }
+                      >
+                        批量拒绝（{pendingIds.length}）
+                      </Button>
+                    </>
+                  ) : null}
+                  {pausableIds.length > 0 ? (
+                    <Button
+                      loading={batchToggle.pending}
+                      onClick={() =>
+                        confirm({
+                          intent: "warning",
+                          title: "批量暂停监听",
+                          content: `确定暂停选中的 ${pausableIds.length} 个生效中源？配置保留，可恢复。`,
+                          action: () => batchToggle.run({ ids: pausableIds, enabled: false }),
+                        })
+                      }
+                    >
+                      批量暂停（{pausableIds.length}）
+                    </Button>
+                  ) : null}
+                  {resumableIds.length > 0 ? (
+                    <Button
+                      loading={batchToggle.pending}
+                      onClick={() => void batchToggle.run({ ids: resumableIds, enabled: true })}
+                    >
+                      批量恢复（{resumableIds.length}）
+                    </Button>
+                  ) : null}
+                  <Button
+                    danger
+                    loading={batchDelete.pending}
+                    onClick={() =>
+                      confirm({
+                        intent: "danger",
+                        title: "批量删除监听源",
+                        content: `确定删除选中的 ${selectedSources.length} 个监听源？删除后新消息不再预热缓存（已缓存副本保留）。`,
+                        okText: "删除",
+                        action: () =>
+                          batchDelete.run({
+                            ids: selectedSources.map((r) => r.channel_id),
+                          }),
+                      })
+                    }
+                  >
+                    批量删除
+                  </Button>
+                  <Button onClick={() => setSelectedSourceKeys([])}>取消选择</Button>
+                </Space>
+              ) : null}
               <DataTable
                 rowKey="channel_id"
                 columns={columns}
-                dataSource={rows}
+                dataSource={filteredSources}
                 loading={sources.isFetching}
                 emptyText="暂无监听源"
+                rowSelection={{
+                  selectedRowKeys: selectedSourceKeys,
+                  onChange: (keys) => setSelectedSourceKeys(keys),
+                  getCheckboxProps: () => ({ disabled: sources.isFetching }),
+                }}
               />
             </PageSection>
           </Space>

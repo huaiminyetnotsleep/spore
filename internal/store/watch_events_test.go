@@ -70,3 +70,54 @@ func TestWatchEventRejectsInvalidPath(t *testing.T) {
 		t.Fatal("非法 path 应拒绝")
 	}
 }
+
+func TestListWatchEventsPathFilter(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	upsertWatch(t, s, WatchSource{ChannelID: -1001, Status: WatchApproved, Enabled: true})
+	for _, e := range []WatchEvent{
+		{ChannelID: -1001, Title: "源一", MessageID: 11, MemberIDs: []int{11}, DumpIDs: []int{101}, BotID: 42, BotUsername: "b42", Path: WatchPathCopy, CreatedAt: 1000},
+		{ChannelID: -1001, Title: "源一", MessageID: 12, MemberIDs: []int{12}, RequestID: 99, BotID: 42, BotUsername: "b42", Path: WatchPathFallback, CreatedAt: 2000},
+	} {
+		if _, err := s.InsertWatchEvent(ctx, e); err != nil {
+			t.Fatalf("写入事件失败: %v", err)
+		}
+	}
+
+	rows, total, err := s.ListWatchEvents(ctx, WatchEventsQuery{Path: WatchPathFallback, Page: 1, PageSize: 10})
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].MessageID != 12 {
+		t.Fatalf("按路径筛选应只命中 fallback: rows=%+v total=%d err=%v", rows, total, err)
+	}
+	if _, _, err := s.ListWatchEvents(ctx, WatchEventsQuery{Path: "bogus", Page: 1, PageSize: 10}); err == nil {
+		t.Fatal("非法路径筛选应报受控错误")
+	}
+}
+
+func TestDeleteWatchEventsBatch(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	upsertWatch(t, s, WatchSource{ChannelID: -1001, Status: WatchApproved, Enabled: true})
+	ids := make([]int64, 0, 3)
+	for i := int64(1); i <= 3; i++ {
+		e, err := s.InsertWatchEvent(ctx, WatchEvent{
+			ChannelID: -1001, Title: "源一", MessageID: int(10 + i), MemberIDs: []int{int(10 + i)},
+			BotID: 42, BotUsername: "b42", Path: WatchPathCopy,
+		})
+		if err != nil {
+			t.Fatalf("写入事件失败: %v", err)
+		}
+		ids = append(ids, e.ID)
+	}
+
+	deleted, err := s.DeleteWatchEvents(ctx, []int64{ids[0], ids[2], 99999})
+	if err != nil || deleted != 2 {
+		t.Fatalf("应删除 2 行（不存在不计入）: deleted=%d err=%v", deleted, err)
+	}
+	_, total, err := s.ListWatchEvents(ctx, WatchEventsQuery{Page: 1, PageSize: 10})
+	if err != nil || total != 1 {
+		t.Fatalf("删除后应剩 1 行: total=%d err=%v", total, err)
+	}
+	if n, err := s.DeleteWatchEvents(ctx, nil); err != nil || n != 0 {
+		t.Fatalf("空列表应幂等: n=%d err=%v", n, err)
+	}
+}

@@ -327,14 +327,55 @@ func (s *Server) handleAPIWatchEventsList(w http.ResponseWriter, r *http.Request
 		}
 		channelID = n
 	}
+	path := r.URL.Query().Get("path")
+	if path != "" && path != store.WatchPathCopy && path != store.WatchPathFallback {
+		s.apiBadRequest(w, r, op, "path 仅支持 copy 或 fallback。")
+		return
+	}
 	views, total, err := s.watch.ListEvents(r.Context(), watch.EventsQuery{
-		ChannelID: channelID, Page: page.Page, PageSize: page.PageSize,
+		ChannelID: channelID, Path: path, Page: page.Page, PageSize: page.PageSize,
 	})
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
 		return
 	}
 	writeAPIList(w, newAPIListEnvelope(toAnySlice(views), page, total))
+}
+
+// handleAPIWatchEventsDelete 删除预热事件（单条/批量共用）：body
+// {"ids":[...]}（1–100 个正整数 ID）。删除只影响留痕记录，不影响缓存副本。
+func (s *Server) handleAPIWatchEventsDelete(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.watch_events.delete"
+	if !s.apiRequireWatch(w, r, op) {
+		return
+	}
+	var in struct {
+		IDs []int64 `json:"ids"`
+	}
+	if !s.apiReadJSON(w, r, op, &in) {
+		return
+	}
+	if len(in.IDs) == 0 || len(in.IDs) > 100 {
+		s.apiBadRequest(w, r, op, "请提供 1–100 个事件 ID。")
+		return
+	}
+	for _, id := range in.IDs {
+		if id <= 0 {
+			s.apiBadRequest(w, r, op, "事件 ID 必须为正整数。")
+			return
+		}
+	}
+	deleted, err := s.watch.DeleteEvents(r.Context(), in.IDs)
+	if err != nil {
+		s.writeAPIAppErr(w, r, op, err)
+		return
+	}
+	s.audit(r.Context(), "watch_events.delete", "watch_events",
+		map[string]any{"requested": len(in.IDs), "deleted": deleted})
+	writeAPIJSON(w, http.StatusOK, struct {
+		apiWriteOK
+		Deleted int64 `json:"deleted"`
+	}{apiWriteOK{OK: true}, deleted})
 }
 
 // handleAPIWatchStats 返回监听模块统计（业务统计页）：源状态计数（当前
