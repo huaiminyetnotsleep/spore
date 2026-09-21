@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.21.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.20.0...v1.21.0) (2026-09-21)
+
+
+### Features
+
+* **watch:** 拆分监听源管理与配置菜单并优化 BOT 列排版 ([69da336](https://github.com/huaiminyetnotsleep/spore/commit/69da336b8dbe4d9416da808e1592efe4b24df939))
+* **watch:** 拆分监听源管理与配置菜单并优化 BOT 列排版 ([7e4f90e](https://github.com/huaiminyetnotsleep/spore/commit/7e4f90e1fb0b90f0bcfce28d34739d6be669fc3f))
+
 ## [1.20.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.19.0...v1.20.0) (2026-09-21)
 
 
