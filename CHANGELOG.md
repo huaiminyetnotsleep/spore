@@ -2,6 +2,19 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.22.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.21.1...v1.22.0) (2026-09-21)
+
+
+### Features
+
+* **watch:** 监听源支持私有邀请链接申请与两段式激活 ([1e45442](https://github.com/huaiminyetnotsleep/spore/commit/1e45442c1e39a6cafa602848bb6a435a2807a36e))
+* **watch:** 监听记录/监听源/邀请申请查询条件与批量操作 ([287fa46](https://github.com/huaiminyetnotsleep/spore/commit/287fa46875bc0d8632cfc5bdc326b12f53e4d902))
+
+
+### Bug Fixes
+
+* **listener:** 监听回调装配时序空指针崩溃，补跳过观测日志 ([52045fd](https://github.com/huaiminyetnotsleep/spore/commit/52045fd9fece002b151de66dd105798da73c243b))
+
 ## [1.21.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.21.0...v1.21.1) (2026-09-21)
 
 
