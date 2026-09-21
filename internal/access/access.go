@@ -144,6 +144,11 @@ type Submission struct {
 	//（Web 补存等内部通道），落库为 0、worker 回退主 bot 处理。
 	BotID       int64
 	BotUsername string
+	// Pin 表示本次提交标记自动置顶（/pin <链接>）：任务成功后把发送给用户
+	// 的媒体复制到用户绑定的频道/群组并置顶组首。仅普通投递生效（云盘/
+	// 缓存补写任务不适用）；用户级 auto_pin 偏好开启时普通提交同样默认置顶
+	//（Submit 内合并，无须调用方重复传入）。
+	Pin bool
 }
 
 // Decision 是提交裁定：Allowed 表示已建任务并入队；
@@ -274,6 +279,10 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		if in.CloudDest != "" {
 			reqIn.DeliveryMode = store.DeliveryModeCloud
 			reqIn.CloudDestination = in.CloudDest
+		} else if in.Pin || u.AutoPin {
+			// 自动置顶仅普通投递生效：云盘任务无 TG 媒体消息可复制，
+			// 缓存补写/重试入队不走本方法（重试经请求行继承 pin）。
+			reqIn.Pin = true
 		}
 		req, err := tx.CreateRequest(ctx, reqIn)
 		if err != nil {

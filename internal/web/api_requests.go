@@ -44,8 +44,13 @@ type apiRequestRow struct {
 	SourceMediaDCIDs []int    `json:"source_media_dc_ids"`
 	DeliveryMode     string   `json:"delivery_mode"`
 	// 受理 bot（多机器人池归属）；0 = 存量行/非 Bot 通道创建，前端显示"—"
-	BotID       int64               `json:"bot_id"`
-	BotUsername string              `json:"bot_username,omitempty"`
+	BotID       int64  `json:"bot_id"`
+	BotUsername string `json:"bot_username,omitempty"`
+	// 自动置顶（v20）：Pin 标记任务是否需要置顶副本组首；PinOK/PinTotal 是
+	// worker 收尾回写的置顶结果（成功数/参与目标总数），前端渲染"📌 置顶 N/M"。
+	Pin         bool                `json:"pin"`
+	PinOK       int                 `json:"pin_ok"`
+	PinTotal    int                 `json:"pin_total"`
 	RequestedAt int64               `json:"requested_at"`
 	DurationMs  int64               `json:"duration_ms"`
 	Progress    *apiRequestProgress `json:"progress,omitempty"`
@@ -200,6 +205,7 @@ func requestRowDTO(rq store.Request) apiRequestRow {
 		SourceMediaDCIDs: dcIDs,
 		DeliveryMode:     rq.DeliveryMode,
 		BotID:            rq.BotID, BotUsername: rq.BotUsername,
+		Pin: rq.Pin, PinOK: rq.PinOK, PinTotal: rq.PinTotal,
 		RequestedAt: rq.RequestedAt, DurationMs: rq.DurationMs,
 	}
 }

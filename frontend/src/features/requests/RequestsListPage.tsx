@@ -131,6 +131,7 @@ interface RequestFormValues {
   media_type?: string;
   delivery_mode?: string;
   error_code?: string;
+  pin?: string;
   since?: Dayjs | null;
   until?: Dayjs | null;
 }
@@ -143,6 +144,7 @@ interface RequestQuery {
   media_type?: string;
   delivery_mode?: string;
   error_code?: string;
+  pin?: string;
   since?: string;
   until?: string;
 }
@@ -163,6 +165,7 @@ function toQueryValues(values: RequestFormValues): RequestQuery {
     media_type: values.media_type || undefined,
     delivery_mode: values.delivery_mode || undefined,
     error_code: values.error_code?.trim() || undefined,
+    pin: values.pin || undefined,
     since: day(values.since),
     until: day(values.until),
   };
@@ -179,6 +182,7 @@ function filtersFromSearchParams(params: URLSearchParams): RequestQuery {
     media_type: value("media_type"),
     delivery_mode: value("delivery_mode"),
     error_code: value("error_code"),
+    pin: value("pin"),
     since: value("since"),
     until: value("until"),
   };
@@ -503,6 +507,26 @@ export function RequestsListPage() {
       key: "bot",
       render: (_, row) => <Text>{botLabel(row.bot_id, row.bot_username)}</Text>,
     },
+    {
+      title: "置顶",
+      dataIndex: "pin",
+      key: "pin",
+      width: 64,
+      render: (pin: boolean, row) =>
+        pin ? (
+          <Tooltip
+            title={
+              row.status === "succeeded"
+                ? row.pin_total > 0
+                  ? `已置顶 ${row.pin_ok}/${row.pin_total} 个目标`
+                  : "无置顶结果（无媒体副本或完成时未绑定）"
+                : "完成后自动置顶到绑定频道/群组"
+            }
+          >
+            <Tag color="gold">📌</Tag>
+          </Tooltip>
+        ) : null,
+    },
     { title: "请求时间", dataIndex: "requested_at", key: "requested_at", render: fmtTime },
     { title: "耗时", dataIndex: "duration_ms", key: "duration", render: fmtDuration },
     {
@@ -643,6 +667,18 @@ export function RequestsListPage() {
                 className="field-width-110"
                 virtual={false}
                 options={[{ value: "", label: "全部" }, ...DELIVERY_MODE_OPTIONS]}
+              />
+            </Form.Item>
+            <Form.Item name="pin">
+              <Select
+                placeholder="置顶"
+                allowClear
+                className="field-width-110"
+                virtual={false}
+                options={[
+                  { value: "", label: "全部" },
+                  { value: "1", label: "仅置顶任务" },
+                ]}
               />
             </Form.Item>
             <Form.Item name="error_code">

@@ -200,14 +200,14 @@ func TestBindVerificationFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("目标不是频道", func(t *testing.T) {
-		b, _ := newTestBot(t, `{"id":-1001,"type":"supergroup","title":"群"}`, adminMemberJSON, http.StatusOK)
+	t.Run("普通群仍拒绝（仅频道/超级群组可绑定）", func(t *testing.T) {
+		b, _ := newTestBot(t, `{"id":-1001,"type":"group","title":"普通群"}`, adminMemberJSON, http.StatusOK)
 		svc, _ := New(Options{Store: s, Log: testLog()})
 		svc.SetBots([]*tgbot.Bot{b})
 		_, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1001", Via: store.BoundViaBot})
 		var ae *apperr.AppError
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelTargetInvalid {
-			t.Fatalf("群组应返回 CHANNEL_TARGET_INVALID，得到 %v", err)
+			t.Fatalf("普通群应返回 CHANNEL_TARGET_INVALID，得到 %v", err)
 		}
 	})
 
@@ -277,7 +277,7 @@ func TestCopyToChannelsNoBotIsNoop(t *testing.T) {
 	s := openStore(t)
 	svc, _ := New(Options{Store: s, Log: testLog()})
 	// bot 未注入 & 无绑定：不得 panic
-	svc.CopyToChannels(context.Background(), 0, 1, 1, []int{1, 2})
+	svc.CopyToChannels(context.Background(), 0, 1, 1, []int{1, 2}, false)
 }
 
 const privateChatJSON = `{"id":-1009876543210,"type":"channel","title":"私有频道"}`

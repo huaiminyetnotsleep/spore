@@ -63,6 +63,7 @@ function detail(overrides: Partial<UserDetail>): UserDetail {
     effective_bind_limit: 1,
     cloud_download: 0,
     effective_cloud_download: false,
+    auto_pin: false,
     total_requests: 12,
     ...overrides,
   };

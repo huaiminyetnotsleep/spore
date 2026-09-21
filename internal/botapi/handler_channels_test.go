@@ -25,6 +25,7 @@ type fakeChannels struct {
 	unbindResult store.ChannelBinding
 	unbindErr    error
 	listResult   []store.ChannelBinding
+	hintResult   string
 }
 
 func (f *fakeChannels) BindBot(_ context.Context, userID int64, target string) (store.ChannelBinding, error) {
@@ -47,6 +48,12 @@ func (f *fakeChannels) ListByUser(_ context.Context, _ int64) ([]store.ChannelBi
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.listResult, nil
+}
+
+func (f *fakeChannels) PinCapabilityHint(_ context.Context, _ int64) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hintResult
 }
 
 func channelsHarness(t *testing.T) (Options, *fakeAccess, *fakeChannels, *fakeSender) {

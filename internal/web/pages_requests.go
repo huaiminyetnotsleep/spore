@@ -26,6 +26,7 @@ type requestFilterForm struct {
 	MediaType    string
 	DeliveryMode string
 	ErrorCode    string
+	Pin          string
 	Since        string
 	Until        string
 }
@@ -40,6 +41,7 @@ func buildRequestFilter(r *http.Request, loc *time.Location) (store.RequestFilte
 		MediaType:    r.URL.Query().Get("media_type"),
 		DeliveryMode: r.URL.Query().Get("delivery_mode"),
 		ErrorCode:    r.URL.Query().Get("error_code"),
+		Pin:          r.URL.Query().Get("pin"),
 	}
 	tr, err := parseTimeRange(r, loc)
 	if err != nil {
@@ -50,6 +52,10 @@ func buildRequestFilter(r *http.Request, loc *time.Location) (store.RequestFilte
 	f := store.RequestFilter{Status: form.Status, ChannelKey: form.Channel,
 		MediaType: form.MediaType, DeliveryMode: form.DeliveryMode,
 		ErrorCode: form.ErrorCode, Since: tr.Since, Until: tr.Until}
+	// 仅置顶任务筛选：仅接受 pin=1（"仅非置顶"无业务价值，其余取值忽略）
+	if form.Pin == "1" {
+		f.OnlyPin = true
+	}
 	if form.UserID != "" {
 		id, err := strconv.ParseInt(form.UserID, 10, 64)
 		if err != nil || id <= 0 {

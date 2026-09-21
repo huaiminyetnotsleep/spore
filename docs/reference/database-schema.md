@@ -42,7 +42,7 @@
 
 ## 2. Schema 总览
 
-当前版本 v19 包含 **16 张业务表、16 个显式索引、4 个数据库外键**：
+当前版本 v20 包含 **16 张业务表、16 个显式索引、4 个数据库外键**：
 
 - 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
 - `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`）自动维护的内部表，**不属于业务 schema**。
@@ -94,6 +94,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `cloud_download` | INTEGER | NOT NULL DEFAULT 0 | 云盘下载权限三态（v11）：0 = 跟随角色默认（owner 允许 / 普通拒绝），1 = 显式允许，2 = 显式拒绝；与全局开关是 AND 关系 |
 | `source_bot_id` | INTEGER | NOT NULL DEFAULT 0 | 来源 bot 数字 ID（v15，首次 `/start` 的受理 bot）；0 = 存量行或 Web 手动添加 |
 | `source_bot_username` | TEXT | NOT NULL DEFAULT '' | 来源 bot 用户名快照（v15，展示自持，bot 移出池后仍可读） |
+| `auto_pin` | INTEGER | NOT NULL DEFAULT 0 | 自动置顶偏好（v20）：1 = 该用户的普通任务提交即默认标记置顶（云盘/缓存补写任务不适用） |
 
 ### 3.2 requests
 
@@ -126,6 +127,9 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `sent_message_ids_json` | TEXT | NOT NULL DEFAULT '' | **遗留列**（v12）：同上，已发送消息 ID 数组；被 `dump_entries` 方案取代 |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 受理 bot 数字 ID（v15）；0 = 存量行或非 Bot 通道创建 |
 | `bot_username` | TEXT | NOT NULL DEFAULT '' | 受理 bot 用户名快照（v15） |
+| `pin` | INTEGER | NOT NULL DEFAULT 0 | 自动置顶标记（v20）：1 = 任务成功后需在用户绑定的频道/群组置顶副本组首（`/pin <链接>` 单次指定或用户 `auto_pin` 偏好） |
+| `pin_ok` | INTEGER | NOT NULL DEFAULT 0 | 置顶成功的目标数（v20，worker 收尾回写）；重试时清零 |
+| `pin_total` | INTEGER | NOT NULL DEFAULT 0 | 参与置顶的目标总数（v20，worker 收尾回写）；重试时清零 |
 
 进程退出中断的 `queued`/`processing` 行在下次启动被批量置 `failed(INTERRUPTED)`。
 
@@ -525,3 +529,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v17 | `watch_sources` 监听源配置与申请审批表 |
 | v18 | 重建 `watch_sources` 补齐类型/受理 bot 字段；新增 `watch_events` 与频道索引 |
 | v19 | `watch_invite_requests` 私有邀请链接监听申请表（管理员路径 `user_id=0`，无外键）及活动状态、用户与 hash 索引 |
+| v20 | `requests.pin`、`requests.pin_ok`、`requests.pin_total`；`users.auto_pin`（自动置顶标记、结果回写与用户级偏好） |

@@ -7,7 +7,7 @@
  * 一致的二次确认；提交中防重复点击，失败展示服务端受控文案。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Button, Descriptions, Form, InputNumber, Select, Spin, Tag, Typography } from "antd";
+import { Button, Descriptions, Form, InputNumber, Select, Space, Spin, Switch, Tag, Typography } from "antd";
 import type { InputNumberProps } from "antd";
 import type { ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -16,6 +16,7 @@ import { fetchUserDetail } from "../../api/admin";
 import {
   refreshUserProfile,
   resetUserQuota,
+  setUserAutoPin,
   setUserCloudDownload,
   setUserOwner,
   setUserStatus,
@@ -106,6 +107,15 @@ export function UserDetailPage() {
       result.effective_cloud_download
         ? "云盘下载权限已更新：当前允许该用户使用 /download。"
         : "云盘下载权限已更新：该用户使用 /download 将被拒绝。",
+  });
+
+  const autoPin = useAdminAction({
+    action: (vars: { userId: number; on: boolean }) => setUserAutoPin(vars.userId, vars.on),
+    invalidate: [["users"]],
+    successText: (result) =>
+      result.auto_pin
+        ? "已开启自动置顶：该用户的普通任务提交即默认置顶。"
+        : "已关闭自动置顶。",
   });
 
   /**
@@ -313,6 +323,23 @@ export function UserDetailPage() {
                   </Button>
                 </FormActions>
               </Form>
+            </PageSection>
+
+            <PageSection title="自动置顶">
+              <Space direction="vertical" size={4}>
+                <Space>
+                  <Switch
+                    aria-label="自动置顶"
+                    checked={detail.auto_pin}
+                    loading={autoPin.pending}
+                    onChange={(checked) => autoPin.run({ userId: userIdNum, on: checked })}
+                  />
+                  <Text strong>{detail.auto_pin ? "已开启" : "已关闭"}</Text>
+                </Space>
+                <Text type="secondary">
+                  开启后该用户的普通任务提交即默认置顶到其绑定频道/群组；/pin 单次指定不受影响，云盘/缓存补写任务不适用。
+                </Text>
+              </Space>
             </PageSection>
 
             <PageSection title="操作">

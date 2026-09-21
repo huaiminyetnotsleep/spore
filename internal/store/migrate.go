@@ -369,6 +369,15 @@ CREATE INDEX IF NOT EXISTS idx_watch_events_channel ON watch_events(channel_id, 
 
 	CREATE INDEX idx_watch_invite_requests_hash_active
 	ON watch_invite_requests(invite_hash, status);`,
+
+	// v20：自动置顶——requests.pin 标记任务成功后是否需要在用户绑定的
+	// 频道/群组置顶副本组首（/pin <链接> 单次指定或用户 auto_pin 偏好），
+	// pin_ok/pin_total 由 worker 收尾回写置顶结果（成功数/参与置顶的目标
+	// 总数，供管理端详情展示）；users.auto_pin 是用户级偏好开关。
+	`ALTER TABLE requests ADD COLUMN pin INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE requests ADD COLUMN pin_ok INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE requests ADD COLUMN pin_total INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN auto_pin INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

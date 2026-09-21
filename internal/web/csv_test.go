@@ -63,7 +63,14 @@ func TestRequestsCSV(t *testing.T) {
 	if rows[0][11] != "机器人" || rows[1][11] != "" {
 		t.Fatalf("机器人列不符：%v", rows)
 	}
-	if rows[1][8] != "album" || rows[1][13] != "cat.jpg" || rows[0][18] != "媒体内容类型" || rows[1][18] != "photo+video" {
+	// v20 置顶列：非置顶行两列均为空
+	if rows[0][12] != "自动置顶" || rows[1][12] != "" {
+		t.Fatalf("自动置顶列不符：%v", rows)
+	}
+	if rows[0][13] != "置顶结果" || rows[1][13] != "" {
+		t.Fatalf("置顶结果列不符：%v", rows)
+	}
+	if rows[1][8] != "album" || rows[1][15] != "cat.jpg" || rows[0][20] != "媒体内容类型" || rows[1][20] != "photo+video" {
 		t.Fatalf("媒体元数据不符：%v", rows[1])
 	}
 	if !e.containsAction("export.requests") {

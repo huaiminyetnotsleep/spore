@@ -252,6 +252,21 @@ export function RequestDetailPage() {
                 <Descriptions.Item label="受理机器人">
                   {botLabel(detail.bot_id, detail.bot_username)}
                 </Descriptions.Item>
+                {detail.pin ? (
+                  <Descriptions.Item label="自动置顶">
+                    {detail.status === "succeeded" ? (
+                      detail.pin_total > 0 ? (
+                        <Text>
+                          📌 已置顶 {detail.pin_ok}/{detail.pin_total} 个目标
+                        </Text>
+                      ) : (
+                        <Text type="secondary">📌 无置顶结果（无媒体副本或完成时未绑定）</Text>
+                      )
+                    ) : (
+                      <Text type="secondary">📌 完成后自动置顶到绑定频道/群组</Text>
+                    )}
+                  </Descriptions.Item>
+                ) : null}
                 {detail.parent_request_id ? (
                   <Descriptions.Item label="补存来源">
                     <Link to={`/requests/${detail.parent_request_id}`}>

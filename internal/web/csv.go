@@ -107,7 +107,7 @@ func (s *Server) handleRequestsCSV(w http.ResponseWriter, r *http.Request, sess 
 	loc := s.tz(ctx)
 	cw := newCSVResponse(w, "requests.csv", truncated, []string{
 		"ID", "用户ID", "频道标识", "消息ID", "来源", "状态", "尝试次数", "错误码",
-		"媒体类型", "源媒体DC", "投递方式", "机器人", "文件大小(字节)", "文件名", "请求时间", "完成时间", "耗时(毫秒)", "message_url", "媒体内容类型",
+		"媒体类型", "源媒体DC", "投递方式", "机器人", "自动置顶", "置顶结果", "文件大小(字节)", "文件名", "请求时间", "完成时间", "耗时(毫秒)", "message_url", "媒体内容类型",
 	})
 	written := 0
 	offset := 0
@@ -139,6 +139,8 @@ func (s *Server) handleRequestsCSV(w http.ResponseWriter, r *http.Request, sess 
 				sourceMediaDCText(rq.SourceMediaDCIDs),
 				deliveryModeText(rq.DeliveryMode),
 				botDisplay(rq.BotID, rq.BotUsername),
+				pinMark(rq.Pin),
+				pinResultText(rq.Pin, rq.PinOK, rq.PinTotal),
 				strconv.FormatInt(rq.FileSize, 10),
 				rq.FileName,
 				fmtTime(rq.RequestedAt, loc),
@@ -171,6 +173,23 @@ func botDisplay(botID int64, username string) string {
 		return "@" + username
 	}
 	return strconv.FormatInt(botID, 10)
+}
+
+// pinMark 渲染自动置顶标记列：pin 任务显示"是"，其余留空。
+func pinMark(pin bool) string {
+	if pin {
+		return "是"
+	}
+	return ""
+}
+
+// pinResultText 渲染置顶结果列：非 pin 行留空；pin 行为"成功/总数"
+// （0/0 表示未产生副本——纯文本任务或完成时无绑定）。
+func pinResultText(pin bool, ok, total int) string {
+	if !pin {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", ok, total)
 }
 
 // sourceKindText 把来源类型转为中文。
