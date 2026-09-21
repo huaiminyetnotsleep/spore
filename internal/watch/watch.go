@@ -26,6 +26,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
+	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
@@ -34,6 +35,14 @@ import (
 // verifyTimeout 是一次源校验（GetChat + GetChatMember）的时间窗。
 const verifyTimeout = 20 * time.Second
 
+// botClient 是源校验所需的最小 Bot API 只读能力（*tgbot.Bot 结构性满足；
+// 独立成接口便于用假客户端测试管理员校验逻辑）。
+type botClient interface {
+	ID() int64
+	GetChat(ctx context.Context, params *tgbot.GetChatParams) (*models.ChatFullInfo, error)
+	GetChatMember(ctx context.Context, params *tgbot.GetChatMemberParams) (*models.ChatMember, error)
+}
+
 // Notifier 向用户私聊发送审批结果通知（joinmgr.SenderNotifier 结构性满足
 // 本接口；nil 表示不通知）。
 type Notifier interface {
@@ -41,24 +50,30 @@ type Notifier interface {
 }
 
 // Service 管理监听源生命周期。Bot 客户端与通知通道在装配层 Bot 就绪后
-// 经 SetBots / SetNotifier 注入（与 binding / joinmgr 同款模式）。
+// 经 SetBots / SetNotifier 注入（与 binding / joinmgr 同款模式）；私有邀请
+// 能力经 Options.Membership 注入（生产为 mtproto.MembershipBridge）。
 type Service struct {
-	st  *store.Store
-	log *slog.Logger
-	now func() time.Time
+	st      *store.Store
+	member  Membership
+	log     *slog.Logger
+	now     func() time.Time
+	reconMu sync.Mutex // 邀请申请对账互斥：周期循环与手动重试不并发执行
 
-	botMu sync.RWMutex
-	bots  []*tgbot.Bot
+	botMu      sync.RWMutex
+	bots       []*tgbot.Bot
+	botClients []botClient
 
 	notifyMu sync.RWMutex
 	notify   Notifier
 }
 
-// Options 构造参数；Store 必填。
+// Options 构造参数；Store 必填。Membership 缺省时私有邀请链接按普通
+// 无法识别目标处理（tests/裁剪部署可省）。
 type Options struct {
-	Store *store.Store
-	Log   *slog.Logger
-	Now   func() time.Time
+	Store      *store.Store
+	Membership Membership
+	Log        *slog.Logger
+	Now        func() time.Time
 }
 
 // New 创建服务。
@@ -72,7 +87,7 @@ func New(opt Options) (*Service, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	return &Service{st: opt.Store, log: opt.Log, now: opt.Now}, nil
+	return &Service{st: opt.Store, member: opt.Membership, log: opt.Log, now: opt.Now}, nil
 }
 
 // SetBots 注入 Bot 客户端列表（主 bot 在前）。
@@ -80,6 +95,10 @@ func (s *Service) SetBots(bots []*tgbot.Bot) {
 	s.botMu.Lock()
 	defer s.botMu.Unlock()
 	s.bots = bots
+	s.botClients = make([]botClient, len(bots))
+	for i, b := range bots {
+		s.botClients[i] = b
+	}
 }
 
 // SetNotifier 注入审批结果通知通道。
@@ -93,6 +112,13 @@ func (s *Service) currentBots() []*tgbot.Bot {
 	s.botMu.RLock()
 	defer s.botMu.RUnlock()
 	return s.bots
+}
+
+// currentBotClients 返回校验用的最小 Bot API 客户端列表（与 bots 同序）。
+func (s *Service) currentBotClients() []botClient {
+	s.botMu.RLock()
+	defer s.botMu.RUnlock()
+	return s.botClients
 }
 
 // SubmitOutcomeKind 是 /watch 提交的业务结果枚举（botapi 据此生成文案）。
@@ -109,7 +135,21 @@ const (
 	SubmitSourceLimit    SubmitOutcomeKind = "source_limit"     // 超出监听源总数上限
 	SubmitPending        SubmitOutcomeKind = "pending"          // 已提交待审批
 	SubmitActive         SubmitOutcomeKind = "active"           // 已生效（免审批/号主/管理员路径）
+	// 私有邀请链接申请（t.me/+hash 等）的附加结果。
+	SubmitInvitePending         SubmitOutcomeKind = "invite_pending"          // 邀请申请已提交，待系统审批
+	SubmitInviteWaitingTelegram SubmitOutcomeKind = "invite_waiting_telegram" // 等待频道侧审核或读取账号可用
+	SubmitInviteWaitingBot      SubmitOutcomeKind = "invite_waiting_bot"      // 读取账号已加入，等待 Bot 被人工设为管理员
+	SubmitInviteInvalid         SubmitOutcomeKind = "invite_invalid"          // 邀请无效/过期/指向普通群组
+	SubmitReaderUnavailable     SubmitOutcomeKind = "reader_unavailable"      // MTProto 读取账号暂不可用
 )
+
+// Membership 是私有邀请流程所需的最小 MTProto 能力（生产为
+// mtproto.MembershipBridge；离线时返回 mtproto.ErrMembershipUnavailable）。
+// 注意 Telegram 平台边界：邀请只能让读取账号加入，Bot 无法经邀请入群。
+type Membership interface {
+	CheckInvite(ctx context.Context, hash string) (mtproto.InviteInfo, error)
+	JoinInvite(ctx context.Context, hash string, opts mtproto.JoinOptions) (channelID int64, title string, alreadyJoined bool, err error)
+}
 
 // SubmitOutcome 描述一次 /watch 提交的结果。
 type SubmitOutcome struct {
@@ -143,6 +183,11 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 			return SubmitOutcome{Kind: SubmitUserNotAllowed}, nil
 		}
 	}
+	// 私有邀请链接分流（仅链接形态；裸 hash 会与公开用户名冲突，不识别）。
+	// 邀请只能让读取账号加入，Bot 管理员前提在激活阶段校验。
+	if hash, ok := tmeurl.ParseInviteLink(target); ok {
+		return s.submitInvite(ctx, userID, isOwner, hash, botID, botUsername, cfg)
+	}
 	chat, err := s.verifyTarget(ctx, target)
 	if err != nil {
 		switch apperr.From(err).Code {
@@ -153,7 +198,6 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 		}
 		return SubmitOutcome{}, err
 	}
-
 	// 查重：本人幂等刷新；他人（含管理员）已添加则拒绝。
 	existing, err := s.st.GetWatchSource(ctx, chat.ID)
 	switch {
@@ -209,12 +253,24 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 	return SubmitOutcome{Kind: kind, Title: chat.Title, Channel: row}, nil
 }
 
+// AdminAddResult 是管理员添加的结果：target 为普通标识时返回激活的
+// Source；target 为私有邀请链接时返回 InviteRequest（可能已在等待状态，
+// 也可能已随激活产出 Source）。
+type AdminAddResult struct {
+	Source        *store.WatchSource        `json:"source,omitempty"`
+	InviteRequest *store.WatchInviteRequest `json:"invite_request,omitempty"`
+}
+
 // AdminAdd 管理员 Web 直接添加：不做用户准入/上限/审批（天然 approved）。
-// enabled 供管理员以停用态预录入。
-func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bool) (store.WatchSource, error) {
+// enabled 供管理员以停用态预录入。target 也可以是私有邀请链接：走邀请
+// 流程（读取账号加入 → Bot 校验），返回对应的申请或激活结果。
+func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bool) (AdminAddResult, error) {
+	if hash, ok := tmeurl.ParseInviteLink(target); ok {
+		return s.adminAddInvite(ctx, actor, hash, enabled)
+	}
 	chat, err := s.verifyTarget(ctx, target)
 	if err != nil {
-		return store.WatchSource{}, err
+		return AdminAddResult{}, err
 	}
 	row, err := s.st.UpsertWatchSource(ctx, store.WatchSource{
 		ChannelID:  chat.ID,
@@ -227,10 +283,10 @@ func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bo
 		ReviewedBy: actor,
 	})
 	if err != nil {
-		return store.WatchSource{}, err
+		return AdminAddResult{}, err
 	}
 	s.log.Info("监听源已由管理员添加", "channel_id", chat.ID, "actor", actor)
-	return row, nil
+	return AdminAddResult{Source: &row}, nil
 }
 
 // verifyTarget 解析并校验源目标：频道或超级群组，且 bot（主 bot 校验）
@@ -240,7 +296,7 @@ func (s *Service) verifyTarget(ctx context.Context, target string) (models.ChatF
 	if err != nil {
 		return models.ChatFullInfo{}, err
 	}
-	bots := s.currentBots()
+	bots := s.currentBotClients()
 	if len(bots) == 0 {
 		return models.ChatFullInfo{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
 	}
@@ -251,23 +307,45 @@ func (s *Service) verifyTarget(ctx context.Context, target string) (models.ChatF
 		// bot 看不见目标聊天 = 不在其中，统一按"需先拉 bot 为管理员"提示
 		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
 	}
+	return s.verifyChatAdmin(vctx, bots[0], *chat)
+}
+
+// verifyChatAdmin 校验 chat 类型与 bot 管理员身份：频道/超级群组 + owner/
+// administrator 才可通过（管理员身份绕过群组 privacy mode，保证能收到
+// 全部消息）。私有邀请激活路径按已解析的 channel ID 复用同一校验。
+func (s *Service) verifyChatAdmin(ctx context.Context, b botClient, chat models.ChatFullInfo) (models.ChatFullInfo, error) {
 	if chat.Type != models.ChatTypeChannel && chat.Type != models.ChatTypeSupergroup {
 		return models.ChatFullInfo{}, apperr.New(apperr.CodeChannelTargetInvalid,
 			fmt.Sprintf("目标不是频道或超级群组（type=%s）", chat.Type))
 	}
-	botID := bots[0].ID()
-	member, err := bots[0].GetChatMember(vctx, &tgbot.GetChatMemberParams{ChatID: chat.ID, UserID: botID})
+	member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chat.ID, UserID: b.ID()})
 	if err != nil {
 		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
 	}
 	switch member.Type {
 	case models.ChatMemberTypeOwner, models.ChatMemberTypeAdministrator:
-		return *chat, nil
+		return chat, nil
 	}
-	// 管理员身份绕过群组 privacy mode，保证能收到全部消息；成员身份在
-	// privacy on 下会静默收不到，配置期即拒绝。
+	// 成员身份在 privacy on 下会静默收不到，配置期即拒绝。
 	return models.ChatFullInfo{}, apperr.New(apperr.CodeChannelNotPostable,
 		"机器人不是该聊天的管理员（请先把我加为频道/群管理员）")
+}
+
+// verifyBotAdmin 按 Bot API 频道 ID（-100 形态）校验主 Bot 的管理员身份，
+// 返回 GetChat 结果。失败统一归为 CodeChannelNotPostable（邀请激活路径
+// 据此转入 waiting_bot）。
+func (s *Service) verifyBotAdmin(ctx context.Context, channelID int64) (models.ChatFullInfo, error) {
+	bots := s.currentBotClients()
+	if len(bots) == 0 {
+		return models.ChatFullInfo{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
+	}
+	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+	chat, err := bots[0].GetChat(vctx, &tgbot.GetChatParams{ChatID: channelID})
+	if err != nil {
+		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+	}
+	return s.verifyChatAdmin(vctx, bots[0], *chat)
 }
 
 // Unwatch 用户移除自己的监听源（任意状态）；目标不存在或不属于该用户

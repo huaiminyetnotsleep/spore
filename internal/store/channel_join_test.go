@@ -268,19 +268,21 @@ func TestTallyJoinedChannelsActiveLeftBySource(t *testing.T) {
 	mustJoinUser(t, s, 100)
 
 	seed := []JoinedChannelRecord{
-		{ChannelID: 1, JoinedVia: JoinedViaCommand, JoinedBy: 100},  // 在加入
-		{ChannelID: 2, JoinedVia: JoinedViaCommand, JoinedBy: 100},  // 退出后留痕
-		{ChannelID: 3, JoinedVia: JoinedViaApproved, JoinedBy: 100}, // 在加入
-		{ChannelID: 4, JoinedVia: JoinedViaApproved, JoinedBy: 100}, // 退出
-		{ChannelID: 5, JoinedVia: JoinedViaApproved, JoinedBy: 100}, // 退出
-		{ChannelID: 6, JoinedVia: JoinedViaExternal},                // 外部在加入
+		{ChannelID: 1, JoinedVia: JoinedViaCommand, JoinedBy: 100},     // 在加入
+		{ChannelID: 2, JoinedVia: JoinedViaCommand, JoinedBy: 100},     // 退出后留痕
+		{ChannelID: 3, JoinedVia: JoinedViaApproved, JoinedBy: 100},    // 在加入
+		{ChannelID: 4, JoinedVia: JoinedViaApproved, JoinedBy: 100},    // 退出
+		{ChannelID: 5, JoinedVia: JoinedViaApproved, JoinedBy: 100},    // 退出
+		{ChannelID: 6, JoinedVia: JoinedViaExternal},                   // 外部在加入
+		{ChannelID: 7, JoinedVia: JoinedViaWatchSource, JoinedBy: 100}, // 监听源在加入
+		{ChannelID: 8, JoinedVia: JoinedViaWatchSource, JoinedBy: 100}, // 监听源退出
 	}
 	for _, r := range seed {
 		if err := s.UpsertJoinedChannel(ctx, r); err != nil {
 			t.Fatalf("写入留痕失败: %v", err)
 		}
 	}
-	if _, err := s.MarkJoinedChannelsLeft(ctx, []int64{2, 4, 5}, nowMillis()); err != nil {
+	if _, err := s.MarkJoinedChannelsLeft(ctx, []int64{2, 4, 5, 8}, nowMillis()); err != nil {
 		t.Fatalf("标记退出失败: %v", err)
 	}
 
@@ -292,11 +294,12 @@ func TestTallyJoinedChannelsActiveLeftBySource(t *testing.T) {
 		CommandActive: 1, CommandLeft: 1,
 		ApprovedActive: 1, ApprovedLeft: 2,
 		ExternalActive: 1, ExternalLeft: 0,
+		WatchSourceActive: 1, WatchSourceLeft: 1,
 	}
 	if got != want {
 		t.Fatalf("来源计数不符: 得到 %+v，期望 %+v", got, want)
 	}
-	if got.Active() != 3 || got.Left() != 3 {
+	if got.Active() != 4 || got.Left() != 4 {
 		t.Fatalf("合计口径不符: active=%d left=%d", got.Active(), got.Left())
 	}
 }

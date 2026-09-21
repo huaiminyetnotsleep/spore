@@ -53,6 +53,25 @@ func TestValidateBackupRejectsMissingVersionedRequestColumn(t *testing.T) {
 	}
 }
 
+func TestValidateBackupRejectsMissingWatchInviteRequestsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-v19.db")
+	s, err := Open(context.Background(), path, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(context.Background(), "DROP TABLE watch_invite_requests"); err != nil {
+		t.Fatalf("构造缺表备份失败: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateBackup(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "watch_invite_requests") {
+		t.Fatalf("v19 备份缺少 watch_invite_requests 应被拒绝，得到 %v", err)
+	}
+}
+
 func TestApplyPendingImportPreservesSettingsAndClearsSessions(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")

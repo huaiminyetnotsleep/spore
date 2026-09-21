@@ -526,7 +526,7 @@ func ParseChannelTarget(raw string) (ChannelTarget, error) {
 			if err != nil || id <= 0 {
 				return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "私有频道链接的频道 ID 非法")
 			}
-			return ChannelTarget{ChannelID: botChannelID(id)}, nil
+			return ChannelTarget{ChannelID: BotChannelID(id)}, nil
 		}
 		if len(seg) != 1 || seg[0] == "" {
 			return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "请发送频道链接，而不是消息链接")
@@ -544,7 +544,7 @@ func ParseChannelTarget(raw string) (ChannelTarget, error) {
 			return ChannelTarget{ChannelID: id}, nil // 约定 -100… 形态
 		case id > 0 && digitsOf(id) >= 10:
 			// 正整数按频道内部 ID 处理：Bot API 频道 ID = -100 前缀 + 内部 ID
-			return ChannelTarget{ChannelID: botChannelID(id)}, nil
+			return ChannelTarget{ChannelID: BotChannelID(id)}, nil
 		}
 	}
 
@@ -571,7 +571,11 @@ func splitTMe(s string) (host, rest string, ok bool) {
 	if parts[0] != "c" {
 		return "", rest, true
 	}
-	// 私有频道：返回去掉 c 段后的剩余路径（<internal_id>[/<message_id>]）
+	// 私有频道：返回去掉 c 段后的剩余路径（<internal_id>[/<message_id>]）；
+	// 只有 "t.me/c" 本身时剩余路径为空，由调用方按 ID 非法拒绝
+	if len(parts) < 2 {
+		return "c", "", true
+	}
 	return "c", parts[1], true
 }
 
@@ -592,9 +596,11 @@ func isValidUsername(s string) bool {
 	return true
 }
 
-// botChannelID 把频道内部 ID（t.me/c/ 链接中的数字）归一为 Bot API 的
-// 频道数字 ID：-100 前缀 + 内部 ID 十进制串（如 1234567890 → -1001234567890）。
-func botChannelID(internal int64) int64 {
+// BotChannelID 把频道内部 ID（t.me/c/ 链接、MTProto 裸正 ID 共用形态）归一
+// 为 Bot API 的频道数字 ID：-100 前缀 + 内部 ID 十进制串
+// （如 1234567890 → -1001234567890）。导出供 watch 等把 MTProto 加入结果
+// 转为 Bot API ID 的模块共用。
+func BotChannelID(internal int64) int64 {
 	mul := int64(1)
 	for n := internal; n > 0; n /= 10 {
 		mul *= 10

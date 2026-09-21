@@ -28,13 +28,19 @@ func (s *Server) apiRequireWatch(w http.ResponseWriter, r *http.Request, op stri
 }
 
 // handleAPIWatchSourcesList 返回全部监听源（含各状态、申请人资料与预热
-// 统计）。待审批（pending）排最前，其余按添加时间倒序。
+// 统计）与全部私有邀请链接申请。监听源 pending 优先，其余按添加时间倒序；
+// 邀请申请同序规则（store.ListWatchInviteRequests）。
 func (s *Server) handleAPIWatchSourcesList(w http.ResponseWriter, r *http.Request, _ session) {
 	const op = "api.watch_sources.list"
 	if !s.apiRequireWatch(w, r, op) {
 		return
 	}
 	rows, err := s.watch.ListAll(r.Context())
+	if err != nil {
+		s.writeAPIAppErr(w, r, op, err)
+		return
+	}
+	invites, err := s.watch.ListInviteRequests(r.Context())
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
 		return
@@ -50,13 +56,15 @@ func (s *Server) handleAPIWatchSourcesList(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	writeAPIJSON(w, http.StatusOK, struct {
-		Items []any `json:"items"`
-	}{append(pending, others...)})
+		Items          []any                      `json:"items"`
+		InviteRequests []store.WatchInviteRequest `json:"invite_requests"`
+	}{append(pending, others...), invites})
 }
 
 // handleAPIWatchSourcesAdd 管理员直接添加监听源：body 为 {"target": "...",
-// "enabled": true}。不走用户准入/上限/审批（天然 approved）；源校验失败
-// （bot 不在源内或非管理员）返回受控 400。
+// "enabled": true}。不走用户准入/上限/审批；普通标识天然 approved，私有
+// 邀请链接返回申请（可能处于等待态或已随激活产出 source）。源校验失败
+// 返回受控 4xx，读取账号离线返回受控 503。
 func (s *Server) handleAPIWatchSourcesAdd(w http.ResponseWriter, r *http.Request, sess session) {
 	const op = "api.watch_sources.add"
 	if !s.apiRequireWatch(w, r, op) {
@@ -77,17 +85,122 @@ func (s *Server) handleAPIWatchSourcesAdd(w http.ResponseWriter, r *http.Request
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	row, err := s.watch.AdminAdd(r.Context(), sess.idHash, in.Target, enabled)
+	out, err := s.watch.AdminAdd(r.Context(), sess.idHash, in.Target, enabled)
 	if err != nil {
 		s.writeAPIAppErr(w, r, op, err)
 		return
 	}
-	s.audit(r.Context(), "watch_source.add", "channel:"+strconv.FormatInt(row.ChannelID, 10),
-		map[string]any{"title": row.Title, "username": row.Username, "enabled": row.Enabled})
+	// 审计不含完整邀请链接：邀请路径只记录申请 ID、脱敏 hash 与状态
+	if out.Source != nil {
+		s.audit(r.Context(), "watch_source.add", "channel:"+strconv.FormatInt(out.Source.ChannelID, 10),
+			map[string]any{"title": out.Source.Title, "username": out.Source.Username, "enabled": out.Source.Enabled})
+	} else if out.InviteRequest != nil {
+		s.audit(r.Context(), "watch_source.add_invite", "watch_invite_request:"+strconv.FormatInt(out.InviteRequest.ID, 10),
+			map[string]any{"masked_hash": out.InviteRequest.MaskedHash, "status": out.InviteRequest.Status, "enabled": enabled})
+	}
 	writeAPIJSON(w, http.StatusOK, struct {
 		apiWriteOK
-		Source store.WatchSource `json:"source"`
-	}{apiWriteOK{OK: true}, row})
+		Source        *store.WatchSource        `json:"source,omitempty"`
+		InviteRequest *store.WatchInviteRequest `json:"invite_request,omitempty"`
+	}{apiWriteOK{OK: true}, out.Source, out.InviteRequest})
+}
+
+// handleAPIWatchInviteReview 是邀请申请审批端点（approve=true 同意并推进
+// 状态机 / false 拒绝）。响应返回最新申请与激活产出的源（未激活为 null）。
+func (s *Server) handleAPIWatchInviteReview(approve bool) sessionHandler {
+	return func(w http.ResponseWriter, r *http.Request, sess session) {
+		op := "api.watch_invite_requests.approve"
+		if !approve {
+			op = "api.watch_invite_requests.reject"
+		}
+		if !s.apiRequireWatch(w, r, op) {
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id == 0 {
+			s.apiBadRequest(w, r, op, "路径中的申请 ID 无效。")
+			return
+		}
+		var (
+			req     store.WatchInviteRequest
+			src     *store.WatchSource
+			auditOp string
+		)
+		if approve {
+			req, src, err = s.watch.ApproveInviteRequest(r.Context(), sess.idHash, id)
+			auditOp = "watch_invite_request.approve"
+		} else {
+			req, err = s.watch.RejectInviteRequest(r.Context(), sess.idHash, id)
+			auditOp = "watch_invite_request.reject"
+		}
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				s.apiBadRequest(w, r, op, "邀请申请不存在或已被处理。")
+				return
+			}
+			s.writeAPIAppErr(w, r, op, err)
+			return
+		}
+		s.audit(r.Context(), auditOp, "watch_invite_request:"+strconv.FormatInt(id, 10),
+			map[string]any{"status": req.Status})
+		writeAPIJSON(w, http.StatusOK, struct {
+			apiWriteOK
+			InviteRequest store.WatchInviteRequest `json:"invite_request"`
+			Source        *store.WatchSource       `json:"source,omitempty"`
+		}{apiWriteOK{OK: true}, req, src})
+	}
+}
+
+// handleAPIWatchInviteRetry 重试等待/失败中的邀请申请（立即推进一轮）。
+func (s *Server) handleAPIWatchInviteRetry(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.watch_invite_requests.retry"
+	if !s.apiRequireWatch(w, r, op) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		s.apiBadRequest(w, r, op, "路径中的申请 ID 无效。")
+		return
+	}
+	req, src, err := s.watch.RetryInviteRequest(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.apiBadRequest(w, r, op, "邀请申请不存在。")
+			return
+		}
+		s.writeAPIAppErr(w, r, op, err)
+		return
+	}
+	s.audit(r.Context(), "watch_invite_request.retry", "watch_invite_request:"+strconv.FormatInt(id, 10),
+		map[string]any{"status": req.Status})
+	writeAPIJSON(w, http.StatusOK, struct {
+		apiWriteOK
+		InviteRequest store.WatchInviteRequest `json:"invite_request"`
+		Source        *store.WatchSource       `json:"source,omitempty"`
+	}{apiWriteOK{OK: true}, req, src})
+}
+
+// handleAPIWatchInviteDelete 删除邀请申请记录（任意状态硬删除）。
+func (s *Server) handleAPIWatchInviteDelete(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.watch_invite_requests.delete"
+	if !s.apiRequireWatch(w, r, op) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		s.apiBadRequest(w, r, op, "路径中的申请 ID 无效。")
+		return
+	}
+	if err := s.watch.DeleteInviteRequest(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.apiBadRequest(w, r, op, "邀请申请不存在。")
+			return
+		}
+		s.writeAPIAppErr(w, r, op, err)
+		return
+	}
+	s.audit(r.Context(), "watch_invite_request.delete", "watch_invite_request:"+strconv.FormatInt(id, 10), nil)
+	writeAPIJSON(w, http.StatusOK, apiWriteOK{OK: true})
 }
 
 // handleAPIWatchSourceReview 是申请审批端点（approve=true 同意 / false 拒绝）。

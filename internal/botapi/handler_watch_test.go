@@ -20,6 +20,7 @@ type fakeWatch struct {
 	unwatchErr error
 	out        watch.SubmitOutcome
 	rows       []store.WatchSource
+	invites    []store.WatchInviteRequest
 }
 
 func (f *fakeWatch) Submit(_ context.Context, userID int64, isOwner bool, target string, botID int64, botUsername string) (watch.SubmitOutcome, error) {
@@ -38,6 +39,10 @@ func (f *fakeWatch) Unwatch(_ context.Context, userID int64, isOwner bool, targe
 
 func (f *fakeWatch) ListByUser(context.Context, int64) ([]store.WatchSource, error) {
 	return f.rows, nil
+}
+
+func (f *fakeWatch) ListInvitesByUser(context.Context, int64) ([]store.WatchInviteRequest, error) {
+	return f.invites, nil
 }
 
 func TestHandleWatchNoService(t *testing.T) {
@@ -73,6 +78,75 @@ func TestHandleWatchListRendersStatus(t *testing.T) {
 	for _, want := range []string{"频道A", "待审批", "频道B", "监听中", "c3", "已暂停"} {
 		if !strings.Contains(got[0], want) {
 			t.Errorf("列表应包含 %q: %s", want, got[0])
+		}
+	}
+}
+
+func TestHandleWatchListRendersInvites(t *testing.T) {
+	opt, _, snd := newHarness(t, 2)
+	opt.Watch = &fakeWatch{rows: []store.WatchSource{
+		{ChannelID: -1001, Title: "频道A", Status: store.WatchApproved, Enabled: true},
+	}, invites: []store.WatchInviteRequest{
+		{ID: 1, Title: "私有频道", MaskedHash: "AbCd…5678", Status: store.WatchInviteWaitingBot},
+		{ID: 2, MaskedHash: "zzzz…yyyy", Status: store.WatchInvitePending},
+	}}
+	run(opt, snd, "/watch")
+	got := snd.texts()
+	if len(got) != 1 {
+		t.Fatalf("应回复一条列表: %v", got)
+	}
+	for _, want := range []string{"邀请链接申请", "私有频道", "待设 Bot 管理员", "待审批", "zzzz…yyyy"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("列表应包含 %q: %s", want, got[0])
+		}
+	}
+}
+
+func TestHandleWatchInviteListOnlyNoSources(t *testing.T) {
+	opt, _, snd := newHarness(t, 2)
+	opt.Watch = &fakeWatch{invites: []store.WatchInviteRequest{
+		{ID: 1, Title: "私有频道", Status: store.WatchInviteWaitingTelegram},
+	}}
+	run(opt, snd, "/watch")
+	got := snd.texts()
+	if len(got) != 1 || !strings.Contains(got[0], "等待加入频道") {
+		t.Fatalf("仅有邀请申请也应渲染列表: %v", got)
+	}
+}
+
+func TestHandleWatchInviteOutcomes(t *testing.T) {
+	cases := []struct {
+		kind watch.SubmitOutcomeKind
+		want string
+	}{
+		{watch.SubmitInvitePending, "等待管理员审批"},
+		{watch.SubmitInviteWaitingTelegram, "等待频道侧审核"},
+		{watch.SubmitInviteWaitingBot, "管理员"},
+		{watch.SubmitInviteInvalid, "链接无效"},
+		{watch.SubmitReaderUnavailable, "读取账号暂时不可用"},
+	}
+	for _, tc := range cases {
+		opt, _, snd := newHarness(t, 2)
+		opt.Bot = NewBotRef(42, "watcher_bot")
+		opt.Watch = &fakeWatch{out: watch.SubmitOutcome{Kind: tc.kind, Title: "私有源"}}
+		run(opt, snd, "/watch https://t.me/+AbCdEfGh12345678")
+		got := snd.texts()
+		if len(got) != 1 || !strings.Contains(got[0], tc.want) {
+			t.Errorf("%s 应回复含 %q: %v", tc.kind, tc.want, got)
+		}
+	}
+}
+
+func TestHandleWatchInviteOutcomeNoHashLeak(t *testing.T) {
+	opt, _, snd := newHarness(t, 2)
+	opt.Bot = NewBotRef(42, "watcher_bot")
+	opt.Watch = &fakeWatch{out: watch.SubmitOutcome{
+		Kind: watch.SubmitInviteWaitingBot, Title: "私有源",
+	}}
+	run(opt, snd, "/watch https://t.me/+AbCdEfGh12345678")
+	for _, got := range snd.texts() {
+		if strings.Contains(got, "AbCdEfGh12345678") {
+			t.Fatalf("Bot 回复不得包含完整邀请 hash: %s", got)
 		}
 	}
 }

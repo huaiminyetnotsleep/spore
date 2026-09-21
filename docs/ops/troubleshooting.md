@@ -380,3 +380,13 @@ Bot 身份会话直接上传（gotd `uploader` + `InputMediaUploadedDocument`，
 - **静音用 `account.updateNotifySettings` + MuteUntil 远期时间戳**：等效客户端"永久静音"；`InputPeerNotifySettings` 的 MuteUntil 是条件字段，用 `SetMuteUntil` 助手设置（直接结构体赋值不带 Flags 无效）。
 - **creator 频道无法退出**：`channels.leaveChannel` 对创建者返回 `USER_CREATOR`，列表行须禁用退出操作。
 - **join_requests.invite_hash 是审批延时执行的必需数据**：审批时才能执行加入；但它是敏感值——Web 下发与审计一律 `tmeurl.MaskInviteHash` 脱敏，不入日志。
+
+## 2026-09-21 监听源私有邀请（/watch + 邀请链接）的机制边界
+
+- **邀请链接仍然只能让读取账号加入，不能让 Bot 入群**：/watch 接受 `t.me/+…`（仅链接形态——裸邀请码与公开用户名冲突，会被当作频道标识拒绝）。申请激活时读取账号经 `importChatInvite` 加入目标，但 Bot 必须仍由人工设为频道/群管理员；监听生效以 Bot 管理员校验通过为准。
+- **两段式等待是独立状态，不是卡死**：`waiting_telegram` = 已向频道发送加入请求（频道开启"加入需审核"）或读取账号暂不可用；`waiting_bot` = 读取账号已加入、等待 Bot 被设为管理员。后台对账每 5 分钟推进一轮（waiting_bot 只需 Bot 校验，不再触碰 Telegram 邀请），管理端"重试"可立即推进。
+- **hash 生命周期**：pending / waiting_telegram / failed 保留完整 hash（重试需要）；频道定位成功（waiting_bot 及之后）即清理——后续推进只需 channel_id。`masked_hash` 独立保存供展示；完整 hash 不进日志、审计与 API。
+- **watch_invite_requests.user_id=0 是管理员发起的邀请**（与 watch_sources.added_by=0 同约定），无外键；普通用户申请受每用户/总上限约束时，活动邀请申请与监听源**合并计数**。
+- **经邀请加入的频道在 joined_channels 留痕为 `watch_source`**：避免被"自动退出外部拉入"（join_auto_leave_external）误判为外部频道而自动退出；总览来源分布含该来源第四行。
+- **激活后重复提交同一邀请**：hash 已清理无法按 hash 查重，此时预检（checkChatInvite）回带频道 ID 且读取账号已加入，按既有监听源幂等返回，不会重复加入。
+- **MTProto 裸正 ID → Bot API ID 的转换单一来源是 `binding.BotChannelID`**（-100 前缀 + 内部 ID）；watch/watch_invite_requests 存 Bot API 形态，joined_channels 存裸正 ID，两表 channel_id 语义不同。

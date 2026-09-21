@@ -327,9 +327,10 @@ func main() {
 		logger.Error("初始化频道加入服务失败", "error", err.Error())
 		os.Exit(1)
 	}
-	// 监听源服务（Bot /watch 与 Web 管理端共用）：源校验用的 Bot 客户端与
-	// 审批结果通知在 MTProto ready 内经 SetBots / SetNotifier 注入。
-	watchSvc, err := watch.New(watch.Options{Store: st, Log: logger})
+	// 监听源服务（Bot /watch 与 Web 管理端共用）：源校验用的 Bot 客户端、
+	// 审批结果通知与私有邀请能力（读取账号 Check/JoinInvite）在 MTProto
+	// ready 内注入；邀请申请的周期对账随 ready 会话启动（app.go）。
+	watchSvc, err := watch.New(watch.Options{Store: st, Membership: membership, Log: logger})
 	if err != nil {
 		logger.Error("初始化监听源服务失败", "error", err.Error())
 		os.Exit(1)

@@ -675,9 +675,10 @@ func handleJoin(ctx context.Context, opt Options, snd delivery.Sender, from mode
 }
 
 // watchUsage 是 /watch 与 /unwatch 共用的参数提示。
-const watchUsage = "用法：/watch 频道（@mychannel、t.me/频道 链接或 -100 开头的 ID）\n\n" +
+const watchUsage = "用法：/watch 频道（@mychannel、t.me/频道 链接、-100 开头的 ID，或 t.me/+… 私有邀请链接）\n\n" +
 	"仅支持频道与超级群组，且需先把本机器人加为该频道/群的管理员" +
-	"（管理员身份保证我能收到全部消息）。不带参数发送 /watch 可查看我的监听源。"
+	"（管理员身份保证我能收到全部消息）。私有邀请链接会先让系统读取账号加入，" +
+	"随后仍需把 Bot 人工设为管理员。不带参数发送 /watch 可查看我的监听源。"
 
 // handleWatch 处理 /watch：无参数列出本人监听源；带参数提交申请
 // （准入/审批/上限校验在 watch.Service 内完成）。owner 判定失败按非
@@ -696,29 +697,51 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 			sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
 			return
 		}
-		if len(rows) == 0 {
+		invites, err := opt.Watch.ListInvitesByUser(ctx, from.ID)
+		if err != nil {
+			ae := apperr.From(err)
+			opt.Log.Warn("/watch 邀请列表查询失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
+			sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+			return
+		}
+		if len(rows) == 0 && len(invites) == 0 {
 			sendText(ctx, opt, snd, chatID, "你还没有监听源。发送 /watch 频道 添加。")
 			return
 		}
 		var b strings.Builder
-		b.WriteString("我的监听源：\n")
-		for _, r := range rows {
-			name := r.Title
-			if name == "" {
-				name = r.Username
-			}
-			if name == "" {
-				name = fmt.Sprintf("频道 %d", r.ChannelID)
-			}
-			switch r.Status {
-			case store.WatchPending:
-				fmt.Fprintf(&b, "• %s（待审批）\n", name)
-			case store.WatchApproved:
-				state := "监听中"
-				if !r.Enabled {
-					state = "已暂停"
+		if len(rows) > 0 {
+			b.WriteString("我的监听源：\n")
+			for _, r := range rows {
+				name := r.Title
+				if name == "" {
+					name = r.Username
 				}
-				fmt.Fprintf(&b, "• %s（%s）\n", name, state)
+				if name == "" {
+					name = fmt.Sprintf("频道 %d", r.ChannelID)
+				}
+				switch r.Status {
+				case store.WatchPending:
+					fmt.Fprintf(&b, "• %s（待审批）\n", name)
+				case store.WatchApproved:
+					state := "监听中"
+					if !r.Enabled {
+						state = "已暂停"
+					}
+					fmt.Fprintf(&b, "• %s（%s）\n", name, state)
+				}
+			}
+		}
+		if len(invites) > 0 {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("邀请链接申请：\n")
+			for _, r := range invites {
+				name := r.Title
+				if name == "" {
+					name = "邀请 " + r.MaskedHash
+				}
+				fmt.Fprintf(&b, "• %s（%s）\n", name, watchInviteStatusText(r.Status))
 			}
 		}
 		sendText(ctx, opt, snd, chatID, b.String())
@@ -772,8 +795,43 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	case watch.SubmitActive:
 		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
 			"「%s」已开始监听：源内新消息会自动预热缓存，之后把该源的消息链接发给我可秒回。", title))
+	case watch.SubmitInvitePending:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"已提交私有邀请「%s」的监听申请，等待管理员审批，通过后系统会先让读取账号加入。", title))
+	case watch.SubmitInviteWaitingTelegram:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"「%s」的邀请申请正在处理：等待频道侧审核或系统读取账号完成加入，通过后会自动继续并通知你。", title))
+	case watch.SubmitInviteWaitingBot:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"「%s」的读取账号已加入。还差最后一步：请把我（@%s）加为该频道/群的管理员，配置完成后自动开始监听。",
+			title, botInfo.Username))
+	case watch.SubmitInviteInvalid:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"无法处理邀请「%s」：链接无效、已过期或指向普通群组（仅支持频道/超级群组）。", title))
+	case watch.SubmitReaderUnavailable:
+		sendText(ctx, opt, snd, chatID, "系统读取账号暂时不可用，请稍后重试。")
 	default:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInternal))
+	}
+}
+
+// watchInviteStatusText 是 /watch 列表中邀请申请状态的短文案。
+func watchInviteStatusText(status string) string {
+	switch status {
+	case store.WatchInvitePending:
+		return "待审批"
+	case store.WatchInviteWaitingTelegram:
+		return "等待加入频道"
+	case store.WatchInviteWaitingBot:
+		return "待设 Bot 管理员"
+	case store.WatchInviteApproved:
+		return "已生效"
+	case store.WatchInviteRejected:
+		return "未通过"
+	case store.WatchInviteFailed:
+		return "处理失败"
+	default:
+		return status
 	}
 }
 

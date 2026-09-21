@@ -135,9 +135,12 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	//（按受理 bot 复制）都经池取 Bot API 客户端
 	a.bindings.SetBots(a.pool.BotAPIs())
 	// 监听源：源校验用池内 Bot 客户端；审批结果按申请人最近活跃 bot 私聊
-	// 送达（joinmgr.SenderNotifier 结构性满足 watch.Notifier）
+	// 送达（joinmgr.SenderNotifier 结构性满足 watch.Notifier）。
+	// 私有邀请申请的周期对账与本轮 ready 会话同生命周期：waiting 态申请
+	//（频道侧审核、Bot 权限人工配置）最迟一个周期自动推进。
 	a.watch.SetBots(a.pool.BotAPIs())
 	a.watch.SetNotifier(joinmgr.SenderNotifier{Sender: botpool.UserRouter{Pool: a.pool}})
+	go a.watch.RunReconcile(ctx)
 
 	// 监听源消息接收器：与队列同生命周期（依赖 dumpcache 实例与 access
 	// 特权入队；离线时聚合计时随 ctx 取消停止）

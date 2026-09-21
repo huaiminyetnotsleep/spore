@@ -91,3 +91,34 @@ func TestMaskInviteHash(t *testing.T) {
 		t.Fatalf("短 hash 应全遮蔽: %s", got)
 	}
 }
+
+func TestParseInviteLinkAcceptsLinkFormsOnly(t *testing.T) {
+	// 与 ParseInvite 相同的链接形态全部接受
+	for input, want := range map[string]string{
+		"https://t.me/+AbCdEfGh12345678":         "AbCdEfGh12345678",
+		"t.me/+AbCdEfGh12345678":                 "AbCdEfGh12345678",
+		"https://telegram.me/+AbCdEfGh12345678":  "AbCdEfGh12345678",
+		"https://t.me/joinchat/AbCdEfGh12345678": "AbCdEfGh12345678",
+		"  https://t.me/+AbCdEfGh12345678 \n":    "AbCdEfGh12345678",
+	} {
+		got, ok := ParseInviteLink(input)
+		assertHash(t, got, ok, want)
+	}
+}
+
+func TestParseInviteLinkRejectsBareHashAndUsernames(t *testing.T) {
+	// 裸 hash 与合法频道用户名形态冲突，链接形态解析必须拒绝（/watch 场景
+	// 由频道目标解析器接管）
+	for _, input := range []string{
+		"AbCdEfGh12345678",
+		"mychannel",
+		"@mychannel",
+		"https://t.me/mychannel",
+		"https://t.me/c/1234567890",
+		"",
+	} {
+		if _, ok := ParseInviteLink(input); ok {
+			t.Fatalf("期望拒绝 %q，实际解析成功", input)
+		}
+	}
+}

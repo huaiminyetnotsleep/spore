@@ -112,7 +112,7 @@ export interface OverviewJoin {
   left_total: number;
   /** 加入数量上限（syscfg；0 = 不限）。 */
   max_channels: number;
-  /** 来源分布固定三行（join_command/approved/external，含 0）。 */
+  /** 来源分布固定四行（join_command/approved/external/watch_source，含 0）。 */
   source_dist: DistRow[];
 }
 
@@ -979,7 +979,7 @@ export interface JoinedChannelRow {
   username: string;
   /** channel（广播频道）| supergroup。 */
   kind: string;
-  /** 留痕来源：join_command（号主 /join）| approved（审批通过）| external（外部拉入）。 */
+  /** 留痕来源：join_command（号主 /join）| approved（审批通过）| external（外部拉入）| watch_source（监听源邀请）。 */
   source: string;
   joined_by: number;
   joined_at: number;
@@ -1027,8 +1027,45 @@ export interface WatchSourceRow {
   prewarm_last_at: number;
 }
 
-export function fetchWatchSources(): Promise<{ items: WatchSourceRow[] }> {
-  return apiRequest<{ items: WatchSourceRow[] }>("/api/v1/watch-sources");
+/** 邀请链接监听申请的处理状态。 */
+export type WatchInviteRequestStatus =
+  | "pending"
+  | "waiting_telegram"
+  | "waiting_bot"
+  | "approved"
+  | "rejected"
+  | "failed";
+
+/**
+ * 私有邀请链接监听申请。邀请只用于让读取账号加入目标；Bot 管理员权限仍需人工配置。
+ */
+export interface WatchInviteRequestRow {
+  id: number;
+  user_id: number;
+  masked_hash: string;
+  channel_id: number;
+  channel_title: string;
+  participants: number;
+  status: WatchInviteRequestStatus;
+  enabled: boolean;
+  bot_id: number;
+  bot_username: string;
+  reviewed_by: string;
+  note: string;
+  created_at: number;
+  updated_at: number;
+  user_username: string;
+  user_display_name: string;
+}
+
+export interface WatchSourcesResult {
+  items: WatchSourceRow[];
+  /** 兼容尚未返回该字段的服务端版本。 */
+  invite_requests?: WatchInviteRequestRow[];
+}
+
+export function fetchWatchSources(): Promise<WatchSourcesResult> {
+  return apiRequest<WatchSourcesResult>("/api/v1/watch-sources");
 }
 
 /**

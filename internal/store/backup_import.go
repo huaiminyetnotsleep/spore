@@ -100,6 +100,7 @@ func ValidateBackup(ctx context.Context, path string) error {
 		{version: 8, table: "requests", column: "source_media_dc_ids_json"},
 		{version: 9, table: "requests", column: "media_types_json"},
 		{version: 11, table: "users", column: "cloud_download"},
+		{version: 19, table: "watch_invite_requests", column: "id"},
 	} {
 		columns := requestColumns
 		if requirement.table != "requests" {

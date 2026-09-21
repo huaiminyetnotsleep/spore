@@ -144,11 +144,18 @@ type ChannelJoinManager interface {
 type WatchManager interface {
 	// ListAll 返回全部监听源（含申请人资料与预热统计）。
 	ListAll(ctx context.Context) ([]watch.SourceView, error)
-	// AdminAdd 管理员直接添加（不做用户准入/上限/审批）。
-	AdminAdd(ctx context.Context, actor, target string, enabled bool) (store.WatchSource, error)
+	// AdminAdd 管理员直接添加（不做用户准入/上限/审批）；target 也可为
+	// 私有邀请链接，返回对应申请或激活结果。
+	AdminAdd(ctx context.Context, actor, target string, enabled bool) (watch.AdminAddResult, error)
 	// Approve/Reject 审批待审批申请（pending → approved/rejected）。
 	Approve(ctx context.Context, actor string, channelID int64) (store.WatchSource, error)
 	Reject(ctx context.Context, actor string, channelID int64) (store.WatchSource, error)
+	// 邀请链接申请：列表、审批（pending → 推进状态机）、拒绝、重试与删除。
+	ListInviteRequests(ctx context.Context) ([]store.WatchInviteRequest, error)
+	ApproveInviteRequest(ctx context.Context, actor string, id int64) (store.WatchInviteRequest, *store.WatchSource, error)
+	RejectInviteRequest(ctx context.Context, actor string, id int64) (store.WatchInviteRequest, error)
+	RetryInviteRequest(ctx context.Context, id int64) (store.WatchInviteRequest, *store.WatchSource, error)
+	DeleteInviteRequest(ctx context.Context, id int64) error
 	// SetEnabled 切换 approved 行的暂停开关。
 	SetEnabled(ctx context.Context, channelID int64, enabled bool) (store.WatchSource, error)
 	// Delete 删除任意状态的监听源行。

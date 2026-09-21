@@ -64,6 +64,7 @@ export const JOIN_SOURCE_LABELS: Record<string, string> = {
   join_command: "号主 /join",
   approved: "审批通过",
   external: "外部拉入",
+  watch_source: "监听源邀请",
 };
 
 /** 来源 raw key → 中文标签；未知来源回退原值。 */

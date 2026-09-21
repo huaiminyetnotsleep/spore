@@ -205,6 +205,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 			{Key: store.JoinedViaCommand, Count: chTally.CommandActive},
 			{Key: store.JoinedViaApproved, Count: chTally.ApprovedActive},
 			{Key: store.JoinedViaExternal, Count: chTally.ExternalActive},
+			{Key: store.JoinedViaWatchSource, Count: chTally.WatchSourceActive},
 		},
 	}
 
