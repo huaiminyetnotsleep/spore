@@ -96,6 +96,8 @@ spore/
 │   ├── delivery/                # 发送路由：Bot API 上传 / Bot 号 MTProto 大文件直传 / 相册
 │   ├── queue/                   # 内存 Job 队列 + worker：普通投递、缓存复用、云盘任务
 │   ├── dumpcache/               # 缓存频道干净副本写入与复制（转存频道复用）
+│   ├── watch/                   # 监听源（/watch）生命周期：申请/审批/上限/移除
+│   ├── listener/                # 监听源消息接收：相册聚合 → 缓存频道预热（双路径）
 │   ├── binding/                 # 用户频道绑定（/bind 与管理端共用校验）与脚注来源
 │   ├── joinmgr/                 # 频道加入：/join、审批、静音/归档、外部拉入处理
 │   ├── progress/                # 下载/上传进度的内存注册表（5 秒粒度占位编辑）
@@ -123,6 +125,7 @@ spore/
 | `media` | 下载策略选择（流式/内存管道/临时文件/拒绝）与句柄清理 | 上传 |
 | `delivery` | 通过 Bot API 或 Bot 号 MTProto 发送新消息（按大小路由） | 消息内容构造 |
 | `dumpcache` / `binding` / `joinmgr` | 缓存频道副本、用户频道绑定、频道加入与审批 | — |
+| `watch` / `listener` | 监听源申请审批与生命周期（Bot /watch 与 Web 共用）；源消息接收、相册聚合与缓存频道预热（快路径服务端复制，受保护内容回退重传管线） | watch_sources |
 | `store` | SQLite 连接/迁移与各聚合 DAO（用户、请求、用量、审计、事件、设置、会话、加入留痕等） | 业务准入规则、Telegram 协议 |
 | `web` | SPA 壳与 `/api/v1` JSON API、登录会话/CSRF、CSV/QR 功能端点 | 业务准入决策（经 access/joinmgr 等服务） |
 | `config` / `apperr` / `syscfg` / `transfercfg` | 横切：环境配置、错误模型、运行设置与传输覆盖 | — |
@@ -370,7 +373,7 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 **选型**：`modernc.org/sqlite`（纯 Go 驱动，无 CGO，保住 `make linux` 交叉编译）+ 标准库 `database/sql`。连接级 PRAGMA 挂在 DSN 上（WAL、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL`），连接数固定为 1——SQLite 单写者，容量目标（≤100 用户、约 5,000 请求/日，约 180 万行/年）远低于其上限，不需要外部数据库服务。
 
-**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v16）共 **13 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
+**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v18）共 **15 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`、`watch_sources`、`watch_events`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
 
 **数据红线**：消息正文、caption、媒体本体与明文凭据（Token/Session/手机号）不入库；通知通道与 GitHub OAuth 的可轮换外部凭据以 AES-256-GCM 密文存于 `settings`，Web 访问密钥只存 SHA-256 哈希；云盘凭据在 `data/cloud-drive.json` 文件中，不进数据库。`data/session.json`、`data/peers.json`、`data/tmp/` 维持文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
 

@@ -1,14 +1,17 @@
 /**
  * 业务统计页（/stats）：职责 = 业务数字。自上而下分区块：
- * 时间范围工具栏（快捷范围 Segmented 立即生效，含"全量"；自定义范围走单个
- * RangePicker，选完即生效）→ 请求核心指标（总数在卡片标题行，结果三项合并）→
- * 趋势/排行/分布图表区（StatsCharts 懒加载）→ 全时段快照（SnapshotSection，
- * overview 接口，不受筛选影响）。数据经 GET /api/v1/stats 获取，缺省近 7 天。
+ * 时间范围工具栏（页首，统领全页：核心指标与全部页签都随其查询；快捷
+ * Segmented 含"全量"，自定义走 RangePicker 选完即生效，另有机器人筛选）→
+ * 请求核心指标 → 趋势/排行/分布/监听源 Tab（StatsTabs 懒加载，活跃页签
+ * 持久化）→ 全时段快照（SnapshotSection，不受筛选影响）。
+ * 数据经 GET /api/v1/stats 获取，缺省近 7 天。
+ * 页面状态（时间范围 / bot 筛选 / 活跃 Tab）写入 sessionStorage：切到其他
+ * 菜单再回来不重置；快捷范围恢复时按当天重新计算（滚动窗口不指向过去）。
  */
 import { useQuery } from "@tanstack/react-query";
 import { DatePicker, Segmented, Select, Space, Typography } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { fetchBots, fetchStats, type RangeParams } from "../../api/admin";
 import { botLabel, fmtRate } from "../../shared/format";
@@ -17,9 +20,34 @@ import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState } from "../shared/QueryStates";
 import { SnapshotSection } from "./SnapshotSection";
 
-const StatsCharts = lazy(() =>
-  import("./StatsCharts").then(({ StatsCharts: Charts }) => ({ default: Charts })),
+const StatsTabs = lazy(() =>
+  import("./StatsTabs").then(({ StatsTabs: Tabs }) => ({ default: Tabs })),
 );
+
+type PersistedStatsState = {
+  preset: PresetKey | "custom";
+  range: RangeParams;
+  botID?: string;
+  activeTab: "trend" | "rank" | "dist" | "watch";
+};
+
+const STATE_STORAGE_KEY = "stats-page-state-v1";
+
+/** 恢复持久化状态：快捷范围按当天重算（滚动窗口），自定义沿用保存区间。 */
+function restoreState(): PersistedStatsState | null {
+  try {
+    const raw = sessionStorage.getItem(STATE_STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as PersistedStatsState;
+    if (saved.preset && saved.preset !== "custom" && saved.preset !== "all") {
+      return { ...saved, range: presetRange(saved.preset) };
+    }
+    if (!saved.range) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
 
 const { Text } = Typography;
 
@@ -52,14 +80,36 @@ const PRESET_OPTIONS = [
 type PickerRange = [Dayjs | null, Dayjs | null] | null;
 
 export function StatsPage() {
-  const [range, setRange] = useState<RangeParams>({});
-  // 初始近 7 天（与后端缺省一致，不带参数请求）；自定义范围应用后为 "custom"，
-  // Segmented 显示为未选中。
-  const [preset, setPreset] = useState<PresetKey | "custom">(DEFAULT_PRESET);
-  // RangePicker 受控显示值：快捷范围同步回显；全量时清空并禁用。
-  const [pickerValue, setPickerValue] = useState<PickerRange>(null);
+  const restored = restoreState();
+  const [range, setRange] = useState<RangeParams>(restored?.range ?? {});
+  // 初始近 7 天（与后端缺省一致）；自定义范围应用后为 "custom"（未选中）。
+  const [preset, setPreset] = useState<PresetKey | "custom">(
+    restored?.preset ?? DEFAULT_PRESET,
+  );
+  // RangePicker 受控显示值：快捷范围同步回显；全量时清空并禁用；恢复自定义
+  // 区间时按保存的日期重建。
+  const [pickerValue, setPickerValue] = useState<PickerRange>(() => {
+    if (restored?.preset === "custom" && restored.range.since && restored.range.until) {
+      return [dayjs(restored.range.since), dayjs(restored.range.until)];
+    }
+    return null;
+  });
   // 机器人筛选（多机器人池）：切换即生效；查询失败不阻塞页面。
-  const [botID, setBotID] = useState<string | undefined>(undefined);
+  const [botID, setBotID] = useState<string | undefined>(restored?.botID);
+  // 趋势/排行/分布/监听源 Tab 活跃页签（跨菜单往返保持）。
+  const [activeTab, setActiveTab] = useState<"trend" | "rank" | "dist" | "watch">(
+    restored?.activeTab ?? "trend",
+  );
+
+  // 页面状态持久化：任一项变化即写 sessionStorage（菜单往返不重置）。
+  useEffect(() => {
+    const state: PersistedStatsState = { preset, range, botID, activeTab };
+    try {
+      sessionStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // 隐私模式等存储不可用：静默降级为不持久化
+    }
+  }, [preset, range, botID, activeTab]);
   const bots = useQuery({ queryKey: ["bots"], queryFn: fetchBots });
   const botOptions = (bots.data?.bots ?? []).map((bot) => ({
     value: String(bot.bot_id),
@@ -176,7 +226,13 @@ export function StatsPage() {
             </PageSection>
 
             <Suspense fallback={<PageSection loading />}>
-              <StatsCharts requests={requests} />
+              <StatsTabs
+                requests={requests}
+                range={range}
+                botID={botID}
+                activeKey={activeTab}
+                onChange={setActiveTab}
+              />
             </Suspense>
 
             <SnapshotSection />

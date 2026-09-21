@@ -134,7 +134,7 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 	if in.UserID <= 0 {
 		return store.ChannelBinding{}, apperr.New(apperr.CodeInternal, "频道绑定必须归属一个用户")
 	}
-	tgt, err := parseChannelTarget(in.Target)
+	tgt, err := ParseChannelTarget(in.Target)
 	if err != nil {
 		return store.ChannelBinding{}, err
 	}
@@ -145,7 +145,7 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := bots[0].GetChat(vctx, tgt.chatParams())
+	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
 		// Bot 看不见目标聊天基本等于"不在该频道/无权限"，统一归类为
 		// CHANNEL_NOT_POSTABLE，提示用户先把机器人拉进频道设为管理员
@@ -215,7 +215,7 @@ func (s *Service) UnbindBot(ctx context.Context, userID int64, target string) (s
 // （Bot 指令路径）；anyOwner=true（Web 管理端）可解绑任意绑定。
 // 目标不存在或不属于该用户返回 store.ErrNotFound。
 func (s *Service) Unbind(ctx context.Context, userID int64, target string, anyOwner bool) (store.ChannelBinding, error) {
-	tgt, err := parseChannelTarget(target)
+	tgt, err := ParseChannelTarget(target)
 	if err != nil {
 		return store.ChannelBinding{}, err
 	}
@@ -243,7 +243,7 @@ func (s *Service) Unbind(ctx context.Context, userID int64, target string, anyOw
 
 // resolveChannelID 把解析出的频道标识定位为绑定的 channel_id：
 // 数字 ID 直接可用；用户名在绑定记录中匹配（解绑不需要 Bot 在线）。
-func (s *Service) resolveChannelID(ctx context.Context, tgt channelTarget, userID int64, anyOwner bool) (int64, error) {
+func (s *Service) resolveChannelID(ctx context.Context, tgt ChannelTarget, userID int64, anyOwner bool) (int64, error) {
 	if tgt.ChannelID != 0 {
 		return tgt.ChannelID, nil
 	}
@@ -436,7 +436,7 @@ func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID 
 // 公开频道可直接用链接；私有频道（无 username）用数字 ID——频道公开转
 // 私有不改 ID，已配置的数字 ID 继续有效。
 func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, string, error) {
-	tgt, err := parseChannelTarget(target)
+	tgt, err := ParseChannelTarget(target)
 	if err != nil {
 		return 0, "", err
 	}
@@ -446,7 +446,7 @@ func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, stri
 	}
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := bots[0].GetChat(vctx, tgt.chatParams())
+	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
 		return 0, "", apperr.Wrap(apperr.CodeChannelNotPostable, err)
 	}
@@ -485,32 +485,32 @@ func actorOf(via string, userID int64) string {
 	return "admin"
 }
 
-// channelTarget 是解析后的频道标识：Username（无 @）或 ChannelID
+// ChannelTarget 是解析后的频道标识：Username（无 @）或 ChannelID
 // （Bot API 的 -100… 数字 ID）。
-type channelTarget struct {
+type ChannelTarget struct {
 	Username  string
 	ChannelID int64
 }
 
-// chatParams 把标识转成 GetChat 入参。
-func (t channelTarget) chatParams() *tgbot.GetChatParams {
+// ChatParams 把标识转成 GetChat 入参。
+func (t ChannelTarget) ChatParams() *tgbot.GetChatParams {
 	if t.ChannelID != 0 {
 		return &tgbot.GetChatParams{ChatID: t.ChannelID}
 	}
 	return &tgbot.GetChatParams{ChatID: "@" + t.Username}
 }
 
-// parseChannelTarget 解析频道标识（纯函数，Bot 与 Web 共用）：
+// ParseChannelTarget 解析频道标识（纯函数，Bot 与 Web 共用）：
 //   - @username / username：Telegram 用户名形态；
 //   - https://t.me/<username>（可带协议与查询串）；
 //   - https://t.me/c/<internal_id>：私有频道链接 → -100 数字 ID；
 //   - -100… 数字 ID；≥10 位的正整数按频道内部 ID 归一为 -100 形态。
 //
 // 消息链接（t.me/x/123）与群组等无法判定频道归属的输入一律拒绝。
-func parseChannelTarget(raw string) (channelTarget, error) {
+func ParseChannelTarget(raw string) (ChannelTarget, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "频道标识为空")
+		return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "频道标识为空")
 	}
 	s = strings.TrimPrefix(s, "@")
 
@@ -520,39 +520,39 @@ func parseChannelTarget(raw string) (channelTarget, error) {
 		if host == "c" {
 			// 私有频道：t.me/c/<internal_id>[/<message_id>]，取频道段
 			if len(seg) < 1 {
-				return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "私有频道链接缺少频道 ID")
+				return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "私有频道链接缺少频道 ID")
 			}
 			id, err := strconv.ParseInt(seg[0], 10, 64)
 			if err != nil || id <= 0 {
-				return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "私有频道链接的频道 ID 非法")
+				return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "私有频道链接的频道 ID 非法")
 			}
-			return channelTarget{ChannelID: botChannelID(id)}, nil
+			return ChannelTarget{ChannelID: botChannelID(id)}, nil
 		}
 		if len(seg) != 1 || seg[0] == "" {
-			return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "请发送频道链接，而不是消息链接")
+			return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "请发送频道链接，而不是消息链接")
 		}
 		if !isValidUsername(seg[0]) {
-			return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "链接中的频道用户名非法")
+			return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "链接中的频道用户名非法")
 		}
-		return channelTarget{Username: seg[0]}, nil
+		return ChannelTarget{Username: seg[0]}, nil
 	}
 
 	// 数字 ID 形态
 	if id, err := strconv.ParseInt(s, 10, 64); err == nil {
 		switch {
 		case id < 0 && strings.HasPrefix(s, "-100") && len(s) >= 14:
-			return channelTarget{ChannelID: id}, nil // 约定 -100… 形态
+			return ChannelTarget{ChannelID: id}, nil // 约定 -100… 形态
 		case id > 0 && digitsOf(id) >= 10:
 			// 正整数按频道内部 ID 处理：Bot API 频道 ID = -100 前缀 + 内部 ID
-			return channelTarget{ChannelID: botChannelID(id)}, nil
+			return ChannelTarget{ChannelID: botChannelID(id)}, nil
 		}
 	}
 
 	// 用户名形态
 	if !isValidUsername(s) {
-		return channelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "无法识别频道标识")
+		return ChannelTarget{}, apperr.New(apperr.CodeChannelTargetInvalid, "无法识别频道标识")
 	}
-	return channelTarget{Username: s}, nil
+	return ChannelTarget{Username: s}, nil
 }
 
 // splitTMe 识别 t.me 链接，返回路径首段（c 表示私有频道）与剩余路径。

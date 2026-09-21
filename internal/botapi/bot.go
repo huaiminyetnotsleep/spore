@@ -21,6 +21,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
 // Access 是访问控制服务（access.Service）在 Bot 侧所需的最小接口；
@@ -73,6 +74,19 @@ type Channels interface {
 // 提交分流（owner 即时 / 普通用户审核）、上限与开关校验都在服务内完成。
 type ChannelJoin interface {
 	Submit(ctx context.Context, userID int64, isOwner bool, text string) (joinmgr.SubmitOutcome, error)
+}
+
+// Watch 是监听源服务（watch.Service）在 Bot 侧所需的最小接口。申请准入、
+// 审批分流（owner 即时 / 普通用户按配置）、上限与开关校验都在服务内完成。
+type Watch interface {
+	// Submit 处理 /watch 申请：解析校验目标 → 查重 → 上限 → 按配置落
+	// pending（待审批）或 approved（免审批/号主）。botID/botUsername 为
+	// 受理 bot 快照（多机器人池留痕）。
+	Submit(ctx context.Context, userID int64, isOwner bool, target string, botID int64, botUsername string) (watch.SubmitOutcome, error)
+	// Unwatch 移除该用户的监听源；目标不存在或不属于该用户返回 store.ErrNotFound。
+	Unwatch(ctx context.Context, userID int64, isOwner bool, target string) (store.WatchSource, error)
+	// ListByUser 返回该用户名下的监听源（/watch 无参数列表）。
+	ListByUser(ctx context.Context, userID int64) ([]store.WatchSource, error)
 }
 
 // OwnerCheck 判定提交者是否号主（users 表全局唯一 owner）；未设 owner 时
@@ -161,6 +175,14 @@ type Options struct {
 	Channels Channels
 	// ChannelJoin 提供频道加入指令能力（joinmgr.Service）；nil 时 /join 回复不可用。
 	ChannelJoin ChannelJoin
+	// Watch 提供监听源指令能力（watch.Service：/watch 申请与 /unwatch 移除）；
+	// nil 时相关指令回复不可用。
+	Watch Watch
+	// OnSourceMessage 可选：监听源消息回调（channel_post 与超级群组消息）。
+	// listener 服务内做源白名单过滤、相册聚合与缓存频道转储；nil 时源消息
+	// 在本层直接丢弃。参数为消息、本 bot 的发送器与 bot 身份（受理 bot 是
+	// 源管理员，服务端复制必须经它执行；身份供事件留痕记录哪个 bot 转储）。
+	OnSourceMessage func(msg *models.Message, snd delivery.Sender, botID int64, botUsername string)
 	// IsOwner 判定 /join 提交者是否号主（owner 即时加入，普通用户走审核）。
 	IsOwner OwnerCheck
 	// CloudStatus 提供云盘下载功能状态与目的地信息（/download 准入预检）；
@@ -196,8 +218,10 @@ func New(opt Options) (*tgbot.Bot, error) {
 		return nil, errors.New("botapi: Access 为必填项")
 	}
 
-	// 只订阅 message 更新（对齐旧 TS 版 allowed_updates），减少无关流量与解析开销
-	allowed := tgbot.AllowedUpdates{"message"}
+	// 只订阅 message 与 channel_post：message 覆盖私聊与（超级群组内的）
+	// 监听源消息，channel_post 覆盖 bot 为管理员的频道帖——listener 据此
+	// 预热缓存频道；edited_* 与其余类型按需再开。
+	allowed := tgbot.AllowedUpdates{"message", models.AllowedUpdateChannelPost}
 	opts := []tgbot.Option{
 		tgbot.WithDefaultHandler(updateHandler(opt)),
 		tgbot.WithAllowedUpdates(allowed),
@@ -248,6 +272,8 @@ func RegisterCommands(ctx context.Context, b *tgbot.Bot) error {
 			{Command: "unbind", Description: "解绑我的频道"},
 			{Command: "channels", Description: "查看我绑定的频道"},
 			{Command: "join", Description: "请系统账号加入私有频道（t.me/+ 邀请链接）"},
+			{Command: "watch", Description: "监听源频道/群组，新消息自动预热缓存"},
+			{Command: "unwatch", Description: "移除我的监听源"},
 		},
 	})
 	return err

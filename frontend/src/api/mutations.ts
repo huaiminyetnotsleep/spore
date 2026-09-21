@@ -10,6 +10,7 @@ import { getCSRFToken } from "./session";
 import { PROJECT_IDENTITY } from "../shared/projectIdentity.generated";
 import type {
   BackupView,
+  WatchSourceRow,
   CloudDriveBackupCandidate,
   CloudDriveView,
   NotificationMute,
@@ -274,6 +275,11 @@ export interface SettingsSaveInput {
   join_max_channels?: number;
   join_mute_enabled?: boolean;
   join_archive_enabled?: boolean;
+  /** 监听源（/watch）配置；缺省不变更（0 = 不限）。 */
+  watch_apply_enabled?: boolean;
+  watch_require_approval?: boolean;
+  watch_max_sources?: number;
+  watch_per_user_limit?: number;
   /** 单个请求累计尝试上限（1–10，含首次，即时生效）；缺省不变更。 */
   max_request_attempts?: number;
   /** 文件分片传输配置；缺省不变更。 */
@@ -297,6 +303,42 @@ export interface SettingsSaveResult extends WriteOK {
 
 export const saveSettings = (input: SettingsSaveInput): Promise<SettingsSaveResult> =>
   postJSON<SettingsSaveResult>("/api/v1/settings", input);
+
+// ---- 监听源（/watch，预热缓存频道） ----
+
+/** 监听源写操作公共响应（add/review/toggle 携带最新行）。 */
+export interface WatchSourceOpResult extends WriteOK {
+  source?: WatchSourceRow;
+}
+
+/** 管理员直接添加监听源（天然 approved；服务端校验 bot 须为源管理员）。 */
+export const addWatchSource = (target: string, enabled = true): Promise<WatchSourceOpResult> =>
+  postJSON<WatchSourceOpResult>("/api/v1/watch-sources/add", { target, enabled });
+
+/** 审批待审批申请（approve=false 即拒绝）。 */
+export const reviewWatchSource = (
+  channelId: number,
+  approve: boolean,
+): Promise<WatchSourceOpResult> =>
+  postJSON<WatchSourceOpResult>(`/api/v1/watch-sources/${channelId}/${approve ? "approve" : "reject"}`);
+
+/** 切换 approved 行的暂停开关。 */
+export const toggleWatchSource = (
+  channelId: number,
+  enabled: boolean,
+): Promise<WatchSourceOpResult> =>
+  postJSON<WatchSourceOpResult>(`/api/v1/watch-sources/${channelId}/toggle`, { enabled });
+
+/** 删除监听源行（任意状态）。 */
+export const deleteWatchSource = (channelId: number): Promise<WriteOK> =>
+  postJSON<WriteOK>(`/api/v1/watch-sources/${channelId}/delete`);
+
+/** 移出 Bot：池内全部 bot 退出源聊天（频道即放弃管理员）并删除监听源行。 */
+export interface WatchLeaveResult extends WriteOK {
+  outcome: { left: number; failed: number };
+}
+export const leaveWatchSource = (channelId: number): Promise<WatchLeaveResult> =>
+  postJSON<WatchLeaveResult>(`/api/v1/watch-sources/${channelId}/leave`);
 
 // ---- 系统设置（系统身份） ----
 

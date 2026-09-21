@@ -41,7 +41,11 @@ type apiSettingsView struct {
 	JoinMaxChannels               int    `json:"join_max_channels"` // 0 = 不限
 	JoinMuteEnabled               bool   `json:"join_mute_enabled"`
 	JoinArchiveEnabled            bool   `json:"join_archive_enabled"`
-	MaxRequestAttempts            int    `json:"max_request_attempts"` // 单个请求累计尝试上限（含首次；即时生效）
+	WatchApplyEnabled             bool   `json:"watch_apply_enabled"`    // 监听源用户自助申请开关（即时生效；默认关）
+	WatchRequireApproval          bool   `json:"watch_require_approval"` // 用户申请需审批（false=免审批直接生效）
+	WatchMaxSources               int    `json:"watch_max_sources"`      // 监听源总数上限（0=不限；仅约束用户申请）
+	WatchPerUserLimit             int    `json:"watch_per_user_limit"`   // 每用户申请上限（0=不限）
+	MaxRequestAttempts            int    `json:"max_request_attempts"`   // 单个请求累计尝试上限（含首次；即时生效）
 	DownloadThreads               int    `json:"download_threads"`
 	DownloadThreadsEnv            int    `json:"download_threads_env"`
 	DownloadThreadsOverridden     bool   `json:"download_threads_overridden"`
@@ -103,6 +107,11 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 	view.JoinMaxChannels = joinCfg.MaxChannels
 	view.JoinMuteEnabled = joinCfg.MuteEnabled
 	view.JoinArchiveEnabled = joinCfg.ArchiveEnabled
+	watchCfg := syscfg.LoadWatchConfig(ctx, s.st)
+	view.WatchApplyEnabled = watchCfg.ApplyEnabled
+	view.WatchRequireApproval = watchCfg.RequireApproval
+	view.WatchMaxSources = watchCfg.MaxSources
+	view.WatchPerUserLimit = watchCfg.PerUserLimit
 	view.MaxRequestAttempts = syscfg.LoadMaxRequestAttempts(ctx, s.st)
 	if s.transfer != nil {
 		transfer := s.transfer.View()
@@ -163,6 +172,10 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		JoinMaxChannels        *int     `json:"join_max_channels"`
 		JoinMuteEnabled        *bool    `json:"join_mute_enabled"`
 		JoinArchiveEnabled     *bool    `json:"join_archive_enabled"`
+		WatchApplyEnabled      *bool    `json:"watch_apply_enabled"`
+		WatchRequireApproval   *bool    `json:"watch_require_approval"`
+		WatchMaxSources        *int     `json:"watch_max_sources"`
+		WatchPerUserLimit      *int     `json:"watch_per_user_limit"`
 		MaxRequestAttempts     *int     `json:"max_request_attempts"`
 		DownloadThreads        *int     `json:"download_threads"`
 		UploadThreads          *int     `json:"upload_threads"`
@@ -194,6 +207,10 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		JoinMaxChannels:        in.JoinMaxChannels,
 		JoinMuteEnabled:        in.JoinMuteEnabled,
 		JoinArchiveEnabled:     in.JoinArchiveEnabled,
+		WatchApplyEnabled:      in.WatchApplyEnabled,
+		WatchRequireApproval:   in.WatchRequireApproval,
+		WatchMaxSources:        in.WatchMaxSources,
+		WatchPerUserLimit:      in.WatchPerUserLimit,
 		MaxRequestAttempts:     in.MaxRequestAttempts,
 		DownloadThreads:        in.DownloadThreads,
 		UploadThreads:          in.UploadThreads,

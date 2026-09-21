@@ -102,7 +102,7 @@ func TestParseChannelTarget(t *testing.T) {
 		{in: "123", wantErr: true},           // 过短正数不是频道 ID
 	}
 	for _, c := range cases {
-		got, err := parseChannelTarget(c.in)
+		got, err := ParseChannelTarget(c.in)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("%q 应解析失败，得到 %+v", c.in, got)

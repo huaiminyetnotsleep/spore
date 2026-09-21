@@ -13,14 +13,15 @@ describe("SPA 导航信息架构", () => {
     expect(navigationGroups.map((group) => group.label)).toEqual([
       "工作台",
       "请求与频道",
+      "监听源",
       "MTProto受邀管理",
       "用户运营",
       "事件与审计",
       "机器人池",
       "系统运维",
     ]);
-    expect(navRoutes).toHaveLength(21);
-    expect(routeMeta).toHaveLength(24);
+    expect(navRoutes).toHaveLength(23);
+    expect(routeMeta).toHaveLength(26);
     expect(navigationGroups.flatMap((group) => group.routeKeys)).toEqual([
       "overview",
       "stats",
@@ -29,6 +30,8 @@ describe("SPA 导航信息架构", () => {
       "channel-bindings",
       "channel-settings",
       "cloud-drive",
+      "watch-events",
+      "watch-sources",
       "invite-approvals",
       "joined-channels",
       "join-settings",

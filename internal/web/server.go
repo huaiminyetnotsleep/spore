@@ -26,6 +26,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
 // Version 是服务版本的内置缺省值：装配层未注入构建期版本（Options.Version）
@@ -138,6 +139,30 @@ type ChannelJoinManager interface {
 	Enforce(ctx context.Context) error
 }
 
+// WatchManager 是监听源管理页对 watch 服务的最小依赖
+// （*watch.Service 实现；申请审批、上限与源校验的业务规则在服务内完成）。
+type WatchManager interface {
+	// ListAll 返回全部监听源（含申请人资料与预热统计）。
+	ListAll(ctx context.Context) ([]watch.SourceView, error)
+	// AdminAdd 管理员直接添加（不做用户准入/上限/审批）。
+	AdminAdd(ctx context.Context, actor, target string, enabled bool) (store.WatchSource, error)
+	// Approve/Reject 审批待审批申请（pending → approved/rejected）。
+	Approve(ctx context.Context, actor string, channelID int64) (store.WatchSource, error)
+	Reject(ctx context.Context, actor string, channelID int64) (store.WatchSource, error)
+	// SetEnabled 切换 approved 行的暂停开关。
+	SetEnabled(ctx context.Context, channelID int64, enabled bool) (store.WatchSource, error)
+	// Delete 删除任意状态的监听源行。
+	Delete(ctx context.Context, channelID int64) (store.WatchSource, error)
+	// Leave 把池内全部 bot 退出源聊天并删除监听源行。
+	Leave(ctx context.Context, channelID int64) (watch.LeaveOutcome, error)
+	// ListEvents 返回预热事件页（监听记录页：哪个 bot 在哪个源转发了
+	// 哪些消息、走哪条路径、关联请求）。
+	ListEvents(ctx context.Context, q watch.EventsQuery) ([]watch.EventView, int, error)
+	// Stats 聚合监听模块统计（业务统计页：源计数/按源/按 bot/按用户/趋势；
+	// 时间/bot 界与请求统计同语义）。
+	Stats(ctx context.Context, q watch.StatsQuery, utcOffsetSec int64) (watch.WatchStatsView, error)
+}
+
 // Options 聚合管理端服务依赖。
 type Options struct {
 	Store      *store.Store // 必填：业务数据库（settings/web_sessions/audit_log）
@@ -175,6 +200,9 @@ type Options struct {
 	// ChannelJoin 是频道加入管理服务（internal/joinmgr.Service）；
 	// 缺失时相关路由报不可用。
 	ChannelJoin ChannelJoinManager
+	// Watch 是监听源管理服务（internal/watch.Service）；缺失时相关路由
+	// 报不可用。
+	Watch WatchManager
 	// Transfer 是进程级传输并发配置；缺失时仅隐藏四项运行时字段。
 	Transfer TransferConfig
 	// CloudCfg 是云盘下载配置管理器（internal/cloudarchive.Manager）；
@@ -225,6 +253,7 @@ type Server struct {
 	monitor          *monitor.Service
 	bindings         ChannelBinder
 	channelJoin      ChannelJoinManager
+	watch            WatchManager
 	transfer         TransferConfig
 	cloudCfg         *cloudarchive.Manager
 	cloudSink        cloudarchive.Sink
@@ -294,6 +323,7 @@ func New(opt Options) (*Server, error) {
 		monitor:      opt.Monitor,
 		bindings:     opt.Bindings,
 		channelJoin:  opt.ChannelJoin,
+		watch:        opt.Watch,
 		transfer:     opt.Transfer,
 		cloudCfg:     opt.CloudCfg,
 		cloudSink:    opt.CloudSink,
