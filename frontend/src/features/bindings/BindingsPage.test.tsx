@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fetchChannelBindings } from "../../api/admin";
-import { unbindChannel, bindChannel, type UnbindChannelResult } from "../../api/mutations";
+import { unbindChannel, bindChannel, deleteBindings, type UnbindChannelResult } from "../../api/mutations";
 import type { ChannelBindingRow } from "../../api/admin";
 import { BindingsPage } from "./BindingsPage";
 
@@ -18,12 +18,13 @@ vi.mock("../../api/admin", async () => {
 });
 vi.mock("../../api/mutations", async () => {
   const actual = await vi.importActual<typeof import("../../api/mutations")>("../../api/mutations");
-  return { ...actual, bindChannel: vi.fn(), unbindChannel: vi.fn() };
+  return { ...actual, bindChannel: vi.fn(), unbindChannel: vi.fn(), deleteBindings: vi.fn() };
 });
 
 const mockFetch = vi.mocked(fetchChannelBindings);
 const mockBind = vi.mocked(bindChannel);
 const mockUnbind = vi.mocked(unbindChannel);
+const mockDelete = vi.mocked(deleteBindings);
 
 function bindingRow(overrides: Partial<ChannelBindingRow> = {}): ChannelBindingRow {
   return {
@@ -33,6 +34,7 @@ function bindingRow(overrides: Partial<ChannelBindingRow> = {}): ChannelBindingR
     title: "我的频道",
     bound_via: "bot",
     bot_id: 0,
+    status: "active",
     created_at: 1757030400000,
     user_username: "alice",
     user_display_name: "Alice",
@@ -56,6 +58,7 @@ function renderPage() {
 beforeEach(() => {
   mockBind.mockReset();
   mockUnbind.mockReset();
+  mockDelete.mockReset();
 });
 
 describe("频道绑定管理页", () => {
@@ -216,5 +219,42 @@ describe("频道绑定管理页", () => {
     expect(await screen.findByLabelText(/所属用户/)).toHaveValue("");
     expect(screen.getByLabelText(/频道标识/)).toHaveValue("");
     expect(mockBind).not.toHaveBeenCalled();
+  });
+});
+
+describe("软解绑状态与删除", () => {
+  it("unbound 行展示「已解绑」徽标与原因，且不提供解绑操作", async () => {
+    mockFetch.mockResolvedValue({
+      items: [
+        bindingRow({
+          channel_id: -100999,
+          status: "unbound",
+          unbind_reason: "channel_gone",
+          unbound_at: 1757030400000,
+        }),
+      ],
+    });
+    renderPage();
+
+    const tag = await screen.findByTestId("binding-unbound--100999");
+    expect(tag).toHaveTextContent("已解绑");
+    expect(screen.getByText("频道已失效（自动解绑）")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "解绑" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+  });
+
+  it("删除行经 danger 确认后调用批量删除端点", async () => {
+    mockFetch.mockResolvedValue({ items: [bindingRow()] });
+    mockDelete.mockResolvedValue({
+      ok: true,
+      deleted: 1,
+      results: [{ channel_id: -1001234567890, ok: true }],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith([-1001234567890]));
   });
 });

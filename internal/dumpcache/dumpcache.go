@@ -47,6 +47,10 @@ type Service struct {
 	log       *slog.Logger
 
 	hintOnce sync.Once // 首次写失败的配置提示只打一次
+
+	// migrate 是管理端迁移工具的进度态（nil = 从未发起）；见 migrate.go
+	migrateMu sync.Mutex
+	migrate   *MigrateProgress
 }
 
 // New 创建缓存频道服务；channelID 闭包返回 0 时 Enabled() 恒为 false。
@@ -82,24 +86,28 @@ func (s *Service) Channel() (int64, bool) {
 
 // RecordEntry 落缓存频道条目（缓存补写任务在直接发送成功后调用，坐标供
 // 同链接复用）；写失败只记日志——下次成功投递自愈，不影响任务结果。
+// 条目归属当前配置的缓存频道（切换频道后旧条目因频道不匹配自动不命中）。
 func (s *Service) RecordEntry(ctx context.Context, channelKey string, messageID int, dumpIDs []int) {
-	if !s.Enabled() || len(dumpIDs) == 0 {
+	channel, ok := s.Channel()
+	if !ok || len(dumpIDs) == 0 {
 		return
 	}
 	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
 		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
+		DumpChannelID: channel,
 	}); err != nil {
 		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
 	}
 }
 
-// Entry 取同链接最新干净副本坐标；未配置或无条目返回 false。
+// Entry 取同链接最新干净副本坐标（限当前配置的缓存频道——他频道与升级前
+// 存量条目不命中）；未配置或无条目返回 false。
 // 无条目（ErrNotFound）是查重/复用预检的正常未命中，静默返回。
 func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (store.DumpEntry, bool) {
 	if !s.Enabled() {
 		return store.DumpEntry{}, false
 	}
-	e, err := s.st.LatestDumpEntry(ctx, channelKey, messageID)
+	e, err := s.st.LatestDumpEntry(ctx, channelKey, messageID, s.channelID())
 	if errors.Is(err, store.ErrNotFound) {
 		return store.DumpEntry{}, false
 	}
@@ -241,6 +249,7 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 
 	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
 		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
+		DumpChannelID: channel,
 	}); err != nil {
 		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
 	}

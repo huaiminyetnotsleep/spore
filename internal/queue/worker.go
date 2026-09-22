@@ -171,6 +171,11 @@ type Deps struct {
 	// 闭包）：返回 false 时跳过 tryReuseFromDump，行为与复用引入前一致；
 	// nil 视为开启。
 	ReuseEnabled func() bool
+	// BotDisabled 报告任务的受理 bot 是否已停用（长轮询 401：token 被封禁
+	// 或撤销；装配层注入池查询）。停用 bot 名下的排队任务出队即标记失败
+	//（BOT_DISABLED），不做自动改派——用户未向其他 bot 发过 /start 时
+	// 改派投递必然 403。nil 视为未停用（兼容旧装配）。
+	BotDisabled func(botID int64) bool
 	// Dump 是缓存频道读写通道（转存频道复用）：nil（未配置 DUMP_CHANNEL_ID）
 	// 时复用整体关闭，投递照常。
 	Dump *dumpcache.Service
@@ -210,6 +215,13 @@ func Process(d Deps) Processor {
 			// 排队任务可能已被取消（管理员或用户本人），claim 失败时不得调用
 			// Fetch、下载或发送；占位消息改为取消文案而非删除。
 			markStatusCancelled(d, ctx, j)
+			return
+		}
+		// 受理 bot 已停用（token 失效）：不再执行取数/发送（消息坐标 bot
+		// 私有，用失效 token 必然失败），直接终态失败并提示用户换其他 bot
+		// 重新提交。
+		if d.BotDisabled != nil && d.BotDisabled(j.BotID) {
+			finishBotDisabled(d, ctx, j)
 			return
 		}
 		if d.Events != nil {
@@ -832,6 +844,30 @@ func failureNoticeHTML(code apperr.Code, ref tmeurl.SourceRef) string {
 		return fmt.Sprintf("%s\n<a href=\"%s\">%s</a>", text, url, url)
 	}
 	return text
+}
+
+// finishBotDisabled 把停用 bot 名下的任务标记为 failed(BOT_DISABLED)，
+// 经回退通道向用户发送失败提示（受理 bot 通道已死；用户未向回退 bot 发过
+// /start 时该提示发送失败，只记日志）并清理占位。仅缓存补写任务不提示。
+func finishBotDisabled(d Deps, ctx context.Context, j Job) {
+	ae := apperr.New(apperr.CodeBotDisabled, "受理 Bot 已停用（Token 失效），请向其他机器人重新提交")
+	d.Log.Error("受理 Bot 已停用，任务标记失败", "job_id", j.ID, "request_id", j.RequestID, "bot_id", j.BotID)
+	if finishErr := finishRequest(d, ctx, j, store.RequestResult{
+		Status:      store.RequestFailed,
+		ErrorCode:   string(ae.Code),
+		ErrorDetail: errorDetailText(ae),
+	}); isExpectedStateRace(finishErr) {
+		deleteStatusBestEffort(d, ctx, j)
+		return
+	}
+	if ctx.Err() == nil && !j.DumpOnly {
+		if id, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
+			d.Log.Warn("停用提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+		} else {
+			d.recordAnchors(ctx, j, store.SentKindFailure, []int{id})
+		}
+		delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
+	}
 }
 
 // errorDetailLimit 是 error_detail 落库列的截断上限（字符数）。

@@ -414,6 +414,21 @@ ON sent_messages(request_id);`,
 	// 原始错误（如 FLOOD_WAIT_X 的秒数、PEER_FLOOD 等），无需翻远程日志；
 	// 重试/重置时随 error_code 一并清空。只存错误文本，不存凭据路径。
 	`ALTER TABLE requests ADD COLUMN error_detail TEXT;`,
+
+	// v24：封禁韧性——缓存频道按频道失效 + 绑定软解绑。
+	// dump_entries.dump_channel_id 记录副本写入的缓存频道：0 = 升级前
+	// 存量/未知频道，查询永不命中（不做回填），后续由 WriteClean 自愈或
+	// 管理端迁移工具重建；切换缓存频道后旧条目因频道不匹配自动失效。
+	// channel_bindings 状态机：解绑不再物理删行——status 置 'unbound' 并
+	// 记录原因与时间（自动解绑=频道失效、手动解绑通用），记录保留供管理
+	// 端审计展示，重新绑定时复活；物理删除仅经管理端删除入口。
+	`ALTER TABLE dump_entries ADD COLUMN dump_channel_id INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE channel_bindings ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+
+ALTER TABLE channel_bindings ADD COLUMN unbind_reason TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE channel_bindings ADD COLUMN unbound_at INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

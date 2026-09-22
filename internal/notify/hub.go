@@ -14,11 +14,14 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
-// 事件严重级别（events.severity）。
+// 事件严重级别（events.severity）。critical 是封禁类最高级：穿透静音计划
+// 与最低严重级别门槛（见 notifycfg.Evaluate），只有渠道不可用或管理员
+// 显式关闭该事件才能拦下。
 const (
-	SeverityInfo  = "info"
-	SeverityWarn  = "warn"
-	SeverityError = "error"
+	SeverityCritical = "critical"
+	SeverityError    = "error"
+	SeverityWarn     = "warn"
+	SeverityInfo     = "info"
 )
 
 // 事件去重键（events.key，命名 "<域>.<事件>"，跨重启稳定；
@@ -34,6 +37,12 @@ const (
 	KeyBotListInvalid     = "bot.list_invalid"            // bots.json 损坏，文件条目已忽略（仅 env 生效）
 	KeyBotInitFailed      = "bot.init_failed"             // 有 bot token 接入失败（多机器人池跳过该 bot）
 	KeyBotPollConflict    = "bot.poll_conflict"           // bot token 被其他服务占用（webhook/其他轮询实例），收不到新消息
+
+	// 封禁类事件（Critical）：用户号被封 / 会话被撤销、bot token 失效。
+	// 穿透静音计划推送（封禁是罕见高价值事件）；备份失败为 error 级。
+	KeyMTProtoBanned = "mtproto.banned" // MTProto 用户号被封禁或会话被撤销（ErrorKind 见 payload）
+	KeyBotBanned     = "bot.banned"     // Bot Token 失效（被封禁或撤销），该 bot 已标记停用
+	KeyBackupFailed  = "backup.failed"  // 自动/CLI 备份执行失败（含磁盘空间不足跳过）
 
 	// 云盘下载（/download）事件源。
 	KeyCloudUploadFailed  = "cloud.upload_failed"  // 云盘任务连续失败（独立计数）

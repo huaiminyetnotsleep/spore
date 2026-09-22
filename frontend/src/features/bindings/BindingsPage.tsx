@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { fetchChannelBindings, type ChannelBindingRow } from "../../api/admin";
-import { bindChannel, unbindChannel } from "../../api/mutations";
+import { bindChannel, deleteBindings, unbindChannel } from "../../api/mutations";
 import { fmtTime } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { DataTable } from "../shared/DataTable";
@@ -42,6 +42,12 @@ const BOUND_VIA_LABELS: Record<string, string> = {
   web: "管理端",
 };
 
+/** 解绑原因中文标签（软解绑留痕行展示）。 */
+const UNBIND_REASON_LABELS: Record<string, string> = {
+  manual: "手动解绑",
+  channel_gone: "频道已失效（自动解绑）",
+};
+
 function viaLabel(via: string): string {
   return BOUND_VIA_LABELS[via] ?? via;
 }
@@ -65,6 +71,8 @@ export function BindingsPage() {
   const userID = useMemo(() => searchParams.get("user_id")?.trim() || "", [searchParams]);
   /** 行级目标 key：解绑 pending 只让当前行按钮进入 loading。 */
   const [busyChannelId, setBusyChannelId] = useState<number | null>(null);
+  /** 批量删除的选中行（频道 ID）。 */
+  const [selectedKeys, setSelectedKeys] = useState<number[]>([]);
   const confirm = useConfirmAction();
 
   // 深链 / 其他页面跳转带来的 user_id 变化需要回填筛选输入
@@ -86,8 +94,32 @@ export function BindingsPage() {
       return unbindChannel(row.channel_id);
     },
     invalidate: [["channel-bindings"], ["users"]],
-    successText: (result) => `已解除绑定「${result.binding.title}」。`,
+    successText: (result) => `已解除绑定「${result.binding.title}」（记录保留为已解绑状态）。`,
   });
+
+  // 物理删除（单条/批量共用端点）：解绑是软解绑留痕，删除即清行
+  const removeBindings = useAdminAction({
+    action: (channelIds: number[]) => deleteBindings(channelIds),
+    invalidate: [["channel-bindings"], ["users"]],
+    successText: (result) => `已删除 ${result.deleted} 条绑定记录。`,
+    onDone: () => setSelectedKeys([]),
+  });
+
+  const deleteRow = (row: ChannelBindingRow) =>
+    confirm({
+      intent: "danger",
+      title: "确认删除绑定记录",
+      content: `确定删除「${row.title || row.channel_id}」的绑定记录？删除即清行（解绑则保留已解绑状态可查）。`,
+      action: () => removeBindings.run([row.channel_id]),
+    });
+
+  const deleteSelected = () =>
+    confirm({
+      intent: "danger",
+      title: "确认批量删除绑定记录",
+      content: `确定删除已选的 ${selectedKeys.length} 条绑定记录？删除即清行，不可恢复。`,
+      action: () => removeBindings.run(selectedKeys),
+    });
 
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["channel-bindings", "list", userID],
@@ -143,6 +175,24 @@ export function BindingsPage() {
         ),
     },
     {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      width: 150,
+      render: (_, row) =>
+        row.status === "unbound" ? (
+          <Space direction="vertical" size={0}>
+            <Tag color="red" data-testid={`binding-unbound-${row.channel_id}`}>
+              已解绑
+            </Tag>
+            <Text type="secondary">{UNBIND_REASON_LABELS[row.unbind_reason ?? ""] ?? row.unbind_reason}</Text>
+            {row.unbound_at ? <Text type="secondary">{fmtTime(row.unbound_at)}</Text> : null}
+          </Space>
+        ) : (
+          <Tag color="green">有效</Tag>
+        ),
+    },
+    {
       title: "绑定时间",
       dataIndex: "created_at",
       key: "created_at",
@@ -151,25 +201,35 @@ export function BindingsPage() {
     {
       title: "操作",
       key: "actions",
-      width: 72,
+      width: 96,
       render: (_, row) => (
         <RowActions
           actions={[
+            row.status === "unbound"
+              ? null
+              : {
+                  key: "unbind",
+                  label: "解绑",
+                  danger: true,
+                  loading: busyChannelId === row.channel_id && unbind.pending,
+                  disabled: unbind.pending,
+                  onClick: () =>
+                    confirm({
+                      intent: "danger",
+                      title: "确认解除绑定",
+                      content: `确定解除「${row.title || row.channel_id}」的频道绑定？该用户之后收到的内容将不再同步到此频道；记录保留为已解绑状态。`,
+                      action: () => unbind.run(row),
+                    }),
+                },
             {
-              key: "unbind",
-              label: "解绑",
+              key: "delete",
+              label: "删除",
               danger: true,
-              loading: busyChannelId === row.channel_id && unbind.pending,
-              disabled: unbind.pending,
-              onClick: () =>
-                confirm({
-                  intent: "danger",
-                  title: "确认解除绑定",
-                  content: `确定解除「${row.title || row.channel_id}」的频道绑定？该用户之后收到的内容将不再同步到此频道。`,
-                  action: () => unbind.run(row),
-                }),
+              loading: busyChannelId === row.channel_id && removeBindings.pending,
+              disabled: removeBindings.pending,
+              onClick: () => deleteRow(row),
             },
-          ]}
+          ].filter((a): a is NonNullable<typeof a> => a !== null)}
         />
       ),
     },
@@ -185,7 +245,19 @@ export function BindingsPage() {
         </Button>
       }
     >
-      <PageSection>
+      <PageSection
+        extra={
+          selectedKeys.length > 0 ? (
+            <Space wrap className="batch-action-bar">
+              <Text>已选 {selectedKeys.length} 条</Text>
+              <Button danger loading={removeBindings.pending} onClick={deleteSelected}>
+                批量删除
+              </Button>
+              <Button onClick={() => setSelectedKeys([])}>取消选择</Button>
+            </Space>
+          ) : undefined
+        }
+      >
         <Space direction="vertical" size="middle" className="field-width-full">
           {/* 用户筛选为 URL 驱动（?user_id=）：提交写入 URL，URL 变化驱动查询 */}
           <FilterBar<OwnerFilterValues>
@@ -214,11 +286,16 @@ export function BindingsPage() {
               dataSource={items}
               emptyText="还没有任何频道绑定。"
               pagination={false}
+              rowSelection={{
+                selectedRowKeys: selectedKeys,
+                onChange: (keys) => setSelectedKeys(keys as number[]),
+              }}
             />
           )}
           <Text type="secondary">
-            共 {items.length} 条绑定。用户可经 Bot /bind 自行绑定频道（需先把当前机器人设为频道管理员）；
-            邀请链接只会让系统读取账号加入目标，不会自动添加机器人。任务成功后，提取内容会同步发送一份到该用户绑定的频道。
+            共 {items.length} 条记录（含已解绑留痕）。解绑为软操作（记录保留、状态置已解绑，重新绑定即复活）；
+            删除为物理清行。频道失效（删除/封禁）时系统会自动解绑并通知该用户。用户可经 Bot /bind 自行绑定频道
+            （需先把当前机器人设为频道管理员）；任务成功后，提取内容会同步发送一份到该用户绑定的频道。
           </Text>
         </Space>
       </PageSection>

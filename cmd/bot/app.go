@@ -13,6 +13,7 @@ import (
 
 	"github.com/gotd/td/tg"
 
+	"errors"
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
 	"github.com/huaiminyetnotsleep/spore/internal/botapi"
@@ -62,6 +63,7 @@ type app struct {
 	cloud       *cloudarchive.Manager
 	cloudSink   cloudarchive.Sink
 	botIdentity *botIdentityStore
+	dumpHolder  *dumpCacheHolder // 当前 dumpcache 服务持有器（Web 迁移端点委托）
 }
 
 // onMTProtoReady 在用户号 MTProto 就绪（含重连）时执行：绑定资料刷新与
@@ -194,10 +196,21 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, primary bool) (*botpool.Member, error) {
 	botID := botlist.BotID(bt.Token)
 	ref := botapi.NewBotRef(botID, "")
-	// OnPollError：轮询（getUpdates）409 冲突识别——token 被 webhook 或另一个
-	// 轮询实例占用时，本实例拿不到任何消息。错误会按库内退避反复出现，仅在
-	// "非冲突 → 冲突"转换时记一次日志与事件（SetConflict 返回是否变化）。
+	// OnPollError：轮询（getUpdates）409 冲突与 401 Token 失效识别。
+	// 409——token 被 webhook 或另一个轮询实例占用时，本实例拿不到任何消息：
+	// 错误会按库内退避反复出现，仅在"非冲突 → 冲突"转换时记一次日志与事件
+	//（SetConflict 返回是否变化）；恢复即随下一次 update 清除。
+	// 401——Bot 被封禁或 token 被撤销：标记停用（发送路由随之降级到其他
+	// bot）并触发 Critical 事件；401 不自愈，重启重建后仍坏会再次置位。
 	onPollError := func(err error) {
+		if botapi.IsUnauthorizedError(err) {
+			if m := a.pool.MemberByID(botID); m != nil && m.SetDisabled(true) {
+				a.log.Error("机器人 Token 已失效（被封禁或被撤销），已标记停用", "bot_id", botID)
+				a.hub.Raise(ctx, notify.KeyBotBanned, notify.SeverityCritical,
+					notify.BotIDData{BotID: botID})
+			}
+			return
+		}
 		if !botapi.IsConflictError(err) {
 			return
 		}
@@ -284,8 +297,19 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	conflictAtStart := false
 	meCtx, meCancel := context.WithTimeout(ctx, 10*time.Second)
 	name, username := "", ""
+	unauthorizedAtStart := false
 	if me, meErr := b.GetMe(meCtx); meErr != nil {
-		a.log.Warn("获取机器人身份失败（展示将只显示 bot id）", "bot_id", botID, "error", meErr.Error())
+		if botapi.IsUnauthorizedError(meErr) {
+			// token 已失效：入池（保留配置可运营观测）但立即停用并发事件，
+			// 不再用坏 token 参与发送路由。
+			unauthorizedAtStart = true
+			a.log.Error("机器人 Token 已失效（被封禁或被撤销），将入池并标记停用",
+				"bot_id", botID)
+			a.hub.Raise(ctx, notify.KeyBotBanned, notify.SeverityCritical,
+				notify.BotIDData{BotID: botID})
+		} else {
+			a.log.Warn("获取机器人身份失败（展示将只显示 bot id）", "bot_id", botID, "error", meErr.Error())
+		}
 	} else {
 		name = me.FirstName
 		if me.LastName != "" {
@@ -335,17 +359,71 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 	if conflictAtStart {
 		member.SetConflict(true)
 	}
+	if unauthorizedAtStart {
+		member.SetDisabled(true)
+	}
 	return member, nil
 }
 
-// newDumpService 构建缓存频道服务：channelID 闭包实时读取——Web 端 settings
-// 优先，环境变量 DUMP_CHANNEL_ID 兜底（均为 0 时复用关闭；之后可在 Web
-// 端随时配置启用，无需重启）。每 MTProto 生命周期一份，队列与监听源共用。
-func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
-	dumpChannel := func() int64 {
-		return web.LoadEffectiveDumpChannelID(ctx, a.st, a.cfg.DumpChannelID)
+// dumpCacheHolder 跨 MTProto 生命周期持有当前 dumpcache.Service：Web 迁移
+// 端点经它委托当前实例（每轮 ready 重建时刷新；空窗期返回未接入）。
+// 线程安全（RWMutex）。
+type dumpCacheHolder struct {
+	mu  sync.RWMutex
+	svc *dumpcache.Service
+}
+
+func (h *dumpCacheHolder) Set(svc *dumpcache.Service) {
+	h.mu.Lock()
+	h.svc = svc
+	h.mu.Unlock()
+}
+
+func (h *dumpCacheHolder) get() *dumpcache.Service {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.svc
+}
+
+func (h *dumpCacheHolder) Enabled() bool { s := h.get(); return s != nil && s.Enabled() }
+
+func (h *dumpCacheHolder) Channel() (int64, bool) {
+	if s := h.get(); s != nil {
+		return s.Channel()
 	}
+	return 0, false
+}
+
+func (h *dumpCacheHolder) StartMigrate(ctx context.Context, from int64) error {
+	if s := h.get(); s != nil {
+		return s.StartMigrate(ctx, from)
+	}
+	return errors.New("缓存频道服务未就绪（MTProto 未连接）")
+}
+
+func (h *dumpCacheHolder) MigrateProgress() dumpcache.MigrateProgress {
+	if s := h.get(); s != nil {
+		return s.MigrateProgress()
+	}
+	return dumpcache.MigrateProgress{}
+}
+
+// dumpChannelClosure 返回缓存频道 ID 解析闭包：Web 端 settings 优先，
+// 环境变量 DUMP_CHANNEL_ID 兜底（均为 0 时复用关闭）。闭包读 settings，
+// 严禁在 store 事务视图内调用（单连接死锁）。
+func (a *app) dumpChannelClosure(ctx context.Context) func() int64 {
+	return func() int64 { return web.LoadEffectiveDumpChannelID(ctx, a.st, a.cfg.DumpChannelID) }
+}
+
+// newDumpService 构建缓存频道服务（channelID 闭包实时读取，Web 端改配置
+// 无需重启）。每 MTProto 生命周期一份，队列与监听源共用；同时把副本有效
+// 性校验与频道解析注入 access（缓存补写资格判定与缓存频道同源过滤）。
+func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
+	dumpChannel := a.dumpChannelClosure(ctx)
 	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannel, a.log)
+	a.dumpHolder.Set(dumpSvc)
+	a.access.SetDumpLive(dumpSvc.EntryLive)
+	a.access.SetDumpChannelID(dumpChannel)
 	if dumpChannel() != 0 {
 		a.log.Info("缓存频道复用已启用", "channel_id", dumpChannel())
 	}
@@ -370,8 +448,13 @@ func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher, dumpSvc *
 		ChannelCopyEnabled: func() bool { return web.LoadChannelCopyEnabled(ctx, a.st) },
 		// TG 链接复用开关：任务取数前实时读 settings（关闭即回到完整下载上传）
 		ReuseEnabled: func() bool { return web.LoadTGReuseEnabled(ctx, a.st) },
-		Dump:         dumpSvc,    // 缓存频道（未配置时 nil：无复用）
-		Channels:     a.bindings, // 频道脚注：消息末尾织入该用户绑定频道的跳转链接
+		// 受理 bot 停用（401）预检：停用 bot 名下任务出队即失败 BOT_DISABLED
+		BotDisabled: func(botID int64) bool {
+			m := a.pool.MemberByID(botID)
+			return m != nil && m.IsDisabled()
+		},
+		Dump:     dumpSvc,    // 缓存频道（未配置时 nil：无复用）
+		Channels: a.bindings, // 频道脚注：消息末尾织入该用户绑定频道的跳转链接
 		// 云盘任务（/download）：上传通道与目的地解析；nil 防御在 worker 内
 		CloudSink: a.cloudSink,
 		CloudCfg:  a.cloud,

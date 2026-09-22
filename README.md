@@ -159,6 +159,7 @@ make linux   # 交叉编译 Linux 二进制
 | [数据库设计](docs/reference/database-schema.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/database-schema) | 表结构、字段、索引、迁移历史与接口持久化映射 |
 | [架构文档](docs/reference/architecture.md) | [↗](https://huaiminyetnotsleep.github.io/spore/reference/architecture) | 架构、模块职责与技术决策 |
 | [运维手册](docs/ops/operations.md) | [↗](https://huaiminyetnotsleep.github.io/spore/ops/operations) | 升级、备份恢复、云盘运维 |
+| [封禁应急手册](docs/ops/incidents.md) | [↗](https://huaiminyetnotsleep.github.io/spore/ops/incidents) | 用户号/Bot/缓存频道被封的预防与处置 |
 | [本地开发](docs/guide/development.md) | [↗](https://huaiminyetnotsleep.github.io/spore/guide/development) | 构建、测试与验收门禁 |
 
 ### 官方与第三方文档

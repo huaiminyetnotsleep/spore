@@ -25,6 +25,9 @@ const (
 	CodeMediaDownloadFailed Code = "MEDIA_DOWNLOAD_FAILED"
 	CodeRateLimited         Code = "TELEGRAM_RATE_LIMIT"
 	CodeSendFailed          Code = "BOT_SEND_FAILED"
+	// CodeBotDisabled 受理 Bot 已停用（长轮询 401：token 被封禁或撤销）：
+	// 名下排队任务出队即失败，引导用户向其他机器人重新提交。
+	CodeBotDisabled Code = "BOT_DISABLED"
 	// CodePeerFlood Telegram 对账号施加的临时限制（PEER_FLOOD / INVITE_PEER_FLOOD）：
 	// 与 FLOOD_WAIT 限流不同，通常持续数小时且无明确等待秒数；加入频道与
 	// 发送均可能触发，重试需间隔足够长的时间。
@@ -118,6 +121,7 @@ var userTexts = map[Code]string{
 	CodeRateLimited:             "请求过于频繁，请稍后重试。",
 	CodePeerFlood:               "Telegram 对相关账号施加了临时限制（PEER_FLOOD），通常持续数小时，请稍后再试。",
 	CodeSendFailed:              "发送失败，请稍后重试。",
+	CodeBotDisabled:             "本机器人的服务已停用（令牌失效），请向其他机器人重新发送链接提交。",
 	CodeLargeChannelUnavailable: "大文件发送通道暂不可用，请稍后重试。",
 	CodeSplitUnavailable:        "超大视频可播放切段暂不可用（服务器 ffmpeg 环境不满足），请联系管理员。",
 	CodeStoreUnavailable:        "存储服务暂时不可用，请稍后重试。",

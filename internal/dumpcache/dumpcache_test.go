@@ -146,7 +146,7 @@ func TestWriteCleanSingleMedia(t *testing.T) {
 	if c.Caption == "" {
 		t.Fatal("干净 caption 不应为空")
 	}
-	e, err := st.LatestDumpEntry(ctx, "example", 7)
+	e, err := st.LatestDumpEntry(ctx, "example", 7, -1001234567890)
 	if err != nil {
 		t.Fatalf("应落条目: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestWriteCleanSingleText(t *testing.T) {
 	if len(fs.sent) != 1 || len(fs.singleCopies) != 0 {
 		t.Fatalf("纯文本应走 SendMessage: sent=%v copy=%v", fs.sent, fs.singleCopies)
 	}
-	if _, err := st.LatestDumpEntry(context.Background(), "example", 7); err != nil {
+	if _, err := st.LatestDumpEntry(context.Background(), "example", 7, -1001234567890); err != nil {
 		t.Fatalf("应落条目: %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 			t.Fatalf("清洗应指向缓存频道: %+v", e)
 		}
 	}
-	e, err := st.LatestDumpEntry(ctx, "example", 7)
+	e, err := st.LatestDumpEntry(ctx, "example", 7, -1001234567890)
 	if err != nil || len(e.DumpIDs) != 3 {
 		t.Fatalf("应落整组条目: %+v err=%v", e, err)
 	}
@@ -208,14 +208,14 @@ func TestWriteCleanFailureNoEntry(t *testing.T) {
 
 	s.WriteClean(ctx, 0, 111, "example", 7,
 		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
-	if _, err := st.LatestDumpEntry(ctx, "example", 7); err == nil {
+	if _, err := st.LatestDumpEntry(ctx, "example", 7, -1001234567890); err == nil {
 		t.Fatal("复制失败不应落条目")
 	}
 
 	// 条目数与已发送数不一致同样跳过
 	s2 := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
 	s2.WriteClean(ctx, 0, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, [][]int{{55}}, "", "")
-	if _, err := st.LatestDumpEntry(ctx, "example", 8); err == nil {
+	if _, err := st.LatestDumpEntry(ctx, "example", 8, -1001234567890); err == nil {
 		t.Fatal("数量不一致不应落条目")
 	}
 }
@@ -225,7 +225,8 @@ func TestCopyOut(t *testing.T) {
 	fs := &fakeSender{}
 	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
-		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701, 702}}); err != nil {
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701, 702},
+		DumpChannelID: -1001234567890}); err != nil {
 		t.Fatalf("落条目失败: %v", err)
 	}
 	e, ok := s.Entry(context.Background(), "example", 7)
@@ -271,7 +272,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("无条目可补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("无条目应放行补写")
 		}
@@ -280,12 +281,12 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制成功判定有效并清理试探副本", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); !live {
 			t.Fatal("试探复制成功应判定有效")
 		}
-		if len(snd.singleCopies) != 1 || snd.singleCopies[0].From != -100123 || snd.singleCopies[0].To != -100123 {
+		if len(snd.singleCopies) != 1 || snd.singleCopies[0].From != -1001234567890 || snd.singleCopies[0].To != -1001234567890 {
 			t.Fatalf("试探应复制条目首条消息到缓存频道自身: %+v", snd.singleCopies)
 		}
 	})
@@ -293,7 +294,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制失败判定失效放行补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{failCopies: true}
-		s := New(snd, nil, st, func() int64 { return -100123 }, testLog())
+		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("试探复制失败（消息已删）应放行补写")
@@ -305,6 +306,7 @@ func seedEntry(t *testing.T, st *store.Store) {
 	t.Helper()
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: "example", MessageID: 7, DumpIDs: []int{501, 502},
+		DumpChannelID: -1001234567890,
 	}); err != nil {
 		t.Fatalf("落条目失败: %v", err)
 	}
@@ -326,7 +328,7 @@ func TestWriteCleanSplitSpan(t *testing.T) {
 	if len(fs.capEdits) != 1 {
 		t.Fatalf("仅首段应清洗 caption: %+v", fs.capEdits)
 	}
-	e, err := st.LatestDumpEntry(ctx, "example", 7)
+	e, err := st.LatestDumpEntry(ctx, "example", 7, -1001234567890)
 	if err != nil || len(e.DumpIDs) != 2 {
 		t.Fatalf("应落 2 条副本坐标: %+v err=%v", e, err)
 	}
@@ -357,7 +359,7 @@ func TestWriteCleanAlbumCanonicalPlan(t *testing.T) {
 	if len(fs.txtEdits) != 0 {
 		t.Fatalf("不应有文本编辑: %+v", fs.txtEdits)
 	}
-	e, err := st.LatestDumpEntry(ctx, "example", 7)
+	e, err := st.LatestDumpEntry(ctx, "example", 7, -1001234567890)
 	if err != nil || len(e.DumpIDs) != 3 {
 		t.Fatalf("应落 3 条副本坐标: %+v err=%v", e, err)
 	}
@@ -376,7 +378,7 @@ func TestWriteCleanAlbumPlanFailureNoEntry(t *testing.T) {
 	s.WriteClean(context.Background(), 0, 111, "example", 7,
 		[]message.Item{mediaItem(7, "x"), mediaItem(8, "y")},
 		[][]int{{55}, {56}}, "https://t.me/example/7", "plan")
-	if _, err := st.LatestDumpEntry(context.Background(), "example", 7); err == nil {
+	if _, err := st.LatestDumpEntry(context.Background(), "example", 7, -1001234567890); err == nil {
 		t.Fatal("复制失败不应落条目")
 	}
 }

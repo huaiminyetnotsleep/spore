@@ -12,10 +12,10 @@
  */
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
+import { Alert, Button, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
 
-import { fetchSettings } from "../../api/admin";
-import { saveSettings } from "../../api/mutations";
+import { fetchDumpMigrate, fetchSettings } from "../../api/admin";
+import { saveSettings, startDumpMigrate } from "../../api/mutations";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { FormActions } from "../shared/FormActions";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
@@ -31,7 +31,30 @@ export function ChannelSettingsPage() {
   });
   const [dumpTarget, setDumpTarget] = useState("");
   const [dedupMin, setDedupMin] = useState<number | null>(null);
+  const [migrateFrom, setMigrateFrom] = useState("");
   const confirm = useConfirmAction();
+
+  // 迁移进度：运行中 2 秒轮询，空闲不轮询
+  const migrate = useQuery({
+    queryKey: ["dumpcache", "migrate"],
+    queryFn: fetchDumpMigrate,
+    refetchInterval: (query) => (query.state.data?.progress.running ? 2000 : false),
+    refetchIntervalInBackground: false,
+  });
+  useEffect(() => {
+    // 建议源频道只回填一次（有值后不覆盖管理员的输入）
+    if (migrate.data?.suggest_from && migrateFrom === "") {
+      setMigrateFrom(String(migrate.data.suggest_from));
+    }
+  }, [migrate.data?.suggest_from, migrateFrom]);
+
+  // 发起迁移：把旧缓存频道的副本整批复制到当前频道（不重新提取）
+  const startMigrate = useAdminAction({
+    action: (from: number) => startDumpMigrate(from),
+    invalidate: [["dumpcache", "migrate"]],
+    successText: "迁移已开始，后台执行中；下方实时显示进度。",
+    onDone: () => void migrate.refetch(),
+  });
 
   // 回填：设置数据异步返回后显式同步检测窗口输入框
   useEffect(() => {
@@ -170,6 +193,57 @@ export function ChannelSettingsPage() {
                 label="重复链接直接复用已投递消息（不重复下载上传）"
                 description="关闭后重复链接回到完整下载上传；缓存频道中的副本保留，重新打开即恢复。"
               />
+
+              {/* 缓存迁移：切换频道或升级后，把旧频道可读的副本搬到当前频道 */}
+              <div className="settings-field-grid" data-testid="dump-migrate-section">
+                <div>
+                  <Text strong>迁移旧缓存</Text>
+                  <Text type="secondary" className="settings-note">
+                    把旧缓存频道中仍可读的副本整批复制到当前频道（免重新提取，回写新消息
+                    ID）；源频道不可读时中止，剩余条目由复用自愈重建。后台执行、可断点续跑。
+                  </Text>
+                </div>
+                <Space direction="vertical" size="small" className="field-width-full">
+                  <Space.Compact className="field-width-full">
+                    <Input
+                      value={migrateFrom}
+                      onChange={(e) => setMigrateFrom(e.target.value)}
+                      placeholder={migrate.data?.suggest_from ? `建议源频道 ${migrate.data.suggest_from}` : "源缓存频道 ID（-100…）"}
+                      aria-label="迁移源缓存频道"
+                    />
+                    <Button
+                      loading={startMigrate.pending}
+                      disabled={!dumpConfigured || migrateFrom.trim() === "" || migrate.data?.progress.running}
+                      onClick={() =>
+                        confirm({
+                          intent: "warning",
+                          title: "确认迁移旧缓存",
+                          content: "将把源缓存频道的副本批量复制到当前缓存频道，期间占用 Bot API 配额（分批限速）。确定开始？",
+                          action: () => startMigrate.run(Number(migrateFrom.trim())),
+                        })
+                      }
+                    >
+                      {migrate.data?.progress.running ? "迁移中…" : "开始迁移"}
+                    </Button>
+                  </Space.Compact>
+                  {migrate.data && (migrate.data.progress.running || migrate.data.progress.total > 0) ? (
+                    <Alert
+                      data-testid="dump-migrate-progress"
+                      type={migrate.data.progress.last_error ? "warning" : "info"}
+                      showIcon
+                      message={
+                        migrate.data.progress.running
+                          ? `迁移进行中：${migrate.data.progress.done}/${migrate.data.progress.total} 已迁移` +
+                            (migrate.data.progress.skipped ? `，跳过 ${migrate.data.progress.skipped}` : "") +
+                            (migrate.data.progress.failed ? `，失败 ${migrate.data.progress.failed}` : "")
+                          : migrate.data.progress.last_error
+                            ? `迁移中止：${migrate.data.progress.last_error}`
+                            : `迁移完成：成功 ${migrate.data.progress.done}、跳过 ${migrate.data.progress.skipped}、失败 ${migrate.data.progress.failed}`
+                      }
+                    />
+                  ) : null}
+                </Space>
+              </div>
             </Space>
           </PageSection>
 

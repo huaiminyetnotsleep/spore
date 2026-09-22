@@ -34,9 +34,20 @@ type InterruptedData struct {
 	Count int // 被标记为失败（可重试）的任务数
 }
 
-// BotIDData bot 维度事件（bot.init_failed / bot.poll_conflict）。
+// BotIDData bot 维度事件（bot.init_failed / bot.poll_conflict / bot.banned）。
 type BotIDData struct {
 	BotID int64 // bot 的 token 数字前缀（即 bot 用户 ID）
+}
+
+// MTProtoBanData 用户号封禁/会话撤销事件（mtproto.banned）。
+type MTProtoBanData struct {
+	ErrorKind string // banned = 封号；revoked = 会话失效/撤销
+}
+
+// BackupFailData 备份失败事件（backup.failed）。Scene 为受控场景描述
+// （定时备份 / CLI 备份 / 磁盘空间不足跳过），不携带错误原文与路径。
+type BackupFailData struct {
+	Scene string
 }
 
 // StoreWriteData 数据库写入失败（store.write_failed）。

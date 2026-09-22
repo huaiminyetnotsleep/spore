@@ -46,6 +46,8 @@ type apiSettingsView struct {
 	WatchMaxSources               int    `json:"watch_max_sources"`      // 监听源总数上限（0=不限；仅约束用户申请）
 	WatchPerUserLimit             int    `json:"watch_per_user_limit"`   // 每用户申请上限（0=不限）
 	MaxRequestAttempts            int    `json:"max_request_attempts"`   // 单个请求累计尝试上限（含首次；即时生效）
+	BackupIntervalHours           int    `json:"backup_interval_hours"`  // 自动备份间隔小时（0=关闭；缺省 6；即时生效）
+	BackupKeepCount               int    `json:"backup_keep_count"`      // 自动备份保留份数（缺省 8 ≈ 48 小时窗口）
 	DownloadThreads               int    `json:"download_threads"`
 	DownloadThreadsEnv            int    `json:"download_threads_env"`
 	DownloadThreadsOverridden     bool   `json:"download_threads_overridden"`
@@ -113,6 +115,8 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 	view.WatchMaxSources = watchCfg.MaxSources
 	view.WatchPerUserLimit = watchCfg.PerUserLimit
 	view.MaxRequestAttempts = syscfg.LoadMaxRequestAttempts(ctx, s.st)
+	view.BackupIntervalHours = syscfg.LoadBackupIntervalHours(ctx, s.st)
+	view.BackupKeepCount = syscfg.LoadBackupKeepCount(ctx, s.st)
 	if s.transfer != nil {
 		transfer := s.transfer.View()
 		view.DownloadThreads = transfer.DownloadThreads.Effective
@@ -177,6 +181,8 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		WatchMaxSources        *int     `json:"watch_max_sources"`
 		WatchPerUserLimit      *int     `json:"watch_per_user_limit"`
 		MaxRequestAttempts     *int     `json:"max_request_attempts"`
+		BackupIntervalHours    *int     `json:"backup_interval_hours"`
+		BackupKeepCount        *int     `json:"backup_keep_count"`
 		DownloadThreads        *int     `json:"download_threads"`
 		UploadThreads          *int     `json:"upload_threads"`
 		DownloadConnections    *int     `json:"download_connections"`
@@ -212,6 +218,8 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		WatchMaxSources:        in.WatchMaxSources,
 		WatchPerUserLimit:      in.WatchPerUserLimit,
 		MaxRequestAttempts:     in.MaxRequestAttempts,
+		BackupIntervalHours:    in.BackupIntervalHours,
+		BackupKeepCount:        in.BackupKeepCount,
 		DownloadThreads:        in.DownloadThreads,
 		UploadThreads:          in.UploadThreads,
 		DownloadConnections:    in.DownloadConnections,

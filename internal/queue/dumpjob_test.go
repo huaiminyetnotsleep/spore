@@ -64,7 +64,7 @@ func dumpDeps(t *testing.T, s *store.Store, fetcher Fetcher, sender *chatRecordi
 // dumpEntryOf 读取指定链接的最新缓存条目（不存在时 fail）。
 func dumpEntryOf(t *testing.T, s *store.Store, msgID int) store.DumpEntry {
 	t.Helper()
-	e, err := s.LatestDumpEntry(context.Background(), "example", msgID)
+	e, err := s.LatestDumpEntry(context.Background(), "example", msgID, testDumpChannel)
 	if err != nil {
 		t.Fatalf("应已落缓存频道条目: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestDumpJobFailureNotifiesNobody(t *testing.T) {
 	if r.Status != store.RequestFailed || r.DeliveryMode != store.DeliveryModeDump {
 		t.Errorf("终态应为 failed/dump: %+v", r)
 	}
-	if _, err := s.LatestDumpEntry(context.Background(), "example", 7); err == nil {
+	if _, err := s.LatestDumpEntry(context.Background(), "example", 7, testDumpChannel); err == nil {
 		t.Error("失败补写不应落缓存条目")
 	}
 }

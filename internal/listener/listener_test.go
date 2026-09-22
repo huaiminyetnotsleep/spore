@@ -195,6 +195,7 @@ func TestExistingEntrySkipsBatch(t *testing.T) {
 	})
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: "-1001234", MessageID: 31, DumpIDs: []int{500},
+		DumpChannelID: -100777,
 	}); err != nil {
 		t.Fatalf("预置条目失败: %v", err)
 	}

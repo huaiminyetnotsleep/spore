@@ -139,6 +139,18 @@ func loadIntSetting(ctx context.Context, st *store.Store, key string) (int, bool
 	return n, true
 }
 
+func loadInt64Setting(ctx context.Context, st *store.Store, key string) (int64, bool) {
+	v, ok, err := st.GetSetting(ctx, key)
+	if err != nil || !ok {
+		return 0, false
+	}
+	var n int64
+	if json.Unmarshal([]byte(v), &n) != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 func setSettingJSON(ctx context.Context, st *store.Store, key string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {

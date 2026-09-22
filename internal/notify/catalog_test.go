@@ -17,6 +17,9 @@ func TestCatalogCompleteAndReadOnly(t *testing.T) {
 		KeyCloudUploadFailed,
 		KeyCloudConfigInvalid,
 		KeyCloudDisabled,
+		KeyMTProtoBanned,
+		KeyBotBanned,
+		KeyBackupFailed,
 		KeyWebAdminLogin,
 		KeyUserApplication,
 		KeyChannelJoinRequest,
@@ -24,7 +27,9 @@ func TestCatalogCompleteAndReadOnly(t *testing.T) {
 	validCategories := map[string]bool{
 		CategorySystemAlert: true, CategorySystemRecovery: true, CategoryActivity: true,
 	}
-	validSeverities := map[string]bool{SeverityInfo: true, SeverityWarn: true, SeverityError: true}
+	validSeverities := map[string]bool{
+		SeverityInfo: true, SeverityWarn: true, SeverityError: true, SeverityCritical: true,
+	}
 
 	catalog := Catalog()
 	if len(catalog) != len(wantTypes) {

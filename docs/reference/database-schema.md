@@ -211,6 +211,9 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `title` | TEXT | 可空 | 绑定时取得的频道标题 |
 | `bound_via` | TEXT | NOT NULL DEFAULT 'bot' | 绑定来源：`bot`（用户 `/bind`）/ `web`（管理端） |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 路由 bot（v21）：绑定经哪台 bot 建立并通过硬校验；仅它受理的任务投递副本/置顶到此；0 = 通配（Web 绑定与历史行），任意受理 bot 均尝试 |
+| `status` | TEXT | NOT NULL DEFAULT 'active' | 软解绑状态机（v24）：`active` 有效 / `unbound` 已解绑留痕（解绑不删行；重新绑定同频道即复活，unbound 行也允许其他用户接管） |
+| `unbind_reason` | TEXT | NOT NULL DEFAULT '' | 解绑原因（v24）：`manual` 手动 / `channel_gone` 副本投递发现频道已不存在自动解绑 |
+| `unbound_at` | INTEGER | NOT NULL DEFAULT 0 | 解绑时间（Unix 毫秒；0 = 未解绑） |
 | `created_at` | INTEGER | NOT NULL | 绑定时间 |
 | `updated_at` | INTEGER | NOT NULL | 最近更新时间（绑定服务刷新标题/用户名时更新；未下发到 API DTO） |
 
@@ -289,6 +292,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `message_id` | INTEGER | NOT NULL | 源消息 ID |
 | `dump_ids_json` | TEXT | NOT NULL | 缓存频道内的消息 ID 数组（相册保组，按发送顺序） |
 | `format_version` | INTEGER | NOT NULL DEFAULT 0 | 副本布局格式版本（v16）：0 = 历史行（相册多 caption 旧形态），1 = "恰好组首一条合并 caption"；查询只命中当前版本，历史坐标保留供审计，复用回落完整投递后自愈重写 |
+| `dump_channel_id` | INTEGER | NOT NULL DEFAULT 0 | 副本所在缓存频道（v24）：0 = 升级前存量/未知频道，查询永不命中（不做回填）；切换缓存频道后旧频道条目因不匹配自动失效，由复用自愈或管理端迁移工具重建 |
 | `created_at` | INTEGER | NOT NULL | 写入时间 |
 
 ### 3.14 watch_sources

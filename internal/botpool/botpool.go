@@ -35,6 +35,12 @@ type Member struct {
 	// 该 bot 收不到新消息，但发送通道不受影响。由装配层在轮询错误/启动
 	// 探测时置位、收到该 bot 的 update 时清除。
 	conflict atomic.Bool
+
+	// disabled 标记 Bot 停用（长轮询 401：token 被封禁或撤销）。与 conflict
+	// 不同，停用**影响发送路由**——memberFor 跳过停用成员回退其他可用 bot
+	//（私聊消息坐标 bot 私有，用失效 token 发送必然失败）。不自愈：Reset
+	// 重建后 token 仍坏会再次置位（即"重启重新探测"）。
+	disabled atomic.Bool
 }
 
 // SetConflict 更新冲突标记，返回是否发生了状态变化（true = 进入或退出
@@ -49,6 +55,18 @@ func (m *Member) SetConflict(conflicted bool) bool {
 // Conflict 返回当前冲突态。
 func (m *Member) Conflict() bool { return m.conflict.Load() }
 
+// SetDisabled 更新停用标记，返回是否发生了状态变化（true = 新进入停用态，
+// 调用方据此只触发一次告警事件）。
+func (m *Member) SetDisabled(disabled bool) bool {
+	if disabled {
+		return m.disabled.CompareAndSwap(false, true)
+	}
+	return m.disabled.CompareAndSwap(true, false)
+}
+
+// IsDisabled 返回当前停用态。
+func (m *Member) IsDisabled() bool { return m.disabled.Load() }
+
 // Snapshot 是成员的脱敏快照（Web 总览/身份展示用，不含 token 与客户端）。
 type Snapshot struct {
 	ID       int64
@@ -56,6 +74,7 @@ type Snapshot struct {
 	Username string
 	Online   bool // Bot API 长轮询是否在线（ready 生命周期内置 true）
 	Conflict bool // 消息拉取冲突（token 被其他服务占用；收不到新消息）
+	Disabled bool // 停用（token 失效：被封禁或撤销；发送路由跳过该 bot）
 }
 
 // Pool 是线程安全的 bot 成员表 + 用户最近活跃路由表。
@@ -98,7 +117,7 @@ func (p *Pool) Snapshots() []Snapshot {
 	for _, m := range p.members {
 		out = append(out, Snapshot{
 			ID: m.ID, Name: m.Name, Username: m.Username,
-			Online: p.online, Conflict: m.Conflict(),
+			Online: p.online, Conflict: m.Conflict(), Disabled: m.IsDisabled(),
 		})
 	}
 	return out
@@ -202,18 +221,36 @@ func (p *Pool) RawSenderForUser(userID int64) delivery.Sender {
 }
 
 // memberFor 按 ID 查找成员；botID 非法或未命中时返回主 bot（首项）。
+// 停用成员被跳过：消息坐标 bot 私有，用失效 token 发送必然失败，回退到
+// 第一个可用成员（含主 bot 自身可用时）。全部停用时仍返回原命中成员——
+// 上层（worker 的 BOT_DISABLED 预检）在此之前已拦截受理 bot 停用的任务，
+// 此处只为极端兜底（发送失败按普通错误分类）。
 func (p *Pool) memberFor(botID int64) *Member {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if len(p.members) == 0 {
 		return nil
 	}
+	var fallback *Member
 	if botID != 0 {
 		for _, m := range p.members {
 			if m.ID == botID {
-				return m
+				if !m.IsDisabled() {
+					return m
+				}
+				fallback = m
 			}
 		}
+	} else if !p.members[0].IsDisabled() {
+		return p.members[0]
+	}
+	for _, m := range p.members {
+		if !m.IsDisabled() {
+			return m
+		}
+	}
+	if fallback != nil {
+		return fallback
 	}
 	return p.members[0]
 }

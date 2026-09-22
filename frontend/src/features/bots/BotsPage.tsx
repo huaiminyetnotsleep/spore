@@ -103,6 +103,11 @@ export function BotsPage() {
               收不到消息
             </StatusTag>
           ) : null}
+          {row.disabled ? (
+            <StatusTag tone="error" data-testid={`bot-disabled-${row.bot_id}`}>
+              已停用（Token 失效）
+            </StatusTag>
+          ) : null}
         </Space>
       ),
     },

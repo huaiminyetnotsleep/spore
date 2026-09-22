@@ -20,10 +20,13 @@ import (
 type apiChannelBindingRow struct {
 	ChannelID       int64  `json:"channel_id"`
 	UserID          int64  `json:"user_id"`
-	Username        string `json:"username"`  // 频道公开用户名（无 @），私有频道为空
-	Title           string `json:"title"`     // 绑定时取得的频道标题
-	BoundVia        string `json:"bound_via"` // bot | web
-	BotID           int64  `json:"bot_id"`    // 路由 bot：仅它受理的任务投递到此；0 = 通配
+	Username        string `json:"username"`                // 频道公开用户名（无 @），私有频道为空
+	Title           string `json:"title"`                   // 绑定时取得的频道标题
+	BoundVia        string `json:"bound_via"`               // bot | web
+	BotID           int64  `json:"bot_id"`                  // 路由 bot：仅它受理的任务投递到此；0 = 通配
+	Status          string `json:"status"`                  // active / unbound（v24 软解绑）
+	UnbindReason    string `json:"unbind_reason,omitempty"` // manual / channel_gone
+	UnboundAt       int64  `json:"unbound_at,omitempty"`    // 解绑时间（Unix 毫秒）
 	CreatedAt       int64  `json:"created_at"`
 	UserUsername    string `json:"user_username"`
 	UserDisplayName string `json:"user_display_name"`
@@ -75,6 +78,9 @@ func (s *Server) handleAPIChannelBindingsList(w http.ResponseWriter, r *http.Req
 			Title:           row.Title,
 			BoundVia:        row.BoundVia,
 			BotID:           row.BotID,
+			Status:          row.Status,
+			UnbindReason:    row.UnbindReason,
+			UnboundAt:       row.UnboundAt,
 			CreatedAt:       row.CreatedAt,
 			UserUsername:    row.UserUsername,
 			UserDisplayName: row.UserDisplayName,
@@ -171,4 +177,53 @@ func (s *Server) handleAPIChannelBindingDelete(w http.ResponseWriter, r *http.Re
 		BoundVia:  removed.BoundVia,
 		CreatedAt: removed.CreatedAt,
 	}})
+}
+
+// handleAPIChannelBindingsDelete 物理删除绑定记录（单条/批量共用，v24 起）：
+// body {"channel_ids":[...]}（1–100 个频道 ID，形如 -100…）。与解绑
+// （软解绑留痕）相对，删除即清行；active 行删除等价强制解绑 + 清痕。
+// 单条失败（记录不存在等）不中断其余，返回逐条结果与删除计数。
+func (s *Server) handleAPIChannelBindingsDelete(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.channel_bindings.bulk_delete"
+	if !s.apiRequireBindings(w, r, op) {
+		return
+	}
+	var in struct {
+		ChannelIDs []int64 `json:"channel_ids"`
+	}
+	if !s.apiReadJSON(w, r, op, &in) {
+		return
+	}
+	if len(in.ChannelIDs) == 0 || len(in.ChannelIDs) > 100 {
+		s.apiBadRequest(w, r, op, "请提供 1–100 个频道 ID。")
+		return
+	}
+	for _, id := range in.ChannelIDs {
+		if id == 0 {
+			s.apiBadRequest(w, r, op, "频道 ID 不能为 0。")
+			return
+		}
+	}
+	type deleteResult struct {
+		ChannelID int64  `json:"channel_id"`
+		OK        bool   `json:"ok"`
+		Error     string `json:"error,omitempty"`
+	}
+	results := make([]deleteResult, 0, len(in.ChannelIDs))
+	deleted := 0
+	for _, id := range in.ChannelIDs {
+		if _, err := s.bindings.DeleteBinding(r.Context(), id, "admin"); err != nil {
+			results = append(results, deleteResult{ChannelID: id, Error: err.Error()})
+			continue
+		}
+		deleted++
+		results = append(results, deleteResult{ChannelID: id, OK: true})
+	}
+	s.audit(r.Context(), "channel_binding.bulk_delete", "channel_bindings",
+		map[string]any{"requested": len(in.ChannelIDs), "deleted": deleted})
+	writeAPIJSON(w, http.StatusOK, struct {
+		apiWriteOK
+		Deleted int64          `json:"deleted"`
+		Results []deleteResult `json:"results"`
+	}{apiWriteOK{OK: true}, int64(deleted), results})
 }

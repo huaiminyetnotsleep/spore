@@ -36,6 +36,9 @@ var eventCatalog = []EventDefinition{
 	{Type: KeyCloudUploadFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘任务连续失败", Description: "云盘下载任务连续失败，请到管理端消息记录页查看失败原因。", SupportsRecovery: true},
 	{Type: KeyCloudConfigInvalid, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘配置无效", Description: "云盘下载配置无效（文件损坏或默认目的地悬空），功能暂按未配置处理；请在管理端修正。"},
 	{Type: KeyCloudDisabled, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "云盘功能不可用", Description: "云盘下载已开启但 rclone 不可用，/download 暂不可用；请安装或修复 rclone 后重试。", SupportsRecovery: true},
+	{Type: KeyMTProtoBanned, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityCritical, Title: "用户号被封禁或会话被撤销", Description: "MTProto 用户号已被封禁或会话被撤销，请导出备份后清理会话文件并用新号扫码登录。", SupportsRecovery: true},
+	{Type: KeyBotBanned, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityCritical, Title: "Bot Token 已失效", Description: "Bot Token 已失效（被封禁或撤销），该 Bot 已停用；请在 @BotFather 检查状态或替换 Token。", SupportsRecovery: true},
+	{Type: KeyBackupFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "备份执行失败", Description: "自动或手动备份执行失败，请检查磁盘空间与数据目录。", SupportsRecovery: true},
 
 	// 活动通知：逐次即时推送，不写事件中心（审计已有 audit_log 覆盖）。
 	{Type: KeyWebAdminLogin, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "管理后台登录成功", Description: "有新的管理后台登录。"},

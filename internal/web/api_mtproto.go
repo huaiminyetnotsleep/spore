@@ -37,6 +37,11 @@ func (s *Server) handleAPIMTProtoStatus(w http.ResponseWriter, r *http.Request, 
 	if snap.LastError != "" {
 		resp["last_error"] = snap.LastError
 	}
+	// 离线原因分类（banned/revoked/network/unknown）：前端按类展示处置文案
+	//（封禁类给出"导出备份 → 清理会话 → 新号扫码"指引）。
+	if snap.State == mtproto.StateOffline && snap.ErrorKind != "" {
+		resp["error_kind"] = snap.ErrorKind
+	}
 	if s.botMTP != nil {
 		bot := s.botMTP.Status()
 		resp["bot_state"] = bot.State
@@ -99,4 +104,34 @@ func (s *Server) handleAPIMTProtoRelogin(w http.ResponseWriter, r *http.Request,
 		apiWriteOK
 		Message string `json:"message"`
 	}{apiWriteOK{OK: true}, "已触发重连，请等待新的扫码二维码。"})
+}
+
+// handleAPIMTProtoClearSession 清理用户号会话文件（session.json +
+// peers.json）：用户号被封禁或会话被撤销后，管理员导出备份、备好新号后
+// 显式触发，为新号扫码腾出干净状态。仅离线状态接受（在线拒绝，防止误删
+// 运行中会话）；成功写审计。Bot 直传会话文件与用户号无关，不受影响。
+func (s *Server) handleAPIMTProtoClearSession(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.mtproto.clear_session"
+	if s.mtp == nil {
+		s.log.Warn("MTProto 状态未接入，拒绝清理会话", "op", op)
+		writeAPIError(w, http.StatusServiceUnavailable, "TELEGRAM_UNAVAILABLE",
+			"MTProto 状态未接入本实例，无法清理会话文件。")
+		return
+	}
+	if snap := s.mtp.Status(); snap.State != mtproto.StateOffline {
+		writeAPIError(w, http.StatusConflict, "CONFLICT",
+			"会话当前在线，无需清理；请在离线状态下操作。")
+		return
+	}
+	if err := s.mtp.ClearSessionFiles(); err != nil {
+		s.log.Error("清理会话文件失败", "op", op, "error", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal),
+			"清理会话文件失败，请查看服务日志。")
+		return
+	}
+	s.audit(r.Context(), "mtproto.clear_session", "mtproto", nil)
+	writeAPISingle(w, struct {
+		apiWriteOK
+		Message string `json:"message"`
+	}{apiWriteOK{OK: true}, "会话文件已清理，请点击重新登录并用新号扫码。"})
 }

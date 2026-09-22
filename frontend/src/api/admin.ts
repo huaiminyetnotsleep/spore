@@ -77,6 +77,8 @@ export interface OverviewBotEntry extends OverviewBot {
   conflict: boolean;
   /** 已暂停（停止接收新消息；在途任务正常完成）。 */
   paused: boolean;
+  /** 停用（token 失效：被封禁或撤销；发送路由跳过该 bot，名下任务标记失败）。 */
+  disabled: boolean;
 }
 
 export interface DistRow {
@@ -679,6 +681,10 @@ export interface SettingsView {
 
   /** 单个请求累计尝试上限（含首次；即时生效；缺省 3，可配 1–10）。 */
   max_request_attempts: number;
+  /** 自动备份间隔小时（0=关闭；缺省 6；即时生效）。 */
+  backup_interval_hours: number;
+  /** 自动备份保留份数（缺省 8 ≈ 48 小时窗口）。 */
+  backup_keep_count: number;
 
   /** 文件分片传输运行时配置：当前生效值（1–16）。 */
   download_threads: number;
@@ -759,7 +765,7 @@ export function fetchNotificationConfig(): Promise<NotificationConfigView> {
   return apiRequest<NotificationConfigView>("/api/v1/notification/config");
 }
 
-export type NotificationSeverity = "info" | "warn" | "error";
+export type NotificationSeverity = "info" | "warn" | "error" | "critical";
 export type NotificationOverride = "inherit" | "enabled" | "disabled";
 export type NotificationChannel = "admin_badge" | "bot" | "webhook";
 
@@ -892,6 +898,8 @@ export interface MTProtoStatus {
 	bot_dc_id?: number;
 	bot_updated_at?: number;
 	last_error?: string;
+	/** 离线原因分类（仅 offline 态返回）：banned 封号 / revoked 会话失效 / network 网络 / unknown 未知。 */
+	error_kind?: string;
 	/** 多机器人池：逐 bot 的直传会话状态（装配顺序，主 bot 在前）。 */
 	bots?: MTProtoBotRow[];
 }
@@ -907,6 +915,33 @@ export interface MTProtoBotRow {
 
 export function fetchMTProtoStatus(): Promise<MTProtoStatus> {
   return apiRequest<MTProtoStatus>("/api/v1/mtproto/status");
+}
+
+/** 缓存迁移进度（internal/dumpcache MigrateProgress 同构）。 */
+export interface DumpMigrateProgress {
+  running: boolean;
+  from: number;
+  to: number;
+  total: number;
+  done: number;
+  failed: number;
+  skipped: number;
+  started_at: number;
+  finished_at?: number;
+  last_error?: string;
+}
+
+/** 缓存迁移端点响应：配置状态 + 进度 + 建议源频道。 */
+export interface DumpMigrateView {
+  configured: boolean;
+  channel_id: number;
+  progress: DumpMigrateProgress;
+  suggest_from: number;
+}
+
+/** 查询缓存迁移进度与建议源频道。 */
+export function fetchDumpMigrate(): Promise<DumpMigrateView> {
+  return apiRequest<DumpMigrateView>("/api/v1/dumpcache/migrate");
 }
 
 // ---- 频道绑定（频道绑定管理页） ----
@@ -925,6 +960,12 @@ export interface ChannelBindingRow {
   bound_via: string;
   /** 路由 bot：仅它受理的任务投递到此；0 = 通配（Web 绑定/历史行）。 */
   bot_id: number;
+  /** active 有效 / unbound 已解绑（v24 软解绑留痕）。 */
+  status: string;
+  /** 解绑原因：manual 手动 / channel_gone 频道失效自动；active 为空。 */
+  unbind_reason?: string;
+  /** 解绑时间（Unix 毫秒）。 */
+  unbound_at?: number;
   /** 绑定时间（Unix 毫秒）。 */
   created_at: number;
   /** 所属用户的用户名（用户被硬删除后为空串）。 */
@@ -1197,6 +1238,8 @@ export interface BotRow {
   conflict: boolean;
   /** 已暂停（停止接收新消息；在途任务正常完成）。 */
   paused: boolean;
+  /** 停用（token 失效：被封禁或撤销；发送路由跳过该 bot，名下任务标记失败）。 */
+  disabled: boolean;
   /** Bot MTProto 直传会话 raw 状态；空串 = 未接入。 */
   mtproto_state?: string;
   /** env（环境变量，只读）| file（bots.json，可增删）。 */

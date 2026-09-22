@@ -29,6 +29,7 @@ type apiBotRow struct {
 	Online         bool   `json:"online"`   // Bot API 长轮询在线
 	Conflict       bool   `json:"conflict"` // 消息拉取冲突（token 被其他服务占用；收不到新消息）
 	Paused         bool   `json:"paused"`   // 已暂停（停止接收新消息；在途任务正常完成）
+	Disabled       bool   `json:"disabled"` // 停用（token 失效：被封禁或撤销；发送路由跳过）
 	MTProtoState   string `json:"mtproto_state,omitempty"`
 	Source         string `json:"source"`          // env | file（botlist.Source）
 	RestartPending bool   `json:"restart_pending"` // 已配置但当前进程未接入（等待重启）
@@ -79,6 +80,7 @@ func (s *Server) botsView() botsView {
 			row.Name = ident.Name
 			row.Online = ident.Online
 			row.Conflict = ident.Conflict
+			row.Disabled = ident.Disabled
 		} else {
 			// 进程未接入该 token（等待重启）：id 由 token 前缀已知，
 			// 标记待重启；不回显 token 本身

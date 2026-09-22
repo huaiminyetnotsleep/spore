@@ -9,6 +9,10 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
+// testDumpChannelID 是缓存补写测试统一使用的缓存频道 ID（svc 闭包与
+// 落库条目必须同频道才构成 already_dumped 语义）。
+const testDumpChannelID = int64(-100777)
+
 // TestDumpBackfillSuccess：资格通过 → 新建 dump 行（沿用原 user/ref、
 // parent 指向原行）→ 特权入队（Job 携带 DumpOnly 与新行 ID，不占用户
 // 额度、不写占位消息）→ 审计留痕。
@@ -101,8 +105,10 @@ func TestDumpBackfillSkipMatrix(t *testing.T) {
 	// already_dumped：缓存频道已有同链接条目
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 13, store.DeliveryModeUpload)
+	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+		DumpChannelID: testDumpChannelID,
 	}); err != nil {
 		t.Fatalf("落缓存条目失败: %v", err)
 	}
@@ -188,8 +194,10 @@ func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 	mustEnabledUser(t, st, 1)
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 41, store.DeliveryModeUpload)
+	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+		DumpChannelID: testDumpChannelID,
 	}); err != nil {
 		t.Fatalf("落缓存条目失败: %v", err)
 	}
@@ -237,8 +245,10 @@ func TestDumpBackfillProbeOutsideTx(t *testing.T) {
 	mustEnabledUser(t, st, 1)
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 51, store.DeliveryModeUpload)
+	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+		DumpChannelID: testDumpChannelID,
 	}); err != nil {
 		t.Fatalf("落缓存条目失败: %v", err)
 	}

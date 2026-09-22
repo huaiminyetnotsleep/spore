@@ -465,7 +465,8 @@ func backfillCategories(policy *Policy) {
 }
 
 func validSeverity(value string) bool {
-	return value == notify.SeverityInfo || value == notify.SeverityWarn || value == notify.SeverityError
+	return value == notify.SeverityInfo || value == notify.SeverityWarn ||
+		value == notify.SeverityError || value == notify.SeverityCritical
 }
 
 func validOverride(value string) bool {

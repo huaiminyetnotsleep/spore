@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/gotd/contrib/middleware/floodwait"
@@ -35,6 +37,21 @@ func New(cfg config.Config, log *slog.Logger) *Client {
 
 // Session 返回登录会话对象（状态快照与 Web 触发重连）。
 func (c *Client) Session() *Session { return c.sess }
+
+// ClearSessionFiles 删除用户号会话与 Peer 缓存文件（session.json +
+// peers.json）：用户号被封禁或会话被撤销后，管理员经 Web 显式触发，
+// 为新号扫码腾出干净状态。仅在离线状态调用（Web 层校验）——运行中删除
+// 会话文件会与本轮 gotd 生命周期竞争。Bot 直传会话（bot-session*.json）
+// 与用户号无关，不受影响。peers.json 缺失属正常（新号首次访问自动重建）。
+func (c *Client) ClearSessionFiles() error {
+	for _, name := range []string{"session.json", "peers.json"} {
+		path := filepath.Join(c.cfg.DataDir, name)
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("删除 %s: %w", name, err)
+		}
+	}
+	return nil
+}
 
 // Updates 返回 update 分发桥（装配层在 ready 作用域内 Bind/Unbind）。
 func (c *Client) Updates() *ChannelUpdateBridge { return c.updates }

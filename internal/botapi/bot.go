@@ -405,6 +405,13 @@ func IsConflictError(err error) bool {
 	return errors.Is(err, tgbot.ErrorConflict)
 }
 
+// IsUnauthorizedError 报告错误是否为"Token 失效"（HTTP 401）：Bot 被封禁
+// 或 token 被 @BotFather 撤销。库把 401 包装为 ErrorUnauthorized 哨兵的
+// 包装错误；该错误不会自愈（换 token 前 getUpdates 永远 401）。
+func IsUnauthorizedError(err error) bool {
+	return errors.Is(err, tgbot.ErrorUnauthorized)
+}
+
 // WebhookURL 返回该 bot 当前登记的 webhook 地址（空串 = 未设置 webhook）。
 // 供装配层在 bot 接入时探测"token 被其他 webhook 服务占用"。
 func WebhookURL(ctx context.Context, b *tgbot.Bot) (string, error) {

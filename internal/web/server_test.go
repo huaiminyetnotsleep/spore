@@ -141,6 +141,9 @@ func newTestEnvOpts(t *testing.T, mutate func(*config.Config, *Options)) *testEn
 			t.Fatalf("测试队列须实现 access.Enqueuer，得到 %T", opt.Queue)
 		}
 		accessSvc, err := access.New(access.Options{Store: st, Queue: q, Log: testLogger(), Now: clock.Now})
+		// 缓存补写资格判定按当前缓存频道过滤（v24）：测试环境固定一个频道，
+		// 与 api_write_dump_backfill_test 落库条目的 DumpChannelID 对齐。
+		accessSvc.SetDumpChannelID(func() int64 { return -100777 })
 		if err != nil {
 			t.Fatalf("构造访问控制服务失败: %v", err)
 		}

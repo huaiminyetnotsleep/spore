@@ -49,6 +49,7 @@ function botsView(overrides: Partial<BotsView> = {}): BotsView {
         online: true,
         conflict: false,
         paused: false,
+        disabled: false,
         mtproto_state: "ready",
         source: "env",
         restart_pending: false,
@@ -61,6 +62,7 @@ function botsView(overrides: Partial<BotsView> = {}): BotsView {
         online: true,
         conflict: false,
         paused: true,
+        disabled: false,
         source: "file",
         restart_pending: false,
       },
@@ -215,5 +217,32 @@ describe("机器人池管理页", () => {
     );
     expect(await screen.findByText("已写入配置，重启进程后生效。")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+describe("机器人停用徽标", () => {
+  it("disabled 行展示「已停用（Token 失效）」", async () => {
+    fetchBotsMock.mockResolvedValue(
+      botsView({
+        bots: [
+          {
+            bot_id: 333,
+            username: "spore_dead",
+            name: "Dead Bot",
+            primary: false,
+            online: true,
+            conflict: false,
+            paused: false,
+            disabled: true,
+            source: "env",
+            restart_pending: false,
+          },
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId("bot-disabled-333")).toHaveTextContent("已停用（Token 失效）");
   });
 });

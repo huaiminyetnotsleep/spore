@@ -82,3 +82,44 @@ func TestEvaluateActivityIgnoresMinimumSeverity(t *testing.T) {
 		t.Errorf("事件覆盖 disabled 应抑制活动通知，得到 %+v", got)
 	}
 }
+
+// TestEvaluateCriticalBypassesMuteAndSeverity 封禁类（critical）事件穿透
+// 静音计划与最低严重级别门槛；显式事件级关闭与渠道不可用仍然生效。
+func TestEvaluateCriticalBypassesMuteAndSeverity(t *testing.T) {
+	policy := DefaultPolicy()
+	now := time.Now()
+
+	// 全渠道永久静音（match all）：critical 放行，error 级被静音
+	mutes := []MuteSchedule{{
+		ID: "mute-all", Enabled: true, Permanent: true, Channels: []string{ChannelBot, ChannelWebhook},
+		MatchMode: MuteMatchAll,
+	}}
+	if got := Evaluate(policy, mutes, notify.KeyMTProtoBanned, ChannelBot, false, true, now); !got.Enabled {
+		t.Fatalf("静音计划不应拦下封禁类事件，得到 %+v", got)
+	}
+	if got := Evaluate(policy, mutes, notify.KeyBackupFailed, ChannelBot, false, true, now); got.Enabled {
+		t.Errorf("error 级事件在静音窗口内应被抑制，得到 %+v", got)
+	}
+
+	// 门槛调到 critical：仅 critical 放行
+	policy.MinimumSeverity = notify.SeverityCritical
+	if got := Evaluate(policy, nil, notify.KeyBotBanned, ChannelWebhook, false, true, now); !got.Enabled {
+		t.Fatalf("critical 不受最低严重级别约束，得到 %+v", got)
+	}
+	if got := Evaluate(policy, nil, notify.KeySessionOffline, ChannelWebhook, false, true, now); got.Enabled {
+		t.Errorf("error 级在 critical 门槛下应被抑制，得到 %+v", got)
+	}
+
+	// 管理员显式关闭该事件：critical 也被抑制（显式意图优先）
+	policy.MinimumSeverity = notify.SeverityWarn
+	policy.Events[notify.KeyMTProtoBanned] = EventPolicy{
+		AdminBadge: OverrideInherit, Bot: OverrideDisabled, Webhook: OverrideInherit, Recovery: OverrideInherit,
+	}
+	if got := Evaluate(policy, nil, notify.KeyMTProtoBanned, ChannelBot, false, true, now); got.Enabled {
+		t.Errorf("显式事件关闭应抑制封禁类事件，得到 %+v", got)
+	}
+	// 渠道不可用：critical 同样被拦
+	if got := Evaluate(policy, nil, notify.KeyBotBanned, ChannelWebhook, false, false, now); got.Enabled {
+		t.Errorf("渠道不可用应抑制封禁类事件，得到 %+v", got)
+	}
+}

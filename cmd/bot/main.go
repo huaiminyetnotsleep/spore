@@ -20,8 +20,10 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"errors"
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/backup"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
 	"github.com/huaiminyetnotsleep/spore/internal/botlist"
 	"github.com/huaiminyetnotsleep/spore/internal/botpool"
@@ -37,6 +39,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	queuepkg "github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
 	"github.com/huaiminyetnotsleep/spore/internal/watch"
 	"github.com/huaiminyetnotsleep/spore/internal/web"
@@ -215,6 +218,55 @@ func main() {
 		}
 	}()
 
+	// 容器内定时备份：间隔与保留份数实时读 syscfg（backup_interval_hours
+	// 缺省 6 小时、0=关闭；backup_keep_count 缺省 8 份 = 48 小时滚动窗口），
+	// 管理端修改即时生效。每 tick 重读配置而非固定 Ticker：配置变更后
+	// 下一轮即按新间隔执行。失败（含磁盘空间不足跳过）上报 backup.failed
+	// 事件；事件按 key 合并 + 通知冷却，不会刷屏。
+	go func() {
+		for {
+			hours := syscfg.LoadBackupIntervalHours(ctx, st)
+			if hours == 0 {
+				// 已关闭：低频复查配置是否重新开启
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Hour):
+				}
+				continue
+			}
+			// 到期延迟按 last_backup_at 计算：服务频繁重启不重置计时器
+			//（否则间隔长于重启周期时永远不触发）；从未备份立即执行。
+			delay := time.Duration(hours) * time.Hour
+			if last := syscfg.LoadLastBackupAt(ctx, st); last > 0 {
+				if elapsed := time.Since(time.UnixMilli(last)); elapsed < delay {
+					delay -= elapsed
+				} else {
+					delay = 0
+				}
+			} else {
+				delay = 0
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			keep := syscfg.LoadBackupKeepCount(ctx, st)
+			if _, err := backup.Run(ctx, st, cfg.DataDir, "", keep, "system", time.Now(), logger); err != nil {
+				scene := "定时备份执行失败"
+				if errors.Is(err, backup.ErrInsufficientSpace) {
+					scene = "磁盘剩余空间不足，定时备份已跳过"
+				}
+				logger.Error("定时备份失败", "error", err.Error())
+				hub.Raise(ctx, notify.KeyBackupFailed, notify.SeverityError,
+					notify.BackupFailData{Scene: scene})
+			} else {
+				hub.Recover(ctx, notify.KeyBackupFailed)
+			}
+		}
+	}()
+
 	// 启动恢复：把上次进程退出遗留的 queued/processing 请求批量置为
 	// failed(INTERRUPTED)，不静默丢失，可在 Web 侧重试。
 	// 必须在队列 worker 启动前执行；失败说明数据库本身异常，按启动失败退出。
@@ -305,13 +357,20 @@ func main() {
 	// 单独 new 一个不 Run 的客户端会永远返回初始 offline（975db56 回归）。
 	// MTProto 会话状态 → 事件中心（经观察回调，mtproto 不感知 notify）：
 	// 转入 offline 产生/合并告警；重连成功（ready）自动解决对应事件。
+	// 封禁/会话撤销额外触发 mtproto.banned（Critical，穿透静音计划）；
+	// 事件按 key UPSERT 合并 + 30 分钟通知冷却，重复 relogin 失败不会刷屏。
 	// 回调在 mtproto 状态锁外执行，Raise/Recover 内部自带限时，不会拖慢状态机。
 	m.Session().SetStateHook(func(state string) {
 		switch state {
 		case mtproto.StateOffline:
 			hub.Raise(ctx, notify.KeySessionOffline, notify.SeverityError, nil)
+			if kind := m.Session().Status().ErrorKind; kind == mtproto.ErrorKindBanned || kind == mtproto.ErrorKindRevoked {
+				hub.Raise(ctx, notify.KeyMTProtoBanned, notify.SeverityCritical,
+					notify.MTProtoBanData{ErrorKind: kind})
+			}
 		case mtproto.StateReady:
 			hub.Recover(ctx, notify.KeySessionOffline)
+			hub.Recover(ctx, notify.KeyMTProtoBanned)
 		}
 	})
 	// 频道加入服务（Bot /join 与 Web 管理端共用）：审批通知经 Bot 私聊
@@ -348,13 +407,15 @@ func main() {
 	// 注入后会补发启动前已经落库但尚未成功通知的事件；旧 owner 私聊在
 	// automatic_events 关闭或配置异常时继续作为兼容回退。
 	hub.SetRuntimeNotifier(notificationCfg)
+	dumpHolder := &dumpCacheHolder{}
 	webSrv, err := web.New(web.Options{
 		Store:             st,
 		Cfg:               cfg,
 		Log:               logger,
 		Access:            accessSvc,                                        // 管理操作入口（审批/重试/限额/设置）
+		DumpCache:         dumpHolder,                                       // 缓存频道迁移工具（ready 生命周期内刷新）
 		Queue:             q,                                                // 总览页队列指标
-		MTProto:           m.Session(),                                      // 扫码登录状态与重连接口（§6.4）
+		MTProto:           &mtprotoWebAdapter{c: m},                         // 扫码登录状态与重连/清理会话接口（§6.4）
 		BotMTProto:        botClients[botlist.BotID(bots[0].Token)],         // Bot 会话状态与当前 DC（主 bot；多 bot 见 robots 管理页）
 		BotIdentity:       botIdentity,                                      // 总览页展示机器人池身份（Bot 就绪后经 getMe 回填）
 		BotList:           botMgr,                                           // 机器人管理页（env ∪ bots.json 列表/增删）
@@ -423,6 +484,7 @@ func main() {
 		cloud:       cloudMgr,
 		cloudSink:   rcloneSink,
 		botIdentity: botIdentity,
+		dumpHolder:  dumpHolder,
 	}
 
 	err = m.Run(ctx, a.onMTProtoReady)
@@ -433,6 +495,16 @@ func main() {
 	}
 	logger.Info("已退出")
 }
+
+// mtprotoWebAdapter 把用户号 MTProto 客户端适配为 Web 登录页依赖：
+// 状态与重连经 Session，清理会话文件经 Client（需要 DataDir 定位文件）。
+type mtprotoWebAdapter struct{ c *mtproto.Client }
+
+func (a *mtprotoWebAdapter) Status() mtproto.StatusSnapshot { return a.c.Session().Status() }
+
+func (a *mtprotoWebAdapter) TriggerRelogin() error { return a.c.Session().TriggerRelogin() }
+
+func (a *mtprotoWebAdapter) ClearSessionFiles() error { return a.c.ClearSessionFiles() }
 
 func newLogger(level slog.Level) *slog.Logger {
 	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})

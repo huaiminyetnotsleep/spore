@@ -141,6 +141,7 @@ func TestDumpEntryStatsByKeys(t *testing.T) {
 	for i, key := range []string{"-1001234", "mychan", "-1005678"} {
 		if _, err := s.InsertDumpEntry(ctx, DumpEntry{
 			ChannelKey: key, MessageID: 10 + i, DumpIDs: []int{100 + i},
+			DumpChannelID: -100555,
 		}); err != nil {
 			t.Fatalf("预置条目失败: %v", err)
 		}
@@ -149,6 +150,7 @@ func TestDumpEntryStatsByKeys(t *testing.T) {
 	time.Sleep(2 * time.Millisecond) // 保证毫秒时间戳递增
 	if _, err := s.InsertDumpEntry(ctx, DumpEntry{
 		ChannelKey: "-1001234", MessageID: 99, DumpIDs: []int{199},
+		DumpChannelID: -100555,
 	}); err != nil {
 		t.Fatalf("预置条目失败: %v", err)
 	}

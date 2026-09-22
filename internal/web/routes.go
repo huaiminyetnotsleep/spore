@@ -76,6 +76,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/channel-bindings", s.apiAuth(s.handleAPIChannelBindingsList))
 	mux.Handle("POST /api/v1/channel-bindings", s.apiAuth(s.apiCSRF(s.handleAPIChannelBindingAdd)))
 	s.mountAPIWrite(mux, "/api/v1/channel-bindings/{id}/delete", s.handleAPIChannelBindingDelete)
+	s.mountAPIWrite(mux, "/api/v1/channel-bindings/delete", s.handleAPIChannelBindingsDelete)
 	// 频道加入管理（internal/joinmgr；Bot /join 与 Web 共用同一服务）：
 	// 申请列表只读；审批与批量退出为写端点；已加入频道列表读取前执行
 	// 总开关熔断（Enforce）。
@@ -176,8 +177,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/backup/import/json", s.handleAPIBackupImportJSON)
 	s.mountAPIWrite(mux, "/api/v1/backup/import/all-json", s.handleAPIBackupImportAllJSON)
 	s.mountAPIWrite(mux, "/api/v1/restart", s.handleAPIRestart)
+	mux.Handle("GET /api/v1/dumpcache/migrate", s.apiAuth(s.handleAPIDumpCacheMigrateGet))
+	mux.Handle("POST /api/v1/dumpcache/migrate", s.apiAuth(s.apiCSRF(s.handleAPIDumpCacheMigrateStart)))
 	mux.Handle("GET /api/v1/mtproto/status", s.apiAuth(s.handleAPIMTProtoStatus))
 	s.mountAPIWrite(mux, "/api/v1/mtproto/relogin", s.handleAPIMTProtoRelogin)
+	s.mountAPIWrite(mux, "/api/v1/mtproto/clear-session", s.handleAPIMTProtoClearSession)
 	// 机器人管理（多机器人池）：列表合并 env ∪ bots.json；增删走文件配置
 	//（重启生效），token 只进不出。
 	mux.Handle("GET /api/v1/bots", s.apiAuth(s.handleAPIBotsGet))

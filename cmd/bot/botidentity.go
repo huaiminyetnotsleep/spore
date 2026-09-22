@@ -60,6 +60,7 @@ func (s *botIdentityStore) BotIdentities() []web.BotIdentityEntry {
 			Primary:     i == 0,
 			Online:      sn.Online,
 			Conflict:    sn.Conflict,
+			Disabled:    sn.Disabled,
 		})
 	}
 	return out

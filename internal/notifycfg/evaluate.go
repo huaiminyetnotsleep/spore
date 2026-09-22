@@ -44,9 +44,15 @@ func Evaluate(policy Policy, mutes []MuteSchedule, eventType, channel string, re
 	if recovery {
 		effectiveCategory = notify.CategorySystemRecovery
 	}
-	for _, mute := range mutes {
-		if muteMatches(mute, definition.Type, effectiveCategory, channel, now) {
-			return Evaluation{Reason: DecisionMuted, MuteID: mute.ID}
+	// Critical（封禁类）事件穿透静音计划与最低严重级别门槛：静音计划开着
+	// 也必须把"用户号被封/Bot 失效"送达管理员，否则静音窗口恰好掩盖最需要
+	// 人工介入的故障。显式事件级关闭（管理员明确 off）与渠道不可用仍然生效。
+	critical := definition.Severity == notify.SeverityCritical
+	if !critical {
+		for _, mute := range mutes {
+			if muteMatches(mute, definition.Type, effectiveCategory, channel, now) {
+				return Evaluation{Reason: DecisionMuted, MuteID: mute.ID}
+			}
 		}
 	}
 
@@ -71,8 +77,10 @@ func Evaluate(policy Policy, mutes []MuteSchedule, eventType, channel string, re
 	}
 	// 最低严重级别是告警降噪手段：活动通知（登录/申请等）是 info 级的逐次
 	// 显式业务通知，不受该门槛约束（否则默认 warn 会静默吞掉全部活动通知）；
-	// 其开关由类别/事件覆盖与静音控制。
-	if definition.Category != notify.CategoryActivity &&
+	// 其开关由类别/事件覆盖与静音控制。Critical 封禁事件同样不受该门槛约束
+	//（与静音穿透同一理由）。
+	if !critical &&
+		definition.Category != notify.CategoryActivity &&
 		(channel == ChannelBot || channel == ChannelWebhook) &&
 		severityRank(definition.Severity) < severityRank(policy.MinimumSeverity) {
 		return Evaluation{Reason: DecisionBelowSeverity}
@@ -141,6 +149,8 @@ func severityRank(severity string) int {
 		return 2
 	case notify.SeverityError:
 		return 3
+	case notify.SeverityCritical:
+		return 4
 	default:
 		return 0
 	}

@@ -48,6 +48,7 @@ const SEVERITY_TONES: Record<NotificationSeverity, StatusTone> = {
   info: "processing",
   warn: "warning",
   error: "error",
+  critical: "error",
 };
 
 interface PolicyFormValues {
@@ -251,6 +252,7 @@ export function PolicySettings({ eventType, onEventHandled }: PolicySettingsProp
                 { value: "info", label: "信息（info）" },
                 { value: "warn", label: "警告（warn）" },
                 { value: "error", label: "错误（error）" },
+                { value: "critical", label: "仅严重（critical，封禁类）" },
               ]}
             />
           </Form.Item>

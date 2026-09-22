@@ -91,8 +91,8 @@ describe("事件中心页", () => {
 
     expect(await screen.findByText("mtproto.upload_failed")).toBeInTheDocument();
     expect(screen.getByText("bot.send_failed")).toBeInTheDocument();
-    expect(screen.getByText("error")).toBeInTheDocument();
-    expect(screen.getByText("warn")).toBeInTheDocument();
+    expect(screen.getByText("错误")).toBeInTheDocument();
+    expect(screen.getByText("警告")).toBeInTheDocument();
     expect(screen.getByText("未解决")).toBeInTheDocument();
     expect(screen.getByText("已解决")).toBeInTheDocument();
     expect(fetchEventsMock).toHaveBeenCalledWith(

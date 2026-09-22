@@ -3,6 +3,8 @@ package mtproto
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +16,40 @@ const (
 	StateReady        = "ready"         // 会话有效，核心链路（Bot/worker）已启动
 )
 
+// 离线错误分类（StatusSnapshot.ErrorKind）：封禁类区分决定 Web 端处置
+// 文案与是否触发 mtproto.banned Critical 事件。
+const (
+	ErrorKindBanned  = "banned"  // 用户号被封禁（USER_DEACTIVATED_BAN）
+	ErrorKindRevoked = "revoked" // 会话被撤销/失效（SESSION_REVOKED、AUTH_KEY_UNREGISTERED）
+	ErrorKindNetwork = "network" // 网络异常（等待重连，通常自愈）
+	ErrorKindUnknown = "unknown" // 其他未分类错误
+)
+
+// ClassifyMTProtoError 把 Run 循环异常退出的错误归类到 ErrorKind。
+// gotd 的 RPC 错误（*tg.Error）携带大写错误码文本，包裹链各异——按错误码
+// 子串匹配最稳；网络类以 net.Error / 超时判定。未匹配一律 unknown（宁可
+// 保守展示"原因未知"，不可把普通故障误报成封禁）。
+func ClassifyMTProtoError(err error) string {
+	if err == nil {
+		return ErrorKindUnknown
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "USER_DEACTIVATED_BAN"):
+		return ErrorKindBanned
+	case strings.Contains(msg, "SESSION_REVOKED") ||
+		strings.Contains(msg, "AUTH_KEY_UNREGISTERED") ||
+		strings.Contains(msg, "SESSION_EXPIRED"):
+		return ErrorKindRevoked
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(msg, "connection") || strings.Contains(msg, "timeout") {
+		return ErrorKindNetwork
+	}
+	return ErrorKindUnknown
+}
+
 // ErrNotOffline 表示会话不在离线状态，无法（也无需）触发重连。
 var ErrNotOffline = errors.New("mtproto: 会话当前不是离线状态，无法触发重连")
 
@@ -24,7 +60,8 @@ type StatusSnapshot struct {
 	State     string
 	QRURL     string
 	LastError string
-	UpdatedAt int64 // Unix 毫秒
+	ErrorKind string // 离线原因分类（见 ErrorKind*；ready/login_pending 为空）
+	UpdatedAt int64  // Unix 毫秒
 }
 
 // Session 跟踪 MTProto 会话状态并承接 Web 触发的重连：
@@ -36,6 +73,7 @@ type Session struct {
 	state     string
 	qrURL     string
 	lastErr   string
+	errorKind string // 离线原因分类（setOffline 写入；非 offline 态为空）
 	updatedAt int64
 	hook      func(state string) // 状态观察回调（可空；锁外调用，见 SetStateHook）
 	webLogin  bool               // 下一轮登录用 Web 扫码呈现（TriggerRelogin 置位，每轮消费后复位）
@@ -56,7 +94,8 @@ func newSession(now func() time.Time) *Session {
 func (s *Session) Status() StatusSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return StatusSnapshot{State: s.state, QRURL: s.qrURL, LastError: s.lastErr, UpdatedAt: s.updatedAt}
+	return StatusSnapshot{State: s.state, QRURL: s.qrURL, LastError: s.lastErr,
+		ErrorKind: s.errorKind, UpdatedAt: s.updatedAt}
 }
 
 // TriggerRelogin 请求重连：仅离线状态接受，信号非阻塞投递（已在等待即合并）。
@@ -101,6 +140,7 @@ func (s *Session) setLoginPending(viaWeb bool) {
 	defer s.mu.Unlock()
 	s.state = StateLoginPending
 	s.qrURL = ""
+	s.errorKind = ""
 	if viaWeb {
 		s.lastErr = ""
 	}
@@ -131,6 +171,7 @@ func (s *Session) setReady() {
 	s.state = StateReady
 	s.qrURL = ""
 	s.lastErr = ""
+	s.errorKind = ""
 	s.updatedAt = s.now().UnixMilli()
 	hook := s.hook
 	s.mu.Unlock()
@@ -151,6 +192,9 @@ func (s *Session) setOffline(err error) {
 			msg = msg[:200]
 		}
 		s.lastErr = msg
+		s.errorKind = ClassifyMTProtoError(err)
+	} else {
+		s.errorKind = ""
 	}
 	s.updatedAt = s.now().UnixMilli()
 	hook := s.hook

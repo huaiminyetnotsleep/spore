@@ -292,6 +292,8 @@ export interface SettingsSaveInput {
   watch_per_user_limit?: number;
   /** 单个请求累计尝试上限（1–10，含首次，即时生效）；缺省不变更。 */
   max_request_attempts?: number;
+  backup_interval_hours?: number;
+  backup_keep_count?: number;
   /** 文件分片传输配置；缺省不变更。 */
   download_threads?: number;
   upload_threads?: number;
@@ -640,6 +642,14 @@ export const restartServer = (): Promise<RestartResult> =>
 export const reloginMTProto = (): Promise<WriteOK> =>
   postJSON<WriteOK>("/api/v1/mtproto/relogin");
 
+/** 清理用户号会话文件（session.json + peers.json；仅离线状态被接受）。 */
+export const clearMTProtoSession = (): Promise<WriteOK> =>
+  postJSON<WriteOK>("/api/v1/mtproto/clear-session");
+
+/** 发起缓存频道迁移（旧频道副本整批复制到当前缓存频道；后台执行）。 */
+export const startDumpMigrate = (fromChannelID: number): Promise<WriteOK> =>
+  postJSON<WriteOK>("/api/v1/dumpcache/migrate", { from_channel_id: fromChannelID });
+
 // ---- 频道绑定（频道绑定管理页） ----
 
 /** 绑定频道请求体：归属用户 + 频道标识（@username / t.me 链接 / -100… ID）。 */
@@ -674,6 +684,23 @@ export interface UnbindChannelResult extends WriteOK {
 /** 解除指定频道 ID 的绑定（管理端可解绑任意用户的绑定）。 */
 export const unbindChannel = (channelId: number): Promise<UnbindChannelResult> =>
   postJSON<UnbindChannelResult>(`/api/v1/channel-bindings/${encodeURIComponent(String(channelId))}/delete`);
+
+/** 批量删除绑定记录的结果行。 */
+export interface DeleteBindingResult {
+  channel_id: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** 批量删除绑定响应。 */
+export interface DeleteBindingsResult extends WriteOK {
+  deleted: number;
+  results: DeleteBindingResult[];
+}
+
+/** 物理删除绑定记录（单条/批量共用；解绑是软解绑留痕，删除即清行）。 */
+export const deleteBindings = (channelIds: number[]): Promise<DeleteBindingsResult> =>
+  postJSON<DeleteBindingsResult>("/api/v1/channel-bindings/delete", { channel_ids: channelIds });
 
 // ---- 频道加入（频道加入管理页） ----
 

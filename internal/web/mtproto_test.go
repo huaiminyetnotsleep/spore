@@ -28,6 +28,8 @@ func (f *fakeMTProto) Status() mtproto.StatusSnapshot {
 	return f.snap
 }
 
+func (f *fakeMTProto) ClearSessionFiles() error { return nil }
+
 func (f *fakeMTProto) TriggerRelogin() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

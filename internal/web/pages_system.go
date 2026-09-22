@@ -28,7 +28,7 @@ import (
 const (
 	settingKeyQueueCapacity      = "queue_capacity"        // 全局队列容量（JSON 数字；重启生效）
 	settingKeyWorkerCount        = "worker_count"          // 任务并发 worker 数（JSON 数字；重启生效）
-	settingKeyLastBackupAt       = "last_backup_at"        // 最近一次备份时间（JSON 数字，Unix 毫秒）
+	settingKeyLastBackupAt       = syscfg.KeyLastBackupAt  // 最近一次备份时间（JSON 数字，Unix 毫秒；syscfg 单一来源）
 	settingKeyMaxFileSize        = "max_file_size"         // 媒体上限（JSON 数字字节；重启生效）
 	settingKeyStreamLimit        = "stream_limit"          // 流式阈值（JSON 数字字节；重启生效）
 	settingKeyTempDirMaxSize     = "temp_dir_max_size"     // 临时目录总量上限（JSON 数字字节；重启生效）
@@ -255,7 +255,11 @@ type settingsUpdateInput struct {
 	WatchPerUserLimit    *int
 	// MaxRequestAttempts 为单个请求累计尝试上限（含首次）；nil 表示不变更。
 	// 即时生效（syscfg 直查，重试校验与详情展示无缓存）。
-	MaxRequestAttempts     *int
+	MaxRequestAttempts *int
+	// BackupIntervalHours / BackupKeepCount 是自动备份配置；nil 表示不变更。
+	// 即时生效（定时循环每 tick 重读 syscfg）。
+	BackupIntervalHours    *int
+	BackupKeepCount        *int
 	DownloadThreads        *int
 	UploadThreads          *int
 	DownloadConnections    *int
@@ -508,6 +512,36 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				return res, &settingsStoreError{op: "保存最大尝试次数", err: err}
 			}
 			s.audit(ctx, "settings.request_retry", "settings", map[string]any{
+				"before": current, "after": n, "effect": "即时生效"})
+		}
+	}
+
+	// 自动备份配置（即时生效：定时循环每 tick 重读 syscfg）
+	if in.BackupIntervalHours != nil {
+		n := *in.BackupIntervalHours
+		if err := syscfg.ValidateBackupIntervalHours(n); err != nil {
+			return res, &settingsParamError{err.Error()}
+		}
+		current := syscfg.LoadBackupIntervalHours(ctx, s.st)
+		if n != current {
+			if err := syscfg.SetBackupIntervalHours(ctx, s.st, n); err != nil {
+				return res, &settingsStoreError{op: "保存自动备份间隔", err: err}
+			}
+			s.audit(ctx, "settings.backup_interval", "settings", map[string]any{
+				"before": current, "after": n, "effect": "即时生效"})
+		}
+	}
+	if in.BackupKeepCount != nil {
+		n := *in.BackupKeepCount
+		if err := syscfg.ValidateBackupKeepCount(n); err != nil {
+			return res, &settingsParamError{err.Error()}
+		}
+		current := syscfg.LoadBackupKeepCount(ctx, s.st)
+		if n != current {
+			if err := syscfg.SetBackupKeepCount(ctx, s.st, n); err != nil {
+				return res, &settingsStoreError{op: "保存备份保留份数", err: err}
+			}
+			s.audit(ctx, "settings.backup_keep", "settings", map[string]any{
 				"before": current, "after": n, "effect": "即时生效"})
 		}
 	}

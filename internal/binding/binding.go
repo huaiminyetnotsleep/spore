@@ -25,6 +25,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
+	"html"
 )
 
 // ClassifyVerifyError 把绑定/监听校验中 Bot API 调用（GetChat/GetChatMember）
@@ -339,11 +340,18 @@ func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.Chann
 	}
 
 	// 归属预检与上限校验：本人重绑为幂等更新不受限；新绑定受数量上限约束。
-	// 他人已绑定时给出明确的业务拒绝，而不是存储约束的笼统文案。
+	// 他人已**有效**绑定时给出明确的业务拒绝，而不是存储约束的笼统文案；
+	// 已解绑（unbound）的行视同空位——本人重绑复活、他人重绑接管（Upsert
+	// 复合同一语义）。
 	existing, err := s.store.GetChannelBinding(ctx, chat.ID)
 	switch {
-	case err == nil && existing.UserID != in.UserID:
+	case err == nil && existing.Status == store.BindingStatusActive && existing.UserID != in.UserID:
 		return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelAlreadyBound, "")
+	case err == nil && existing.Status != store.BindingStatusActive && existing.UserID != in.UserID:
+		// 接管已解绑的频道按新绑定计：走数量上限校验
+		if s.bindLimitReached(ctx, in.UserID) {
+			return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelBindLimit, "")
+		}
 	case errors.Is(err, store.ErrNotFound):
 		if s.bindLimitReached(ctx, in.UserID) {
 			return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelBindLimit, "")
@@ -391,9 +399,10 @@ func (s *Service) UnbindBot(ctx context.Context, userID int64, target string) (s
 	return s.Unbind(ctx, userID, target, false)
 }
 
-// Unbind 解除绑定。userID > 0 且 anyOwner=false 时只允许解绑自己的绑定
+// Unbind 解除绑定（软解绑，v24 起）：记录保留、状态置 unbound，重新绑定
+// 同频道即复活。userID > 0 且 anyOwner=false 时只允许解绑自己的绑定
 // （Bot 指令路径）；anyOwner=true（Web 管理端）可解绑任意绑定。
-// 目标不存在或不属于该用户返回 store.ErrNotFound。
+// 目标不存在或不属于该用户返回 store.ErrNotFound；已解绑幂等返回该行。
 func (s *Service) Unbind(ctx context.Context, userID int64, target string, anyOwner bool) (store.ChannelBinding, error) {
 	tgt, err := ParseChannelTarget(target)
 	if err != nil {
@@ -407,7 +416,7 @@ func (s *Service) Unbind(ctx context.Context, userID int64, target string, anyOw
 	if !anyOwner {
 		ownerScope = userID
 	}
-	removed, err := s.store.DeleteChannelBinding(ctx, channelID, ownerScope)
+	removed, _, err := s.store.MarkChannelBindingUnbound(ctx, channelID, ownerScope, store.UnbindReasonManual)
 	if err != nil {
 		return store.ChannelBinding{}, err
 	}
@@ -418,6 +427,27 @@ func (s *Service) Unbind(ctx context.Context, userID int64, target string, anyOw
 		BeforeJSON: fmt.Sprintf(`{"user_id":%d,"username":%q,"title":%q}`, removed.UserID, removed.Username, removed.Title),
 	})
 	s.log.Info("频道已解绑", "user_id", removed.UserID, "channel_id", removed.ChannelID, "actor_scope", ownerScope)
+	return removed, nil
+}
+
+// DeleteBinding 物理删除绑定记录（管理端删除入口，v24 起）：与解绑
+// （软解绑留痕）相对，删除即清行——已解绑的留痕行由此移除，也可删除仍
+// active 的行（等价强制解绑 + 清痕）。返回删除前的记录；不存在返回
+// store.ErrNotFound。
+func (s *Service) DeleteBinding(ctx context.Context, channelID int64, actor string) (store.ChannelBinding, error) {
+	removed, err := s.store.DeleteChannelBinding(ctx, channelID, 0)
+	if err != nil {
+		return store.ChannelBinding{}, err
+	}
+	_ = s.store.AppendAudit(ctx, store.AuditEntry{
+		Actor:  actor,
+		Action: "channel_binding.delete",
+		Target: fmt.Sprintf("channel:%d", removed.ChannelID),
+		BeforeJSON: fmt.Sprintf(`{"user_id":%d,"username":%q,"title":%q,"status":%q}`,
+			removed.UserID, removed.Username, removed.Title, removed.Status),
+	})
+	s.log.Info("频道绑定记录已删除", "user_id", removed.UserID,
+		"channel_id", removed.ChannelID, "status", removed.Status)
 	return removed, nil
 }
 
@@ -639,6 +669,16 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 				// ErrCode 供确认文案给出具体处置指引
 				outcome.Targets[len(outcome.Targets)-1].ErrCode = string(code)
 			}
+			// 失败细分（v24 起）：
+			//   频道本体已消失（不存在/停用/被封）→ 软解绑留痕 + 私聊通知用户，
+			//     仅状态转换成功才通知/审计（并发任务同发现只生效一次）；
+			//   机器人被移出/权限不足 → 不解绑（重新加回管理员即可恢复），
+			//     仅提醒用户；其余（网络/限流等临时错误）维持仅记日志。
+			if delivery.IsChannelGoneError(err) {
+				s.autoUnbindDeadChannel(ctx, botID, userID, bnd)
+			} else if code == apperr.CodeSendTargetInvalid {
+				s.notifyChannelNoRights(ctx, b, userID, bnd)
+			}
 			continue
 		}
 		s.log.Info("频道副本已发送", "user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs))
@@ -673,6 +713,85 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 		outcome.Targets[len(outcome.Targets)-1].Pinned = true
 	}
 	return outcome
+}
+
+// autoUnbindDeadChannel 把已消失（不存在/停用/被封）的绑定频道软解绑：
+// 记录保留供管理端审计展示，状态转换成功才写审计并经受理 bot 私聊通知
+// 用户（幂等——并发任务同时发现频道失效只有一次转换成功）。
+func (s *Service) autoUnbindDeadChannel(ctx context.Context, botID, userID int64, bnd store.ChannelBinding) {
+	_, changed, err := s.store.MarkChannelBindingUnbound(ctx, bnd.ChannelID, 0, store.UnbindReasonChannelGone)
+	if err != nil {
+		s.log.Warn("频道失效自动解绑失败", "user_id", userID,
+			"channel_id", bnd.ChannelID, "error", err.Error())
+		return
+	}
+	if !changed {
+		return // 已被解绑（并发或此前）：不重复通知
+	}
+	_ = s.store.AppendAudit(ctx, store.AuditEntry{
+		Actor:  "system",
+		Action: "channel_binding.auto_unbind",
+		Target: fmt.Sprintf("channel:%d", bnd.ChannelID),
+		AfterJSON: fmt.Sprintf(`{"reason":"channel_gone","channel_title":%q,"user_id":%d,"bot_id":%d}`,
+			bnd.Title, bnd.UserID, botID),
+	})
+	s.log.Warn("绑定频道已不可用，自动解绑",
+		"user_id", bnd.UserID, "channel_id", bnd.ChannelID, "bot_id", botID)
+	title := channelDisplayTitle(bnd)
+	s.notifyUserHTML(ctx, botID, bnd.UserID, fmt.Sprintf(
+		"⚠️ 您绑定的频道 <b>%s</b> 已不可用（可能已被删除或封禁），已自动解绑。"+
+			"如需继续同步副本，请创建新频道、将本机器人设为管理员后重新发送 /bind。"+
+			"您的历史提取记录不受影响。", title))
+}
+
+// notifyChannelNoRights 机器人被移出频道/权限不足的提醒：不解绑（管理员
+// 重新加回即可恢复），尽力而为送达。
+func (s *Service) notifyChannelNoRights(ctx context.Context, b *tgbot.Bot, userID int64, bnd store.ChannelBinding) {
+	s.log.Warn("频道副本失败：机器人无该频道发言权限（不解绑，提醒用户）",
+		"user_id", userID, "channel_id", bnd.ChannelID)
+	title := channelDisplayTitle(bnd)
+	nctx, cancel := notifyWindow(ctx)
+	defer cancel()
+	if _, err := b.SendMessage(nctx, &tgbot.SendMessageParams{
+		ChatID:    userID,
+		Text:      fmt.Sprintf("⚠️ 本机器人在您的频道 <b>%s</b> 中已无发言权限（可能被移出管理员）。请在频道设置中重新将本机器人添加为管理员，否则副本将无法同步到该频道。", title),
+		ParseMode: "HTML",
+	}); err != nil {
+		s.log.Info("频道权限提醒发送失败", "user_id", userID, "channel_id", bnd.ChannelID, "error", err.Error())
+	}
+}
+
+// notifyUserHTML 经受理 bot（未命中回退主 bot）向用户私聊发送 HTML 提醒，
+// 尽力而为：失败只记日志。
+func (s *Service) notifyUserHTML(ctx context.Context, botID, userID int64, html string) {
+	b := s.botFor(botID)
+	if b == nil {
+		return
+	}
+	nctx, cancel := notifyWindow(ctx)
+	defer cancel()
+	if _, err := b.SendMessage(nctx, &tgbot.SendMessageParams{
+		ChatID: userID, Text: html, ParseMode: "HTML",
+	}); err != nil {
+		s.log.Info("频道解绑通知发送失败", "user_id", userID, "bot_id", botID, "error", err.Error())
+	}
+}
+
+// channelDisplayTitle 绑定频道的展示标题（标题 → @用户名 → 数字 ID）。
+func channelDisplayTitle(b store.ChannelBinding) string {
+	if b.Title != "" {
+		return html.EscapeString(b.Title)
+	}
+	if b.Username != "" {
+		return "@" + b.Username
+	}
+	return strconv.FormatInt(b.ChannelID, 10)
+}
+
+// notifyWindow 给解绑/提醒通知的 Bot API 调用一个独立短时间窗：不占用
+// 副本投递的整段 copyWindow，挂起时快速放弃（尽力而为语义）。
+func notifyWindow(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 }
 
 // pinExistingWindow 是事后补置顶的时间窗：/pin 回复已完成任务的消息时，

@@ -166,3 +166,47 @@ func TestMemberConflictTransitions(t *testing.T) {
 		t.Fatal("精确查找应返回对应成员")
 	}
 }
+
+// TestMemberDisabledRoutingFallback 覆盖停用语义：SetDisabled 状态转换、
+// 快照透出，以及路由降级——指定 bot 停用回退第一个可用成员、主 bot 停用
+// 回退次序成员、全部停用保底返回原命中。
+func TestMemberDisabledRoutingFallback(t *testing.T) {
+	primary, second, third := &fakeSender{}, &fakeSender{}, &fakeSender{}
+	m1, m2, m3 := member(1, primary, primary), member(2, second, second), member(3, third, third)
+	pool := New()
+	pool.Reset([]*Member{m1, m2, m3})
+
+	// 状态转换只在变化时返回 true
+	if !m2.SetDisabled(true) {
+		t.Fatal("首次停用应返回 true")
+	}
+	if m2.SetDisabled(true) {
+		t.Fatal("重复停用应返回 false")
+	}
+	if !pool.Snapshots()[1].Disabled {
+		t.Fatal("快照应携带停用态")
+	}
+
+	// 指定 bot 停用：回退第一个可用成员（主 bot）
+	if snd := pool.SenderFor(2); snd != primary {
+		t.Fatal("停用 bot 的路由应回退主 bot")
+	}
+	// 主 bot 停用：未指定与指定都回退第一个可用（m2 已停用，可用的是 m3）
+	m1.SetDisabled(true)
+	if snd := pool.SenderFor(0); snd != third {
+		t.Fatal("主 bot 停用应回退第一个可用成员")
+	}
+	if snd := pool.SenderFor(1); snd != third {
+		t.Fatal("指定停用主 bot 应回退第一个可用成员")
+	}
+	// 全部停用：保底返回原命中（上层预检已拦截，此处仅兜底）
+	m3.SetDisabled(true)
+	if snd := pool.SenderFor(3); snd != third {
+		t.Fatal("全部停用时应保底返回原命中成员")
+	}
+	// 恢复：清除停用后路由回到该 bot
+	m1.SetDisabled(false)
+	if snd := pool.SenderFor(1); snd != primary {
+		t.Fatal("恢复后路由应回到主 bot")
+	}
+}

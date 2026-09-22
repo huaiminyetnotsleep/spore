@@ -862,11 +862,14 @@ cloud-drive.json.enc
 | `username` | string | 频道公开用户名（无 @），私有频道为空串 |
 | `title` | string | 绑定时取得的频道标题 |
 | `bound_via` | string | `bot`（用户 /bind 指令）\| `web`（管理端） |
+| `status` | string | `active` 有效 \| `unbound` 已解绑留痕（v24 软解绑：解绑不删行，重新绑定同频道即复活，unbound 行允许其他用户接管） |
+| `unbind_reason` | string \| 缺省 | 解绑原因：`manual`（手动）\| `channel_gone`（频道已失效自动解绑）；`active` 行省略 |
+| `unbound_at` | int64 \| 缺省 | 解绑时间（Unix 毫秒）；`active` 行省略 |
 | `created_at` | int64 | 绑定时间（Unix 毫秒） |
 | `user_username` | string | 所属用户的用户名（用户被硬删除后为空串） |
 | `user_display_name` | string | 所属用户的显示名 |
 
-业务语义：任务成功后，提取内容会在发给用户之后复制一份到该用户绑定的频道；同一频道只归属一个用户。
+业务语义：任务成功后，提取内容会在发给用户之后复制一份到该用户**有效**（`active`）的绑定频道；同一频道同时只归属一个用户。频道失效（不存在/停用/被封）时副本投递自动软解绑（`channel_gone`）并私聊通知归属用户；Bot 被移出/权限不足只提醒不解绑。
 
 ### POST /api/v1/channel-bindings
 
@@ -883,7 +886,18 @@ cloud-drive.json.enc
 
 ### POST /api/v1/channel-bindings/{id}/delete
 
-解除指定频道 ID 的绑定（认证 + CSRF；管理端可解绑任意用户的绑定）。路径 `{id}` 为 `channel_id`（负数，形如 `-1001234567890`）。响应 `{"ok":true,"binding":apiChannelBindingRow}`（解绑前的记录）。错误：`400`（ID 非法）；`404`（绑定不存在）。
+解除指定频道 ID 的绑定（认证 + CSRF；管理端可解绑任意用户的绑定）。路径 `{id}` 为 `channel_id`（负数，形如 `-1001234567890`）。v24 起为**软解绑**：记录保留、状态置 `unbound`（原因 `manual`），重新绑定同频道即复活。响应 `{"ok":true,"binding":apiChannelBindingRow}`。错误：`400`（ID 非法）；`404`（绑定不存在）。审计：`channel.unbind`。
+
+### POST /api/v1/channel-bindings/delete
+
+物理删除绑定记录（单条/批量共用，认证 + CSRF；v24 起）。请求体：`{"channel_ids":[…]}`（1–100 个频道 ID）。删除即清行（与软解绑留痕相对）；`active` 行删除等价强制解绑 + 清痕。单条失败不中断其余。响应：
+
+```json
+{ "ok": true, "deleted": 2,
+  "results": [ {"channel_id": -100…, "ok": true}, {"channel_id": -100…, "ok": false, "error": "…"} ] }
+```
+
+错误：`400`（数量/ID 非法）。审计：逐条 `channel_binding.delete` + 汇总 `channel_binding.bulk_delete`。
 
 ---
 
@@ -1025,7 +1039,7 @@ cloud-drive.json.enc
 | --- | --- | --- |
 | `id` | int64 | 事件 ID |
 | `key` | string | 事件去重键 |
-| `severity` | string | 级别（raw） |
+| `severity` | string | 级别（raw）：`critical`（封禁类，穿透静音计划）/ `error` / `warn` / `info` |
 | `message` | string | 受控中文描述 |
 | `count` | int | 合并发生次数 |
 | `first_at` / `last_at` | int64 | 首次/最近发生时间 |
@@ -1107,6 +1121,8 @@ cloud-drive.json.enc
 | `watch_max_sources` | int | 监听源总数上限（0–200，0 = 不限；仅约束用户申请；缺省 20） |
 | `watch_per_user_limit` | int | 每用户申请上限（0–20，0 = 不限；缺省 3） |
 | `max_request_attempts` | int | 单个请求累计尝试上限（1–10，含首次；即时生效；缺省 3） |
+| `backup_interval_hours` | int | 自动备份间隔小时（0–168，0 = 关闭；即时生效；缺省 6） |
+| `backup_keep_count` | int | 自动备份保留份数（1–50；即时生效；缺省 8，默认间隔下约 48 小时窗口） |
 | `download_threads` / `upload_threads` / `download_connections` / `upload_connections` | int | 传输并发当前生效值（1–16） |
 | `download_threads_env` / `upload_threads_env` / `download_connections_env` / `upload_connections_env` | int | 对应环境变量默认值 |
 | `download_threads_overridden` / `upload_threads_overridden` / `download_connections_overridden` / `upload_connections_overridden` | bool | 该项是否存在数据库覆盖（缺省 `false` = 跟随环境默认） |
@@ -1130,6 +1146,8 @@ cloud-drive.json.enc
 | `watch_max_sources` | int | 0–200（0 = 不限） |
 | `watch_per_user_limit` | int | 0–20（0 = 不限） |
 | `max_request_attempts` | int | 1–10（累计含首次）；缺省保持不变，保存后即时影响重试校验 |
+| `backup_interval_hours` | int | 0–168（0 = 关闭自动备份）；缺省保持不变，保存后即时生效 |
+| `backup_keep_count` | int | 1–50；缺省保持不变，保存后即时生效（轮转保留最近 N 份） |
 | `queue_capacity` | int | 1–4096；缺省保持不变 |
 | `worker_count` | int | 1–16；缺省保持不变 |
 | `max_file_size` + `max_file_unit` | string | 数值 + 单位（`MB`/`GB`）；缺省保持不变，**两项必须成对填写** |
@@ -1216,7 +1234,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/notification/event-catalog
 
-返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error`。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
+返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error` / `critical`（封禁类：`mtproto.banned` / `bot.banned`，穿透静音计划与最低级别门槛）。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
 
 ### GET /api/v1/notification/policy
 
@@ -1411,6 +1429,33 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 
 触发重连（认证 + CSRF），无请求体。仅离线状态接受。响应 `{"ok":true,"message":"已触发重连，请等待新的扫码二维码。"}`。错误：`409 CONFLICT`（当前不是离线状态）、`503 TELEGRAM_UNAVAILABLE`（未接入）。
 
+MTProto 状态响应（`GET /api/v1/mtproto/status`）在 `state=offline` 时附带 `error_kind` 离线原因分类：`banned`（账号被封禁 USER_DEACTIVATED_BAN）/ `revoked`（会话被撤销或失效）/ `network`（网络异常）/ `unknown`。分类为 `banned` / `revoked` 时同步产生 `mtproto.banned` **critical** 事件（穿透静音计划）。
+
+### POST /api/v1/mtproto/clear-session
+
+清理用户号会话文件（认证 + CSRF，无请求体；v24 起）：删除 `data/session.json` 与 `data/peers.json`（Bot 直传会话文件 `bot-session*.json` 与用户号无关，不受影响），为新号扫码腾出干净状态。**仅离线状态接受**（在线返回 `409 CONFLICT`，防误删运行中会话）。响应 `{"ok":true,"message":"会话文件已清理，请点击重新登录并用新号扫码。"}`。错误：`409`（会话在线）；`503 TELEGRAM_UNAVAILABLE`（未接入）。审计：`mtproto.clear_session`。
+
+---
+
+## 12b. 缓存频道迁移（v24）
+
+把旧缓存频道中仍可读的副本整批复制到当前缓存频道（免重新提取），供切换缓存频道或升级后重建秒级复用。业务核心在 `internal/dumpcache`：分批限速执行、后台运行、断点可续（重启后重新发起继续）；源频道不可读时中止（剩余条目由复用自愈重建）。
+
+### GET /api/v1/dumpcache/migrate
+
+查询迁移进度与建议源频道（认证）。响应：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `configured` | bool | 当前是否已配置缓存频道 |
+| `channel_id` | int64 | 当前缓存频道 ID |
+| `suggest_from` | int64 | 建议源频道：settings 键 `dump_channel_legacy_id`（首次查询时若存在 `dump_channel_id=0` 的升级前存量条目，按当时生效频道记录一次） |
+| `progress` | object | `{running, from, to, total, done, failed, skipped, started_at, finished_at?, last_error?}` |
+
+### POST /api/v1/dumpcache/migrate
+
+发起迁移（认证 + CSRF）。请求体：`{"from_channel_id": -100…}`。拒绝条件（受控 400）：未配置缓存频道、源频道即当前频道、已有迁移进行中、ID 非法。响应 `{"ok":true,"progress":…}`。审计：`dumpcache.migrate`。
+
 ---
 
 ## 12a. 机器人池管理（多机器人池）
@@ -1437,6 +1482,7 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 | `online` | bool | Bot API 长轮询是否在线 |
 | `conflict` | bool | 消息拉取冲突：token 被 webhook 或另一个轮询实例占用，该 bot 收不到新消息（发送不受影响）。处理方式：让对方服务下线该 bot（webhook 型需由对方删除 webhook），或从本实例移除该 token 后重启；冲突进入/恢复会分别产生/解决 `bot.poll_conflict` 事件 |
 | `paused` | bool | 已暂停：管理端手动暂停后停止接收该 bot 的新消息（在途任务由原 bot 正常完成）；即时生效、重启保持 |
+| `disabled` | bool | 停用（v24）：长轮询 401——Token 被封禁或撤销。发送路由自动降级到其他可用 bot；名下排队任务出队即标记 `failed(BOT_DISABLED)` 并提示用户向其他机器人重新提交。进入停用产生 `bot.banned` **critical** 事件（穿透静音计划）；不自愈，替换 Token 并重启是唯一恢复路径（重启后仍失效会再次标记） |
 | `mtproto_state` | string \| 缺省 | 该 bot 的 MTProto 直传会话状态；未接入时省略 |
 | `source` | string | `env`（环境变量，只读）\| `file`（管理端可增删） |
 | `restart_pending` | bool | 已配置但当前进程未接入（等待重启） |

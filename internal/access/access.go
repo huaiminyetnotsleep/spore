@@ -84,8 +84,11 @@ type Service struct {
 	senderMu  sync.RWMutex
 	sender    delivery.Sender // 审批结果通知通道；Bot 就绪后经 SetSender 注入（见注释）
 	dumpLive  dumpLiveFunc    // 缓存副本有效性校验；Bot 就绪后经 SetDumpLive 注入
-	log       *slog.Logger
-	now       func() time.Time
+	// dumpChannelID 解析当前缓存频道 ID（与 dumpcache 同源）；Bot 就绪后经
+	// SetDumpChannelID 注入。闭包读 settings，严禁在事务视图内调用。
+	dumpChannelID func() int64
+	log           *slog.Logger
+	now           func() time.Time
 }
 
 // New 创建服务；Store 与 Queue 为必填。

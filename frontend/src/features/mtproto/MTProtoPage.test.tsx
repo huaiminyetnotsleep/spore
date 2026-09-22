@@ -11,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fetchMTProtoStatus, type MTProtoStatus } from "../../api/admin";
-import { reloginMTProto } from "../../api/mutations";
+import { clearMTProtoSession, reloginMTProto } from "../../api/mutations";
 import { MTProtoPage } from "./MTProtoPage";
 
 vi.mock("../../api/admin", async () => {
@@ -26,11 +26,13 @@ vi.mock("../../api/mutations", async () => {
   return {
     ...actual,
     reloginMTProto: vi.fn(),
+    clearMTProtoSession: vi.fn(),
   };
 });
 
 const fetchMTProtoStatusMock = vi.mocked(fetchMTProtoStatus);
 const reloginMTProtoMock = vi.mocked(reloginMTProto);
+const clearSessionMock = vi.mocked(clearMTProtoSession);
 
 function status(overrides: Partial<MTProtoStatus> = {}): MTProtoStatus {
   return {
@@ -57,6 +59,7 @@ function renderPage() {
 afterEach(() => {
   fetchMTProtoStatusMock.mockReset();
   reloginMTProtoMock.mockReset();
+  clearSessionMock.mockReset();
   vi.clearAllMocks();
 });
 
@@ -176,5 +179,52 @@ describe("MTProto 连接页", () => {
     fetchMTProtoStatusMock.mockResolvedValue(status());
     fireEvent.click(screen.getByRole("button", { name: /重\s*试/ }));
     await waitFor(() => expect(screen.getByTestId("mtproto-state")).toHaveTextContent("就绪"));
+  });
+});
+
+describe("MTProto 离线原因分类与清理会话", () => {
+  it("banned 分类展示封禁处置文案与清理会话按钮（仅离线可用）", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(
+      status({ state: "offline", error_kind: "banned", last_error: "USER_DEACTIVATED_BAN" }),
+    );
+
+    renderPage();
+
+    const alert = await screen.findByTestId("mtproto-error-kind");
+    expect(alert.textContent).toContain("账号已被封禁");
+    expect(alert.textContent).toContain("清理会话文件");
+    const clearBtn = screen.getByRole("button", { name: "清理会话文件" });
+    expect(clearBtn).toBeEnabled();
+  });
+
+  it("revoked 分类展示会话撤销文案", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(
+      status({ state: "offline", error_kind: "revoked" }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId("mtproto-error-kind")).toHaveTextContent("会话已被撤销");
+  });
+
+  it("在线状态不展示清理会话按钮", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(status({ state: "ready" }));
+
+    renderPage();
+
+    await screen.findByTestId("mtproto-state");
+    expect(screen.queryByRole("button", { name: "清理会话文件" })).toBeDisabled();
+  });
+
+  it("清理会话经 danger 确认后调用接口", async () => {
+    fetchMTProtoStatusMock.mockResolvedValue(status({ state: "offline", error_kind: "revoked" }));
+    clearSessionMock.mockResolvedValue({ ok: true } as never);
+
+    renderPage();
+
+    const clearBtn = await screen.findByRole("button", { name: "清理会话文件" });
+    fireEvent.click(clearBtn);
+    fireEvent.click(await screen.findByRole("button", { name: "确 认" }));
+    await waitFor(() => expect(clearSessionMock).toHaveBeenCalledTimes(1));
   });
 });

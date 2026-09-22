@@ -186,6 +186,35 @@ var sendTargetPatterns = []string{
 	"have no rights",              // 部分权限错误不含 "not enough rights"
 	"upgraded to a supergroup",    // 群升级迁移 chat（原 chat 已失效，需重新绑定）
 	"user is deactivated",         // 目标用户已注销
+	"chat was deactivated",        // 聊天/频道已被停用（删除或封禁）
+	"channel was banned",          // 频道因违规被封禁
+}
+
+// channelGonePatterns 是"频道本体已消失"的子集（sendTargetPatterns 内）：
+// 命中即频道不存在或已被封——副本永远发不进去，绑定自动解绑（软）；
+// 其余目标不可用（被踢/权限不足）只是机器人被移出，重新加回即可恢复，
+// 不自动解绑只提醒。
+var channelGonePatterns = []string{
+	"chat not found",
+	"chat was deactivated",
+	"channel was banned",
+}
+
+// IsChannelGoneError 报告发送失败是否因目标频道本体已消失（不存在/停用/
+// 被封禁）：用于频道绑定自动解绑判定。仅对 ClassifyBotError 归为
+// SEND_TARGET_INVALID 的错误进一步细分（原始错误文本含 Bot API
+// description，与分类同源小写匹配），其余（网络/限流/权限不足等）恒 false。
+func IsChannelGoneError(err error) bool {
+	if apperr.From(ClassifyBotError(err)).Code != apperr.CodeSendTargetInvalid {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range channelGonePatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ClassifyBotError 把 go-telegram/bot 的错误归类为 AppError：限流与

@@ -27,12 +27,22 @@ import { StatusTag, type StatusTone } from "../shared/StatusTag";
 
 const { Text } = Typography;
 
-/** 事件级别 → 语义色调（领域映射由本页定义）。 */
+/** 事件级别 → 语义色调（领域映射由本页定义）。critical 是封禁类最高级
+ *（穿透静音计划），独立于 error 的深红展示。 */
 const SEVERITY_TONES: Record<string, StatusTone> = {
+  critical: "error",
   error: "error",
   warn: "warning",
   warning: "warning",
   info: "processing",
+};
+
+/** 事件级别中文标签。 */
+const SEVERITY_LABELS: Record<string, string> = {
+  critical: "严重",
+  error: "错误",
+  warn: "警告",
+  info: "信息",
 };
 
 /** 事件状态 → 语义色调（与 EVENT_STATUS_LABELS 同 key）。 */
@@ -100,7 +110,9 @@ export function EventsPage() {
       dataIndex: "severity",
       key: "severity",
       render: (severity: string) => (
-        <StatusTag tone={SEVERITY_TONES[severity] ?? "default"}>{severity}</StatusTag>
+        <StatusTag tone={SEVERITY_TONES[severity] ?? "default"}>
+          {SEVERITY_LABELS[severity] ?? severity}
+        </StatusTag>
       ),
     },
     {

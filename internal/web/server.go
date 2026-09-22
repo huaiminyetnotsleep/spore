@@ -18,6 +18,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
+	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
@@ -45,6 +46,9 @@ type QueueStats interface {
 type MTProtoRelogin interface {
 	Status() mtproto.StatusSnapshot
 	TriggerRelogin() error
+	// ClearSessionFiles 删除用户号会话与 Peer 缓存文件（仅离线状态由
+	// handler 校验后调用），见 mtproto.Client.ClearSessionFiles。
+	ClearSessionFiles() error
 }
 
 // BotMTProtoStatus 是 Bot MTProto 会话状态的最小 Web 依赖。
@@ -90,6 +94,7 @@ type BotIdentityEntry struct {
 	Online   bool `json:"online"`   // Bot API 长轮询是否在线
 	Conflict bool `json:"conflict"` // 消息拉取冲突（token 被其他服务占用；收不到新消息）
 	Paused   bool `json:"paused"`   // 已暂停（停止接收新消息；在途任务正常完成）
+	Disabled bool `json:"disabled"` // 停用（token 失效：被封禁或撤销；发送路由跳过该 bot）
 }
 
 // BotIdentityProvider 提供当前接入的 Bot API 机器人身份：BotIdentity 返回
@@ -98,6 +103,15 @@ type BotIdentityEntry struct {
 type BotIdentityProvider interface {
 	BotIdentity() (BotIdentity, bool)
 	BotIdentities() []BotIdentityEntry
+}
+
+// DumpCacheMigrator 是缓存频道迁移工具对 Web 的最小依赖（internal/dumpcache
+// 的 Service 实现；跨 MTProto 生命周期由装配层持有器委托当前实例）。
+type DumpCacheMigrator interface {
+	Enabled() bool
+	Channel() (int64, bool)
+	StartMigrate(ctx context.Context, fromChannelID int64) error
+	MigrateProgress() dumpcache.MigrateProgress
 }
 
 // UserProfileLookup 是 Web 手动刷新用户资料的最小生命周期感知接口。
@@ -111,6 +125,8 @@ type UserProfileLookup interface {
 type ChannelBinder interface {
 	Bind(ctx context.Context, in binding.BindInput) (store.ChannelBinding, error)
 	Unbind(ctx context.Context, userID int64, target string, anyOwner bool) (store.ChannelBinding, error)
+	// DeleteBinding 物理删除绑定记录（管理端删除入口；解绑是软解绑留痕）。
+	DeleteBinding(ctx context.Context, channelID int64, actor string) (store.ChannelBinding, error)
 	ListAll(ctx context.Context) ([]store.ChannelBindingWithUser, error)
 	ListAllByUser(ctx context.Context, userID int64) ([]store.ChannelBindingWithUser, error)
 	// VerifyChannel 解析并校验频道目标（缓存频道配置用）：返回数字频道 ID
@@ -205,7 +221,8 @@ type Options struct {
 	// Monitor 提供系统资源与传输监控查询；nil 时监控端点返回受控不可用。
 	Monitor *monitor.Service
 	// Bindings 是频道绑定服务（internal/binding.Service）；缺失时相关路由报不可用。
-	Bindings ChannelBinder
+	Bindings  ChannelBinder
+	DumpCache DumpCacheMigrator // 可选：缓存频道迁移工具（跨生命周期持有器注入）
 	// ChannelJoin 是频道加入管理服务（internal/joinmgr.Service）；
 	// 缺失时相关路由报不可用。
 	ChannelJoin ChannelJoinManager
@@ -261,6 +278,7 @@ type Server struct {
 	progress         *progress.Registry
 	monitor          *monitor.Service
 	bindings         ChannelBinder
+	dumpCache        DumpCacheMigrator
 	channelJoin      ChannelJoinManager
 	watch            WatchManager
 	transfer         TransferConfig
@@ -331,6 +349,7 @@ func New(opt Options) (*Server, error) {
 		progress:     opt.Progress,
 		monitor:      opt.Monitor,
 		bindings:     opt.Bindings,
+		dumpCache:    opt.DumpCache,
 		channelJoin:  opt.ChannelJoin,
 		watch:        opt.Watch,
 		transfer:     opt.Transfer,

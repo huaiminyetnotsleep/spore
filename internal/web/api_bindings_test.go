@@ -24,6 +24,8 @@ type fakeChannelBinder struct {
 	}
 	unbindErr error
 	unbindOut store.ChannelBinding
+	// DeleteBinding（物理删除）的可编程失败
+	deleteErr error
 	listRows  []store.ChannelBindingWithUser
 	// VerifyChannel（缓存频道配置校验）的可编程返回
 	verifyTarget string
@@ -40,6 +42,13 @@ func (f *fakeChannelBinder) Bind(_ context.Context, in binding.BindInput) (store
 func (f *fakeChannelBinder) Unbind(_ context.Context, userID int64, target string, anyOwner bool) (store.ChannelBinding, error) {
 	f.unbindIn.userID, f.unbindIn.target, f.unbindIn.anyOwner = userID, target, anyOwner
 	return f.unbindOut, f.unbindErr
+}
+
+func (f *fakeChannelBinder) DeleteBinding(_ context.Context, channelID int64, _ string) (store.ChannelBinding, error) {
+	if f.deleteErr != nil {
+		return store.ChannelBinding{}, f.deleteErr
+	}
+	return store.ChannelBinding{ChannelID: channelID, UserID: 1, Status: store.BindingStatusActive}, nil
 }
 
 func (f *fakeChannelBinder) ListAll(context.Context) ([]store.ChannelBindingWithUser, error) {

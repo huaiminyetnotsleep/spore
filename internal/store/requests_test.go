@@ -749,7 +749,7 @@ func TestDumpEntries(t *testing.T) {
 	}
 
 	older, err := s.InsertDumpEntry(ctx, DumpEntry{
-		ChannelKey: "example", MessageID: 7, DumpIDs: []int{11}})
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{11}, DumpChannelID: -100555})
 	if err != nil {
 		t.Fatalf("写入失败: %v", err)
 	}
@@ -757,12 +757,12 @@ func TestDumpEntries(t *testing.T) {
 		t.Fatalf("应回填 ID 与时间: %+v", older)
 	}
 	latest, err := s.InsertDumpEntry(ctx, DumpEntry{
-		ChannelKey: "example", MessageID: 7, DumpIDs: []int{21, 22, 23}})
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{21, 22, 23}, DumpChannelID: -100555})
 	if err != nil {
 		t.Fatalf("写入失败: %v", err)
 	}
 
-	got, err := s.LatestDumpEntry(ctx, "example", 7)
+	got, err := s.LatestDumpEntry(ctx, "example", 7, -100555)
 	if err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -772,10 +772,10 @@ func TestDumpEntries(t *testing.T) {
 	if got.FormatVersion != DumpFormatVersion {
 		t.Fatalf("新条目应为当前格式版本: %+v", got)
 	}
-	if _, err := s.LatestDumpEntry(ctx, "example", 8); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LatestDumpEntry(ctx, "example", 8, -100555); !errors.Is(err, ErrNotFound) {
 		t.Errorf("无条目应 ErrNotFound，得到 %v", err)
 	}
-	if _, err := s.LatestDumpEntry(ctx, "other", 7); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LatestDumpEntry(ctx, "other", 7, -100555); !errors.Is(err, ErrNotFound) {
 		t.Errorf("其他频道不应命中: %v", err)
 	}
 }
@@ -793,16 +793,16 @@ func TestDumpEntriesFormatVersionFilter(t *testing.T) {
 		"example", 7, `[11,12]`, 0, nowMillis()); err != nil {
 		t.Fatalf("注入历史行失败: %v", err)
 	}
-	if _, err := s.LatestDumpEntry(ctx, "example", 7); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LatestDumpEntry(ctx, "example", 7, -100555); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("历史格式行不应命中: %v", err)
 	}
 
 	// 新写入当前版本后命中；同链接混存两代时仍只返回当前版本
 	if _, err := s.InsertDumpEntry(ctx, DumpEntry{
-		ChannelKey: "example", MessageID: 7, DumpIDs: []int{21}}); err != nil {
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{21}, DumpChannelID: -100555}); err != nil {
 		t.Fatalf("写入失败: %v", err)
 	}
-	got, err := s.LatestDumpEntry(ctx, "example", 7)
+	got, err := s.LatestDumpEntry(ctx, "example", 7, -100555)
 	if err != nil || got.DumpIDs[0] != 21 {
 		t.Fatalf("当前格式行应命中: %+v err=%v", got, err)
 	}

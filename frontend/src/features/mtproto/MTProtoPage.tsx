@@ -12,7 +12,7 @@ import { Alert, Button, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 
 import { fetchMTProtoStatus } from "../../api/admin";
-import { reloginMTProto } from "../../api/mutations";
+import { clearMTProtoSession, reloginMTProto } from "../../api/mutations";
 import { MTPROTO_STATE_LABELS, labelOf } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
@@ -27,6 +27,24 @@ const STATUS_POLL_INTERVAL_MS = 2000;
 /** SSR data-confirm 同款文案。 */
 const CONFIRM_RELOGIN_TEXT =
   "确定触发重连？登录模式将重启 MTProto 客户端，期间 Bot 暂停服务。";
+
+/** 清理会话文件的确认文案：动作不可逆（旧会话作废，需新号扫码）。 */
+const CONFIRM_CLEAR_TEXT =
+  "确定清理会话文件？将删除 session.json 与 peers.json（清理后旧会话即作废，需用新号扫码重新登录）。请先确认已导出备份。";
+
+/** 离线原因分类 → 处置提示（与服务端 ErrorKind 对齐）。 */
+const ERROR_KIND_ALERTS: Record<string, { type: "error" | "warning"; message: string }> = {
+  banned: {
+    type: "error",
+    message:
+      "⛔ 账号已被封禁（USER_DEACTIVATED_BAN）。请先在备份页导出数据库与全量配置，准备好新号后点击「清理会话文件」，再点「重连 / 重新扫码登录」用新号扫码。",
+  },
+  revoked: {
+    type: "warning",
+    message:
+      "⚠️ 会话已被撤销或失效（SESSION_REVOKED / AUTH_KEY_UNREGISTERED）。点击「清理会话文件」后重新扫码即可恢复。",
+  },
+};
 
 /** 会话状态 → 语义色调：ready 为已连接，其余按未连接展示。 */
 function connectionTone(state: string): StatusTone {
@@ -54,10 +72,16 @@ export function MTProtoPage() {
     invalidate: [["mtproto"]],
     successText: "已触发重连，请等待新的扫码二维码。",
   });
+  const clearSession = useAdminAction({
+    action: () => clearMTProtoSession(),
+    invalidate: [["mtproto"]],
+    successText: "会话文件已清理，请点击重连并用新号扫码。",
+  });
   const confirm = useConfirmAction();
 
   const connected = data?.state === "ready";
   const canRelogin = data?.state === "offline";
+  const errorKindAlert = data?.state === "offline" && data?.error_kind ? ERROR_KIND_ALERTS[data.error_kind] : undefined;
 
   return (
     <PageScaffold
@@ -115,6 +139,9 @@ export function MTProtoPage() {
                   </Space>
                 ) : null}
 
+                {errorKindAlert ? (
+                  <Alert data-testid="mtproto-error-kind" type={errorKindAlert.type} showIcon message={errorKindAlert.message} />
+                ) : null}
                 {data?.last_error ? <Alert type="error" showIcon message={data.last_error} /> : null}
               </Space>
             </PageSection>
@@ -143,7 +170,7 @@ export function MTProtoPage() {
 
             <PageSection title="重连">
               <Space direction="vertical" size="small" className="field-width-full">
-                <div>
+                <Space size="small" wrap>
                   <Button
                     type="primary"
                     disabled={!canRelogin}
@@ -159,7 +186,22 @@ export function MTProtoPage() {
                   >
                     重连 / 重新扫码登录
                   </Button>
-                </div>
+                  <Button
+                    danger
+                    disabled={!canRelogin}
+                    loading={clearSession.pending}
+                    onClick={() =>
+                      confirm({
+                        intent: "danger",
+                        title: "确认清理会话文件",
+                        content: CONFIRM_CLEAR_TEXT,
+                        action: () => clearSession.run(undefined),
+                      })
+                    }
+                  >
+                    清理会话文件
+                  </Button>
+                </Space>
                 <Paragraph type="secondary" className="layout-margin-bottom-0">
                   仅离线状态可触发重连；Web 通道只走扫码登录（验证码/2FA 需在服务器终端完成）。
                   Web 登录失败时，重启进程即可回到终端扫码流程，两条路径互不影响。

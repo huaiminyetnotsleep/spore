@@ -126,6 +126,7 @@ func TestAPIRequestDumpBackfillSkipMatrix(t *testing.T) {
 	src := seedFinishedRequest(t, e, 816, "chan", 17, store.RequestSucceeded, store.DeliveryModeUpload)
 	if _, err := e.st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
+		DumpChannelID: -100777,
 	}); err != nil {
 		t.Fatalf("落缓存条目失败: %v", err)
 	}
@@ -178,6 +179,7 @@ func TestAPIRequestsDumpBackfillBatch(t *testing.T) {
 	duped := seedFinishedRequest(t, e, 818, "chan", 13, store.RequestCancelled, store.DeliveryModeUpload)
 	if _, err := e.st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: duped.ChannelKey, MessageID: duped.MessageID, DumpIDs: []int{502},
+		DumpChannelID: -100777,
 	}); err != nil {
 		t.Fatalf("落缓存条目失败: %v", err)
 	}

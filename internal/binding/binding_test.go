@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -577,4 +578,104 @@ func TestBotChannelIDConversion(t *testing.T) {
 			t.Errorf("BotChannelID(%d) = %d, 期望 %d", in, got, want)
 		}
 	}
+}
+
+// TestCopyToChannelsDeadChannelAutoUnbind 频道失效自动解绑（v24 软解绑）：
+// 副本投递返回 "chat not found"（频道已消失）→ 绑定软解绑留痕（status=
+// unbound、原因 channel_gone）、写审计、经受理 bot 私聊通知用户；机器人被
+// 移出（bot was kicked）→ 不解绑；软解绑后 ByUser 不再返回该频道。
+func TestCopyToChannelsDeadChannelAutoUnbind(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	mustUser(t, s, 100)
+
+	const deadChan, kickChan = int64(-100111), int64(-100222)
+	deadErr, kickErr := "chat not found", ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":12345,"is_bot":true,"first_name":"Spore","username":"spore_bot"}}`))
+		case strings.HasSuffix(r.URL.Path, "/copyMessages"):
+			// go-telegram 请求体是 multipart 表单而非 JSON（项目已知行为）
+			_ = r.ParseMultipartForm(1 << 20)
+			chatID, _ := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+			desc := ""
+			if chatID == deadChan {
+				desc = deadErr
+			} else if chatID == kickChan {
+				desc = kickErr
+			}
+			if desc != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: ` + desc + `"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"result":[{"message_id":501}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	b, err := tgbot.New("12345:test-token", tgbot.WithServerURL(srv.URL))
+	if err != nil {
+		t.Fatalf("构造测试 Bot 失败: %v", err)
+	}
+	svc, _ := New(Options{Store: s, Log: testLog()})
+	svc.SetBots([]*tgbot.Bot{b})
+
+	for _, bnd := range []store.ChannelBinding{
+		{ChannelID: deadChan, UserID: 100, Title: "已消失频道", BoundVia: store.BoundViaBot, BotID: 12345},
+		{ChannelID: kickChan, UserID: 100, Title: "被踢频道", BoundVia: store.BoundViaBot, BotID: 12345},
+	} {
+		if _, err := s.UpsertChannelBinding(ctx, bnd); err != nil {
+			t.Fatalf("预置绑定失败: %v", err)
+		}
+	}
+
+	// 场景 1：频道消失 → 软解绑留痕 + 审计 + 通知；另一绑定不受牵连
+	deadErr = "chat not found"
+	svc.CopyToChannels(ctx, 0, 12345, 100, 100, []int{7}, false)
+	got, err := s.GetChannelBinding(ctx, deadChan)
+	if err != nil || got.Status != store.BindingStatusUnbound ||
+		got.UnbindReason != store.UnbindReasonChannelGone || got.UnboundAt == 0 {
+		t.Fatalf("失效频道应软解绑留痕: %+v err=%v", got, err)
+	}
+	if !auditHasAction(t, s, "channel_binding.auto_unbind") {
+		t.Fatal("自动解绑应写审计")
+	}
+
+	// 场景 2：机器人被移出 → 不解绑（提醒语义，行保持 active）
+	kickErr = "bot was kicked"
+	svc.CopyToChannels(ctx, 0, 12345, 100, 100, []int{7}, false)
+	if got2, _ := s.GetChannelBinding(ctx, kickChan); got2.Status != store.BindingStatusActive {
+		t.Fatalf("被踢场景不应自动解绑: %+v", got2)
+	}
+
+	// 场景 3：软解绑后 ByUser 只返回有效绑定
+	rows, err := s.ListChannelBindingsByUser(ctx, 100)
+	if err != nil || len(rows) != 1 || rows[0].ChannelID != kickChan {
+		t.Fatalf("ByUser 只应剩有效绑定: %+v err=%v", rows, err)
+	}
+
+	// 场景 4：解绑后重绑同频道复活（直接经 Upsert）
+	revived, err := s.UpsertChannelBinding(ctx, store.ChannelBinding{
+		ChannelID: deadChan, UserID: 100, Title: "已消失频道", BoundVia: store.BoundViaBot, BotID: 12345})
+	if err != nil || revived.Status != store.BindingStatusActive {
+		t.Fatalf("重绑应复活: %+v err=%v", revived, err)
+	}
+}
+
+// auditHasAction 断言审计日志中存在指定 action。
+func auditHasAction(t *testing.T, s *store.Store, action string) bool {
+	t.Helper()
+	rows, err := s.ListAudit(context.Background(), 100, 0)
+	if err != nil {
+		t.Fatalf("读取审计失败: %v", err)
+	}
+	for _, r := range rows {
+		if r.Action == action {
+			return true
+		}
+	}
+	return false
 }

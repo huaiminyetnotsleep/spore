@@ -64,6 +64,8 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     watch_max_sources: 20,
     watch_per_user_limit: 3,
     max_request_attempts: 3,
+    backup_interval_hours: 6,
+    backup_keep_count: 8,
     download_threads: 4,
     upload_threads: 4,
     download_connections: 4,

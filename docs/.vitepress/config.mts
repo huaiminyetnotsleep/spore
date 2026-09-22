@@ -72,6 +72,7 @@ export default defineConfig({
           text: '运维',
           items: [
             { text: '运维手册', link: '/ops/operations' },
+            { text: '封禁应急手册', link: '/ops/incidents' },
             { text: '问题与解决记录', link: '/ops/troubleshooting' },
             { text: '发版流程', link: '/ops/release' }
           ]

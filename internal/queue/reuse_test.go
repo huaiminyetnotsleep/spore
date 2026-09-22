@@ -63,6 +63,7 @@ func seedDumpEntry(t *testing.T, s *store.Store, msgID int, ids []int) {
 	t.Helper()
 	if _, err := s.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: "example", MessageID: msgID, DumpIDs: ids,
+		DumpChannelID: testDumpChannel,
 	}); err != nil {
 		t.Fatalf("落缓存频道条目失败: %v", err)
 	}
@@ -264,7 +265,7 @@ func TestReuseFromDumpCopyFailureSelfHeals(t *testing.T) {
 	if len(sender.sent) != 2 {
 		t.Fatalf("全量成功后应写干净副本: %d 条", len(sender.sent))
 	}
-	e, err := s.LatestDumpEntry(context.Background(), "example", 7)
+	e, err := s.LatestDumpEntry(context.Background(), "example", 7, testDumpChannel)
 	if err != nil || len(e.DumpIDs) != 1 {
 		t.Fatalf("条目应被重写（自愈）: %+v err=%v", e, err)
 	}
@@ -331,7 +332,7 @@ func TestWriteCleanAfterFullRun(t *testing.T) {
 	if len(sender.sent) != 2 { // 用户投递 1 条 + 缓存频道干净副本 1 条
 		t.Fatalf("文本投递与干净副本应各一次 SendMessage: %d 条", len(sender.sent))
 	}
-	if _, err := s.LatestDumpEntry(context.Background(), "example", 7); err != nil {
+	if _, err := s.LatestDumpEntry(context.Background(), "example", 7, testDumpChannel); err != nil {
 		t.Fatalf("全量成功应写干净副本条目: %v", err)
 	}
 }
@@ -383,7 +384,7 @@ func TestWriteCleanAlbumCanonicalPlanAfterFullRun(t *testing.T) {
 	if strings.Contains(edit.Caption, "userchan") {
 		t.Errorf("canonical clean caption 不应带用户频道脚注: %q", edit.Caption)
 	}
-	entry, err := s.LatestDumpEntry(context.Background(), "example", 7)
+	entry, err := s.LatestDumpEntry(context.Background(), "example", 7, testDumpChannel)
 	if err != nil || len(entry.DumpIDs) != 2 || entry.DumpIDs[0] != 400 || entry.FormatVersion != store.DumpFormatVersion {
 		t.Fatalf("应按当前格式落 2 条副本坐标: %+v err=%v", entry, err)
 	}
