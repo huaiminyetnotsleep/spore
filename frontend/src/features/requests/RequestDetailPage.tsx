@@ -228,6 +228,11 @@ export function RequestDetailPage() {
                   <Descriptions.Item label="错误">
                     <Tag color="red">{errorCodeLabel(detail.error_code)}</Tag>
                     <Text type="secondary">（{detail.error_code}：{detail.error_text}）</Text>
+                    {detail.error_detail ? (
+                      <Text type="secondary" style={{ display: "block" }}>
+                        根因：{detail.error_detail}
+                      </Text>
+                    ) : null}
                   </Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="媒体类型">

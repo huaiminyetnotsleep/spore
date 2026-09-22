@@ -43,11 +43,11 @@ func helpText(name string) string {
 /cancel 链接 — 取消该链接的下载/上传任务（也可回复任务消息直接使用）
 /download 链接 — 把消息媒体下载到网盘（不重发到聊天）
 /pin 链接 — 提交任务并自动置顶到绑定的频道/群组（也可回复任务消息：在途补标记、已完成补置顶）
-/bind 频道 — 绑定我的频道或超级群组（先把我拉进去并设为管理员）
+/bind 频道 — 绑定我的频道或超级群组（先把本机器人拉进去并设为管理员）
 /unbind 频道 — 解绑我的频道
 /channels — 查看我绑定的频道
 /join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
-/watch 频道 — 监听源频道/群组，新消息自动预热缓存（先把我加为该频道/群管理员）
+/watch 频道 — 监听源频道/群组，新消息自动预热缓存（先把本机器人加为该频道/群管理员）
 /watch — 查看我的监听源
 /unwatch 频道 — 移除我的监听源
 
@@ -561,7 +561,7 @@ func parseDownloadArgs(text string) (dest, link string) {
 //     （清理占位+受控文案）。
 func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
 	if opt.CloudStatus == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	dest, linkText := parseDownloadArgs(text)
@@ -666,7 +666,7 @@ func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from model
 // handleWhoami 经 MTProto 查询自身账号并回显，用于验证用户通道；调试命令，不在帮助文本列出。
 func handleWhoami(ctx context.Context, opt Options, snd delivery.Sender, chatID int64) {
 	if opt.Whoami == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	name, err := opt.Whoami(ctx)
@@ -698,7 +698,7 @@ func commandArgument(text string) string {
 // 和结果文案。owner 判定失败按非 owner 处理（保守）。
 func handleJoin(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
 	if opt.ChannelJoin == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	arg := commandArgument(text)
@@ -768,7 +768,7 @@ const watchUsage = "用法：/watch 频道（@mychannel、t.me/频道 链接、-
 // owner 处理（保守，与 /join 一致）。
 func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
 	if opt.Watch == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	arg := commandArgument(text)
@@ -861,7 +861,7 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	case watch.SubmitInvalid:
 		sendText(ctx, opt, snd, chatID, "无法识别目标：请发送频道/超级群组的 @用户名、t.me 链接或 -100 开头的 ID。")
 	case watch.SubmitNotAdmin:
-		sendText(ctx, opt, snd, chatID, "我还不在这个频道/群里，或不是管理员：请先把我加为该频道/群的管理员再试。")
+		sendText(ctx, opt, snd, chatID, "本机器人还不在这个频道/群里，或不是管理员：请把本机器人（你正在对话的这个机器人，不是任何 Telegram 账号）加为该频道/群的管理员再试。")
 	case watch.SubmitAlreadyMine:
 		sendText(ctx, opt, snd, chatID, fmt.Sprintf("「%s」已在你的监听列表中（资料已刷新）。", title))
 	case watch.SubmitAlreadyOthers:
@@ -886,7 +886,7 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 			"「%s」的邀请申请正在处理：等待频道侧审核或系统读取账号完成加入，通过后会自动继续并通知你。", title))
 	case watch.SubmitInviteWaitingBot:
 		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
-			"「%s」的读取账号已加入。还差最后一步：请把我（@%s）加为该频道/群的管理员，配置完成后自动开始监听。",
+			"「%s」的读取账号已加入。还差最后一步：请把本机器人（@%s，你正在对话的这个机器人）加为该频道/群的管理员，配置完成后自动开始监听。",
 			title, botInfo.Username))
 	case watch.SubmitInviteInvalid:
 		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
@@ -921,7 +921,7 @@ func watchInviteStatusText(status string) string {
 // handleUnwatch 处理 /unwatch 频道：移除本人的监听源（号主可移除任意源）。
 func handleUnwatch(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
 	if opt.Watch == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	arg := commandArgument(text)
@@ -984,7 +984,7 @@ func requireEnabled(ctx context.Context, opt Options, snd delivery.Sender, userI
 // 把频道绑定到当前用户名下；任务成功后的内容会同步发送到该频道。
 func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64, text string) {
 	if opt.Channels == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	args := strings.Fields(text)
@@ -1043,7 +1043,7 @@ func bindSuccessText(b store.ChannelBinding) string {
 // handleUnbind 处理 /unbind <频道>：只能解除当前用户自己的绑定。
 func handleUnbind(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64, text string) {
 	if opt.Channels == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	args := strings.Fields(text)
@@ -1071,7 +1071,7 @@ func handleUnbind(ctx context.Context, opt Options, snd delivery.Sender, userID,
 // handleMyChannels 处理 /channels：列出当前用户绑定的频道。
 func handleMyChannels(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64) {
 	if opt.Channels == nil {
-		sendText(ctx, opt, snd, chatID, "此命令当前不可用。")
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
 		return
 	}
 	if !requireEnabled(ctx, opt, snd, userID, chatID) {

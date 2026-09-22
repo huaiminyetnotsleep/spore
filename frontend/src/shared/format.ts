@@ -121,6 +121,7 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   TELEGRAM_SERVER_ERROR: "Telegram 服务端故障",
   FILE_REFERENCE_INVALID: "媒体引用失效",
   TELEGRAM_RATE_LIMIT: "Telegram 限流",
+  PEER_FLOOD: "TG 账号限制",
   BOT_SEND_FAILED: "发送失败",
   SEND_TARGET_INVALID: "发送目标不可用",
   LARGE_CHANNEL_UNAVAILABLE: "大文件通道不可用",

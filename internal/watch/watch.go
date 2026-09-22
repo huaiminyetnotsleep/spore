@@ -304,8 +304,9 @@ func (s *Service) verifyTarget(ctx context.Context, target string) (models.ChatF
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
-		// bot 看不见目标聊天 = 不在其中，统一按"需先拉 bot 为管理员"提示
-		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		// 网络故障/限流透传真实原因；其余失败 = bot 看不见目标聊天，统一按
+		// "需先拉 bot 为管理员"提示
+		return models.ChatFullInfo{}, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	return s.verifyChatAdmin(vctx, bots[0], *chat)
 }
@@ -320,7 +321,7 @@ func (s *Service) verifyChatAdmin(ctx context.Context, b botClient, chat models.
 	}
 	member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chat.ID, UserID: b.ID()})
 	if err != nil {
-		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return models.ChatFullInfo{}, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	switch member.Type {
 	case models.ChatMemberTypeOwner, models.ChatMemberTypeAdministrator:
@@ -328,12 +329,13 @@ func (s *Service) verifyChatAdmin(ctx context.Context, b botClient, chat models.
 	}
 	// 成员身份在 privacy on 下会静默收不到，配置期即拒绝。
 	return models.ChatFullInfo{}, apperr.New(apperr.CodeChannelNotPostable,
-		"机器人不是该聊天的管理员（请先把我加为频道/群管理员）")
+		"机器人不是该聊天的管理员（请先把本机器人加为频道/群管理员）")
 }
 
 // verifyBotAdmin 按 Bot API 频道 ID（-100 形态）校验主 Bot 的管理员身份，
-// 返回 GetChat 结果。失败统一归为 CodeChannelNotPostable（邀请激活路径
-// 据此转入 waiting_bot）。
+// 返回 GetChat 结果。权限不足统一归为 CodeChannelNotPostable（邀请激活路径
+// 据此转入 waiting_bot）；网络故障/限流透传真实错误码，由调用方按瞬态失败
+// 重试（对账循环下轮重试），不因网络抖动提前转入 waiting_bot。
 func (s *Service) verifyBotAdmin(ctx context.Context, channelID int64) (models.ChatFullInfo, error) {
 	bots := s.currentBotClients()
 	if len(bots) == 0 {
@@ -343,7 +345,7 @@ func (s *Service) verifyBotAdmin(ctx context.Context, channelID int64) (models.C
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, &tgbot.GetChatParams{ChatID: channelID})
 	if err != nil {
-		return models.ChatFullInfo{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return models.ChatFullInfo{}, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	return s.verifyChatAdmin(vctx, bots[0], *chat)
 }
@@ -387,7 +389,7 @@ func (s *Service) resolveTarget(ctx context.Context, target string) (int64, erro
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
-		return 0, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return 0, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	return chat.ID, nil
 }

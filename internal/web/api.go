@@ -108,8 +108,8 @@ func apiAppErrStatus(err error) (status int, code string) {
 	var ae *apperr.AppError
 	if errors.As(err, &ae) {
 		switch ae.Code {
-		case apperr.CodeStoreUnavailable, apperr.CodeQueueFull:
-			// 队列饱和是瞬态资源条件，与存储不可用同归"稍后重试"
+		case apperr.CodeStoreUnavailable, apperr.CodeQueueFull, apperr.CodePeerFlood:
+			// 队列饱和与 PEER_FLOOD 都是瞬态资源条件，与存储不可用同归"稍后重试"
 			return http.StatusServiceUnavailable, string(ae.Code)
 		case apperr.CodeStoreConstraint, apperr.CodeRetryExhausted, apperr.CodeUserDisabled,
 			apperr.CodeChannelNotPostable, apperr.CodeChannelAlreadyBound:

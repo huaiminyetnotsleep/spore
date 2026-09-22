@@ -23,12 +23,18 @@ import (
 
 // downloadErrorCode 把下载路径的底层错误细分为可定位的错误码：
 // file reference 失效 → FILE_REFERENCE_INVALID（cause 保留，worker 经
-// IsFileReferenceExpired 结构化判断后仍会刷新重试）；网络传输故障 →
-// NETWORK_ERROR；其余保持 MEDIA_DOWNLOAD_FAILED 兜底。
+// IsFileReferenceExpired 结构化判断后仍会刷新重试）；限流（FLOOD_WAIT/
+// 慢速模式）→ TELEGRAM_RATE_LIMIT；Telegram 服务端 5xx →
+// TELEGRAM_SERVER_ERROR；网络传输故障 → NETWORK_ERROR；其余保持
+// MEDIA_DOWNLOAD_FAILED 兜底。
 func downloadErrorCode(err error) apperr.Code {
 	switch {
 	case tgerr.Is(err, "FILE_REFERENCE_EXPIRED", "PERSISTENT_FILE_REFERENCE_INVALID"):
 		return apperr.CodeFileReferenceInvalid
+	case tgerr.Is(err, "FLOOD_WAIT_X", "FLOOD_PREMIUM_WAIT_X", "SLOWMODE_WAIT_X"):
+		return apperr.CodeRateLimited
+	case tgerr.IsCode(err, 500):
+		return apperr.CodeTelegramServer
 	case apperr.IsTransportFailure(err):
 		return apperr.CodeNetworkError
 	default:

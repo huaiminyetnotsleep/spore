@@ -617,7 +617,7 @@ func TestHandleUsageAndWhoamiMisc(t *testing.T) {
 
 	// /whoami 未注入
 	run(opt, fs, "/whoami")
-	if got := lastText(t, fs); got != "此命令当前不可用。" {
+	if got := lastText(t, fs); got != "该功能当前未启用，请联系管理员开通。" {
 		t.Errorf("未注入 /whoami 应回不可用，得到 %q", got)
 	}
 
@@ -877,7 +877,7 @@ func TestHandleDownloadDenialsUseUserText(t *testing.T) {
 func TestHandleDownloadEdgeStates(t *testing.T) {
 	opt, _, fs := newHarness(t, 4)
 	run(opt, fs, "/download https://t.me/example_channel/1")
-	if got := lastText(t, fs); got != "此命令当前不可用。" {
+	if got := lastText(t, fs); got != "该功能当前未启用，请联系管理员开通。" {
 		t.Errorf("未注入云盘状态应回不可用，得到 %q", got)
 	}
 

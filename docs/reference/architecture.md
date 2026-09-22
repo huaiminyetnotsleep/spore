@@ -501,7 +501,7 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | --- | --- | --- |
 | `INVALID_URL` | `tmeurl.Parse` 失败 | 无法识别有效的 t.me 消息链接，请检查后重试。 |
 | `MESSAGE_NOT_FOUND` | `tg.ErrMessageIdInvalid`、消息不存在 | 找不到这条消息，可能已删除或链接无效。 |
-| `CHANNEL_NOT_ACCESSIBLE` | `tg.ErrChannelPrivate`、`ErrChatAdminRequired`、AccessHash 拿不到 | 无法访问该频道，请确认用户账号已加入该频道。 |
+| `CHANNEL_NOT_ACCESSIBLE` | `tg.ErrChannelPrivate`、`ErrChatAdminRequired`、AccessHash 拿不到 | 无法访问该频道：系统的读取账号（负责读取源频道内容的 Telegram 账号，不是机器人）未加入该频道。可发送 /join 频道邀请链接让它加入（详见 `apperr.UserText`）。 |
 | `SERVICE_MESSAGE` | `*tg.MessageService` 或转换后无可提取内容 | 这是一条服务消息，没有可提取的内容。 |
 | `MEDIA_UNSUPPORTED` | 贴纸、webpage 等暂不支持类型 | 暂不支持这种消息类型。 |
 | `FILE_TOO_LARGE` | Size > MaxFileSize 且不可拆分（未启用拆分或 > MaxSplitTotalSize≈17.6GB） | 文件超过单条消息大小上限（约 17.6GB），暂无法发送。 |
@@ -510,8 +510,9 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `NETWORK_ERROR` | 连接失败/超时/连接重置等传输层故障（取数、下载、发送共用；ctx 取消不在此列，由 worker 改判 `INTERRUPTED`） | 网络连接失败或超时，请稍后重试。 |
 | `TELEGRAM_SERVER_ERROR` | Telegram RPC 5xx（INTERNAL_SERVER_ERROR、TIMEOUT 等） | Telegram 服务暂时故障，请稍后重试。 |
 | `FILE_REFERENCE_INVALID` | file reference 过期或彻底失效（`RefreshMedia` 刷新重试后仍不可得） | 源消息的媒体引用已失效且无法刷新，内容可能已被删除或更换，请确认后重试。 |
-| `TELEGRAM_RATE_LIMIT` | `*tg.ErrorFloodWait` 兜底 | 请求过于频繁，请稍后重试。 |
-| `SEND_TARGET_INVALID` | Bot API 目标类失败（chat not found、bot 被拉黑/被踢出、权限不足——重试无效） | 消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。 |
+| `TELEGRAM_RATE_LIMIT` | `*tg.ErrorFloodWait`、`SLOWMODE_WAIT_X`（取数/发送/下载路径共用） | 请求过于频繁，请稍后重试。 |
+| `PEER_FLOOD` | Telegram 账号级临时限制（`PEER_FLOOD`/`INVITE_PEER_FLOOD`，持续数小时、无等待秒数；发送与加入频道路径） | Telegram 对相关账号施加了临时限制（PEER_FLOOD），通常持续数小时，请稍后再试。 |
+| `SEND_TARGET_INVALID` | Bot API 目标类失败（chat not found、bot 被拉黑/被踢出、权限不足、群升级迁移 chat、目标用户注销；MTProto 的 `CHAT_WRITE_FORBIDDEN`/`USER_IS_BLOCKED` 等——重试无效） | 消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。 |
 | `BOT_SEND_FAILED` | Bot API / MTProto 其他发送错误（兜底） | 发送失败，请稍后重试。 |
 | `LARGE_CHANNEL_UNAVAILABLE` | 超过 Bot API 上限的媒体遇到大文件直传通道（Bot 会话）未就绪 | 大文件发送通道暂不可用，请稍后重试。 |
 | `INTERNAL_ERROR` | 未分类异常 | 处理失败，请稍后重试。 |
@@ -529,6 +530,12 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 | `WEB_AUTH_FAILED` / `WEB_LOGIN_LOCKED` / `WEB_CSRF_INVALID` / `OAUTH_STATE_INVALID` / `OAUTH_EXCHANGE_FAILED` | 管理端登录与 CSRF/OAuth 边界（`internal/web`） | 管理端页面中文提示（见 `apperr.UserText`）。 |
 
 用户看到 `UserText`（任务失败提示附来源消息链接），原始异常只进日志（对齐旧 `errors.ts` 的边界设计）。
+
+失败根因持久化（v23）：`requests.error_detail` 存放截断后的原始错误串（`AppError.Cause` 错误链，300 字符上限，worker 收尾写入、重试时随 `error_code` 一并清空），管理端请求详情页以"根因"行展示——管理员无需翻远程日志即可定位 Telegram 原始错误（如 `FLOOD_WAIT_X` 秒数、`PEER_FLOOD`）。连续失败告警的 detail 同时附带来源链接与错误码。
+
+置顶失败细分（v20 auto-pin 配套）：`PinTarget.ErrCode` 记录副本发送/置顶失败的分类码（`SEND_TARGET_INVALID`/`MESSAGE_NOT_FOUND`/`TELEGRAM_RATE_LIMIT` 等），完工确认文案与 /pin 事后补置顶回复按码给出具体处置指引（`queue.PinFailureHint`），不再统一提示"请检查机器人的置顶权限"。
+
+绑定/监听校验（GetChat/GetChatMember 失败）经 `binding.ClassifyVerifyError` 区分：网络故障/限流透传真实错误码（提示稍后重试），其余才归 `CHANNEL_NOT_POSTABLE`/`CHANNEL_NOT_PINNABLE`（提示把机器人设为管理员）——避免网络抖动误导读权限。
 
 ## 6. 配置参考
 

@@ -87,7 +87,7 @@ func (s *telegramSender) SendAlbum(ctx context.Context, chatID int64, entries []
 		Media:  media,
 	})
 	if err != nil {
-		return nil, classifyBotError(err)
+		return nil, ClassifyBotError(err)
 	}
 	ids := make([]int, 0, len(msgs))
 	for i := range msgs {

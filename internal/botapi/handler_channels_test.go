@@ -118,7 +118,7 @@ func TestHandleBindUsageAndUnavailable(t *testing.T) {
 		opt, _, _, fs := channelsHarness(t)
 		opt.Channels = nil
 		run(opt, fs, "/bind @mychan")
-		if got := lastText(t, fs); got != "此命令当前不可用。" {
+		if got := lastText(t, fs); got != "该功能当前未启用，请联系管理员开通。" {
 			t.Fatalf("服务缺失应回复不可用: %q", got)
 		}
 	})

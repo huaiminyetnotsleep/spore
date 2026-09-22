@@ -571,8 +571,11 @@ func classifyMembershipError(err error) *apperr.AppError {
 		return apperr.Wrap(apperr.CodeChannelInaccessible, err)
 	case tgerr.Is(err, "CHANNEL_PRIVATE", "CHANNEL_PUBLIC_GROUP_NA", "CHAT_ADMIN_REQUIRED", "CHAT_NOT_FOUND", "USER_ALREADY_PARTICIPANT", "USER_BANNED_IN_CHANNEL"):
 		return apperr.Wrap(apperr.CodeChannelInaccessible, err)
-	case tgerr.Is(err, "FLOOD_WAIT_X", "FLOOD_PREMIUM_WAIT_X"):
+	case tgerr.Is(err, "FLOOD_WAIT_X", "FLOOD_PREMIUM_WAIT_X", "SLOWMODE_WAIT_X"):
 		return apperr.Wrap(apperr.CodeRateLimited, err)
+	case tgerr.Is(err, "PEER_FLOOD", "INVITE_PEER_FLOOD"):
+		// 加入路径的账号级限制：与普通限流不同，通常持续数小时
+		return apperr.Wrap(apperr.CodePeerFlood, err)
 	default:
 		return apperr.Wrap(apperr.CodeInternal, err)
 	}

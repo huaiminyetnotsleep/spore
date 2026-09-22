@@ -42,7 +42,7 @@ func (s *telegramSender) SendMessage(ctx context.Context, chatID int64, html str
 		return rerr
 	})
 	if err != nil {
-		return 0, classifyBotError(err)
+		return 0, ClassifyBotError(err)
 	}
 	if sent == nil {
 		return 0, apperr.New(apperr.CodeInternal, "SendMessage 未返回消息对象")
@@ -61,7 +61,7 @@ func (s *telegramSender) DeleteMessage(ctx context.Context, chatID int64, messag
 	if err == nil {
 		return nil
 	}
-	return classifyBotError(err)
+	return ClassifyBotError(err)
 }
 
 // errMessageNotModified 是 Telegram 对"编辑后内容与原文相同"的 400 响应：
@@ -70,7 +70,7 @@ const errMessageNotModified = "message is not modified"
 
 // CopyMessages 从 fromChatID 整组复制 bot 已发送的消息（无请求体，可安全
 // 重放，适用限流重试）。源消息已被删除、源 chat 不可访问等失败经
-// classifyBotError 分类，由调用方决定回落策略。
+// ClassifyBotError 分类，由调用方决定回落策略。
 func (s *telegramSender) CopyMessages(ctx context.Context, fromChatID, chatID int64, messageIDs []int) ([]int, error) {
 	if len(messageIDs) == 0 {
 		return nil, apperr.New(apperr.CodeInternal, "CopyMessages 要求 messageIDs 非空")
@@ -86,7 +86,7 @@ func (s *telegramSender) CopyMessages(ctx context.Context, fromChatID, chatID in
 		return rerr
 	})
 	if err != nil {
-		return nil, classifyBotError(err)
+		return nil, ClassifyBotError(err)
 	}
 	ids := make([]int, 0, len(sent))
 	for _, m := range sent {
@@ -114,11 +114,11 @@ func (s *telegramSender) EditMessageText(ctx context.Context, chatID int64, mess
 	if strings.Contains(err.Error(), errMessageNotModified) {
 		return nil
 	}
-	return classifyBotError(err)
+	return ClassifyBotError(err)
 }
 
 // CopyMessage 单条复制并覆盖 caption（干净副本构造用；无请求体，可安全
-// 重放，适用限流重试）。返回新消息 ID；源消息已删除等失败经 classifyBotError
+// 重放，适用限流重试）。返回新消息 ID；源消息已删除等失败经 ClassifyBotError
 // 分类，由调用方决定回落策略。
 func (s *telegramSender) CopyMessage(ctx context.Context, fromChatID, chatID int64, messageID int, captionHTML string) (int, error) {
 	var sent *models.MessageID
@@ -134,7 +134,7 @@ func (s *telegramSender) CopyMessage(ctx context.Context, fromChatID, chatID int
 		return rerr
 	})
 	if err != nil {
-		return 0, classifyBotError(err)
+		return 0, ClassifyBotError(err)
 	}
 	if sent == nil || sent.ID == 0 {
 		return 0, apperr.New(apperr.CodeInternal, "CopyMessage 成功但未返回消息 ID")
@@ -161,7 +161,7 @@ func (s *telegramSender) EditMessageCaption(ctx context.Context, chatID int64, m
 	if strings.Contains(err.Error(), errMessageNotModified) {
 		return nil
 	}
-	return classifyBotError(err)
+	return ClassifyBotError(err)
 }
 
 // asRateLimit 是 429 错误的唯一解包点：retry、分类、等待秒数共用。
@@ -182,12 +182,17 @@ var sendTargetPatterns = []string{
 	"bot was kicked",              // 机器人被踢出群组/频道
 	"bot is not a member",         // 机器人不是频道成员
 	"need administrator rights",   // 频道内无发言权限
-	"not enough rights",           // 权限不足（发言/发媒体被限制）
+	"not enough rights",           // 权限不足（发言/发媒体/置顶被限制）
+	"have no rights",              // 部分权限错误不含 "not enough rights"
+	"upgraded to a supergroup",    // 群升级迁移 chat（原 chat 已失效，需重新绑定）
+	"user is deactivated",         // 目标用户已注销
 }
 
-// classifyBotError 把 go-telegram/bot 的错误归类为 AppError：限流与
+// ClassifyBotError 把 go-telegram/bot 的错误归类为 AppError：限流与
 // 目标不可用单列，网络传输故障归 NETWORK_ERROR，其余 BOT_SEND_FAILED 兜底。
-func classifyBotError(err error) error {
+// 导出供 binding（绑定校验/频道置顶）等 Bot API 调用方复用同一套分类，
+// 保证跨包错误码口径一致。
+func ClassifyBotError(err error) error {
 	if err == nil {
 		return nil
 	}

@@ -156,6 +156,7 @@ func TestUploadedMediaOf(t *testing.T) {
 
 // ---- classifySendError（表驱动） ----
 
+// classifySendError 的表驱动细分断言（含目标不可用/限流/账号限制/媒体类细分）。
 func TestClassifySendError(t *testing.T) {
 	flood := &tgerr.Error{Code: 420, Type: "FLOOD_WAIT", Message: "FLOOD_WAIT_X", Argument: 5}
 	restricted := &tgerr.Error{Code: 400, Type: "CHAT_FORWARDS_RESTRICTED", Message: "CHAT_FORWARDS_RESTRICTED"}
@@ -173,6 +174,24 @@ func TestClassifySendError(t *testing.T) {
 	// cause 保留原始 tgerr：tgerr 判定可穿透 AppError 链
 	if !tgerr.Is(classifySendError(restricted), "CHAT_FORWARDS_RESTRICTED") {
 		t.Fatal("tgerr 应经 AppError.Unwrap 链可达")
+	}
+	// v23 分类扩充：目标不可用/慢速模式/账号级限制/媒体类细分
+	for _, tc := range []struct {
+		err  error
+		want apperr.Code
+	}{
+		{tgerr.New(400, "CHAT_WRITE_FORBIDDEN"), apperr.CodeSendTargetInvalid},
+		{tgerr.New(400, "USER_IS_BLOCKED"), apperr.CodeSendTargetInvalid},
+		{tgerr.New(400, "USER_DEACTIVATED"), apperr.CodeSendTargetInvalid},
+		{tgerr.New(400, "CHANNEL_PRIVATE"), apperr.CodeSendTargetInvalid},
+		{tgerr.New(420, "SLOWMODE_WAIT_X"), apperr.CodeRateLimited},
+		{tgerr.New(400, "PEER_FLOOD"), apperr.CodePeerFlood},
+		{tgerr.New(400, "MEDIA_TOO_LONG"), apperr.CodeFileTooLarge},
+		{tgerr.New(400, "MEDIA_INVALID"), apperr.CodeMediaUnsupported},
+	} {
+		if err := classifySendError(tc.err); !errors.As(err, &ae) || ae.Code != tc.want {
+			t.Errorf("%v 应归 %s，得到 %v", tc.err, tc.want, err)
+		}
 	}
 }
 
@@ -600,8 +619,8 @@ func TestBotClientSendAlbumUploadMediaFailure(t *testing.T) {
 
 	_, err := c.SendAlbum(context.Background(), 7, medias, readers, captions)
 	var ae *apperr.AppError
-	if !errors.As(err, &ae) || ae.Code != apperr.CodeSendFailed {
-		t.Fatalf("uploadMedia 失败应归 BOT_SEND_FAILED: %v", err)
+	if !errors.As(err, &ae) || ae.Code != apperr.CodeMediaUnsupported {
+		t.Fatalf("uploadMedia 失败（MEDIA_INVALID）应归 MEDIA_UNSUPPORTED: %v", err)
 	}
 	if inv.sendCalls != 0 {
 		t.Fatalf("注册失败不应发出 sendMultiMedia: %d", inv.sendCalls)

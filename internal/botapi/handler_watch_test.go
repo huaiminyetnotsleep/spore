@@ -53,8 +53,8 @@ func (f *fakeWatch) ListInvitesByUser(context.Context, int64) ([]store.WatchInvi
 func TestHandleWatchNoService(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	run(opt, snd, "/watch @chan")
-	if got := snd.texts(); len(got) != 1 || !strings.Contains(got[0], "不可用") {
-		t.Fatalf("未接入服务应回复不可用: %v", got)
+	if got := snd.texts(); len(got) != 1 || !strings.Contains(got[0], "未启用") {
+		t.Fatalf("未接入服务应回复未启用: %v", got)
 	}
 }
 

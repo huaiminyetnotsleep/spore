@@ -458,13 +458,27 @@ func (c *BotClient) cachedPeer(userID int64) (int64, bool) {
 	return h, ok
 }
 
-// classifySendError 把 MTProto 上传/发送错误包装为 AppError：限流 →
-// TELEGRAM_RATE_LIMIT，服务端 5xx → TELEGRAM_SERVER_ERROR，网络传输故障 →
-// NETWORK_ERROR，其余 → BOT_SEND_FAILED 兜底。cause 保留原始 tgerr，
-// 调用方可经错误链（AppError.Unwrap）做 tgerr 结构化判定。
+// classifySendError 把 MTProto 上传/发送错误包装为 AppError：目标不可用
+// （被移出/禁言/对方注销）、限流（FLOOD_WAIT/慢速模式）、账号级限制
+// （PEER_FLOOD）、媒体非法/超限单列，服务端 5xx → TELEGRAM_SERVER_ERROR，
+// 网络传输故障 → NETWORK_ERROR，其余 → BOT_SEND_FAILED 兜底。cause 保留
+// 原始 tgerr，调用方可经错误链（AppError.Unwrap）做 tgerr 结构化判定。
 func classifySendError(err error) error {
 	if err == nil {
 		return nil
+	}
+	switch {
+	case tgerr.Is(err, "CHAT_WRITE_FORBIDDEN", "USER_IS_BLOCKED", "USER_DEACTIVATED",
+		"CHANNEL_PRIVATE", "CHAT_ADMIN_REQUIRED"):
+		return apperr.Wrap(apperr.CodeSendTargetInvalid, err)
+	case tgerr.Is(err, "SLOWMODE_WAIT_X"):
+		return apperr.Wrap(apperr.CodeRateLimited, err)
+	case tgerr.Is(err, "PEER_FLOOD"):
+		return apperr.Wrap(apperr.CodePeerFlood, err)
+	case tgerr.Is(err, "MEDIA_TOO_LONG"):
+		return apperr.Wrap(apperr.CodeFileTooLarge, err)
+	case tgerr.Is(err, "MEDIA_INVALID", "MEDIA_EMPTY"):
+		return apperr.Wrap(apperr.CodeMediaUnsupported, err)
 	}
 	if _, ok := tgerr.AsFloodWait(err); ok {
 		return apperr.Wrap(apperr.CodeRateLimited, err)

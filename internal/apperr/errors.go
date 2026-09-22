@@ -25,6 +25,10 @@ const (
 	CodeMediaDownloadFailed Code = "MEDIA_DOWNLOAD_FAILED"
 	CodeRateLimited         Code = "TELEGRAM_RATE_LIMIT"
 	CodeSendFailed          Code = "BOT_SEND_FAILED"
+	// CodePeerFlood Telegram 对账号施加的临时限制（PEER_FLOOD / INVITE_PEER_FLOOD）：
+	// 与 FLOOD_WAIT 限流不同，通常持续数小时且无明确等待秒数；加入频道与
+	// 发送均可能触发，重试需间隔足够长的时间。
+	CodePeerFlood Code = "PEER_FLOOD"
 	// 传输与目标细分码：把大筐码（INTERNAL_ERROR / MEDIA_DOWNLOAD_FAILED /
 	// BOT_SEND_FAILED）中可定位的失败原因拆出来，请求记录里能直接看出
 	// 问题出在本机网络、Telegram 服务端、源内容还是发送目标；未命中的
@@ -99,7 +103,7 @@ var userTexts = map[Code]string{
 	CodeInvalidURL:              "无法识别有效的 t.me 消息链接，请检查后重试。",
 	CodeInvalidInviteURL:        "无法识别有效的频道邀请链接，请发送完整的 t.me/+… 邀请链接后重试。",
 	CodeMessageNotFound:         "找不到这条消息，可能已删除或链接无效。",
-	CodeChannelInaccessible:     "无法访问该频道：系统读取账号未加入该频道。可发送 /join 频道邀请链接（t.me/+…）让它加入；链接可用你入群时拿到的那个，或向频道管理员索取。",
+	CodeChannelInaccessible:     "无法访问该频道：系统的读取账号（负责读取源频道内容的 Telegram 账号，不是机器人）未加入该频道。可发送 /join 频道邀请链接（t.me/+…）让它加入；链接可用你入群时拿到的那个，或向频道管理员索取。",
 	CodeServiceMessage:          "这是一条服务消息，没有可提取的内容。",
 	CodeMediaUnsupported:        "暂不支持这种消息类型。",
 	CodeFileTooLarge:            "文件超过单条消息大小上限（约 19GB），暂无法发送。",
@@ -110,6 +114,7 @@ var userTexts = map[Code]string{
 	CodeFileReferenceInvalid:    "源消息的媒体引用已失效且无法刷新，内容可能已被删除或更换，请确认后重试。",
 	CodeSendTargetInvalid:       "消息发送目标不可用：机器人可能已离开你的绑定频道或缺少发言权限，请重新绑定频道或联系管理员。",
 	CodeRateLimited:             "请求过于频繁，请稍后重试。",
+	CodePeerFlood:               "Telegram 对相关账号施加了临时限制（PEER_FLOOD），通常持续数小时，请稍后再试。",
 	CodeSendFailed:              "发送失败，请稍后重试。",
 	CodeLargeChannelUnavailable: "大文件发送通道暂不可用，请稍后重试。",
 	CodeSplitUnavailable:        "超大视频可播放切段暂不可用（服务器 ffmpeg 环境不满足），请联系管理员。",
@@ -137,8 +142,8 @@ var userTexts = map[Code]string{
 	CodeOAuthExchangeFailed: "GitHub 登录暂时不可用，请稍后重试。",
 
 	CodeChannelTargetInvalid: "无法识别该频道标识，请发送频道用户名（如 @mychannel）、t.me/频道 链接或 -100 开头的频道 ID。",
-	CodeChannelNotPostable:   "我还不是这个频道的管理员（或没有发送消息权限）。请先把我拉进频道并设置为管理员，再重试绑定。",
-	CodeChannelNotPinnable:   "我还不是这个超级群组的管理员（或缺「置顶消息」权限）。请把我设为该群组的管理员并勾选「置顶消息」，再重试绑定。",
+	CodeChannelNotPostable:   "本机器人还不是这个频道的成员或管理员（或是管理员但没有发送消息权限）。请把本机器人——即你正在对话的这个机器人，而不是任何 Telegram 账号——拉进频道并设置为管理员，再重试绑定。",
+	CodeChannelNotPinnable:   "本机器人还不是这个超级群组的管理员（或是管理员但缺「置顶消息」权限）。请把本机器人——即你正在对话的这个机器人——设为该群组的管理员并勾选「置顶消息」，再重试绑定。",
 	CodeChannelAlreadyBound:  "该频道已被其他用户绑定。",
 	CodeChannelBindLimit:     "已达到可绑定频道的数量上限，可先解绑不需要的频道再绑定。",
 

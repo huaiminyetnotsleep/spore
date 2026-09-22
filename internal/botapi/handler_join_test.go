@@ -32,8 +32,8 @@ func joinUser(id int64) models.User { return models.User{ID: id, FirstName: "测
 func TestHandleJoinNoService(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678", 0)
-	if got := snd.texts(); len(got) != 1 || !strings.Contains(got[0], "不可用") {
-		t.Fatalf("未接入服务应回复不可用: %v", got)
+	if got := snd.texts(); len(got) != 1 || !strings.Contains(got[0], "未启用") {
+		t.Fatalf("未接入服务应回复未启用: %v", got)
 	}
 }
 

@@ -55,6 +55,7 @@ type Request struct {
 	Status           string
 	Attempt          int
 	ErrorCode        string
+	ErrorDetail      string // 失败根因：截断后的原始错误串（AppError cause 链最内层）；成功/未失败为空
 	MediaType        string
 	MediaTypes       []string // 请求包含的去重媒体类型；相册用于表达成员构成
 	FileSize         int64
@@ -94,6 +95,7 @@ type RequestWithUser struct {
 type RequestResult struct {
 	Status           string // succeeded | failed（cancelled 由 CancelRequest 写入）
 	ErrorCode        string // apperr 错误码；成功时留空
+	ErrorDetail      string // 失败根因（截断后的原始错误串）；成功时留空
 	MediaType        string
 	MediaTypes       []string // 请求包含的去重媒体类型
 	FileSize         int64
@@ -122,7 +124,7 @@ type RequestFilter struct {
 // selectRequest 是 requests 查询的统一前缀，可空列已 COALESCE 归一为零值。
 // delivery_mode 与 cloud_destination 为 NOT NULL 列（v2/v10 迁移带 DEFAULT），无需 COALESCE。
 const selectRequest = `SELECT id, user_id, COALESCE(source_kind, ''), channel_key, message_id,
-	status, attempt, COALESCE(error_code, ''), COALESCE(media_type, ''), media_types_json,
+		status, attempt, COALESCE(error_code, ''), COALESCE(error_detail, ''), COALESCE(media_type, ''), media_types_json,
 		COALESCE(file_size, 0), COALESCE(file_name, ''), delivery_mode, source_media_dc_ids_json,
 		COALESCE(parent_request_id, 0), cloud_destination,
 		bot_id, bot_username,
@@ -136,7 +138,7 @@ func scanRequest(row scanner) (Request, error) {
 	var r Request
 	var mediaTypesJSON, dcJSON, sentIDsJSON sql.NullString
 	err := row.Scan(&r.ID, &r.UserID, &r.SourceKind, &r.ChannelKey, &r.MessageID,
-		&r.Status, &r.Attempt, &r.ErrorCode, &r.MediaType, &mediaTypesJSON, &r.FileSize, &r.FileName,
+		&r.Status, &r.Attempt, &r.ErrorCode, &r.ErrorDetail, &r.MediaType, &mediaTypesJSON, &r.FileSize, &r.FileName,
 		&r.DeliveryMode, &dcJSON, &r.ParentRequestID, &r.CloudDestination,
 		&r.BotID, &r.BotUsername,
 		&r.Pin, &r.PinOK, &r.PinTotal,
@@ -152,15 +154,15 @@ func scanRequest(row scanner) (Request, error) {
 }
 
 const selectRequestWithUser = `SELECT r.id, r.user_id, COALESCE(r.source_kind, ''), r.channel_key, r.message_id,
-		r.status, r.attempt, COALESCE(r.error_code, ''), COALESCE(r.media_type, ''), r.media_types_json,
-		COALESCE(r.file_size, 0), COALESCE(r.file_name, ''), r.delivery_mode, r.source_media_dc_ids_json,
-		COALESCE(r.parent_request_id, 0), r.cloud_destination,
-		r.bot_id, r.bot_username,
-		r.pin, r.pin_ok, r.pin_total,
-		r.sent_chat_id, r.sent_message_ids_json,
-		r.requested_at, COALESCE(r.queued_at, 0), COALESCE(r.started_at, 0),
-		COALESCE(r.finished_at, 0), COALESCE(r.duration_ms, 0),
-		COALESCE(u.username, ''), COALESCE(u.display_name, '')
+			r.status, r.attempt, COALESCE(r.error_code, ''), COALESCE(r.error_detail, ''), COALESCE(r.media_type, ''), r.media_types_json,
+			COALESCE(r.file_size, 0), COALESCE(r.file_name, ''), r.delivery_mode, r.source_media_dc_ids_json,
+			COALESCE(r.parent_request_id, 0), r.cloud_destination,
+			r.bot_id, r.bot_username,
+			r.pin, r.pin_ok, r.pin_total,
+			r.sent_chat_id, r.sent_message_ids_json,
+			r.requested_at, COALESCE(r.queued_at, 0), COALESCE(r.started_at, 0),
+			COALESCE(r.finished_at, 0), COALESCE(r.duration_ms, 0),
+			COALESCE(u.username, ''), COALESCE(u.display_name, '')
 	FROM requests r
 	LEFT JOIN users u ON u.id = r.user_id`
 
@@ -168,7 +170,7 @@ func scanRequestWithUser(row scanner) (RequestWithUser, error) {
 	var out RequestWithUser
 	var mediaTypesJSON, dcJSON, sentIDsJSON sql.NullString
 	err := row.Scan(&out.ID, &out.UserID, &out.SourceKind, &out.ChannelKey, &out.MessageID,
-		&out.Status, &out.Attempt, &out.ErrorCode, &out.MediaType, &mediaTypesJSON, &out.FileSize, &out.FileName,
+		&out.Status, &out.Attempt, &out.ErrorCode, &out.ErrorDetail, &out.MediaType, &mediaTypesJSON, &out.FileSize, &out.FileName,
 		&out.DeliveryMode, &dcJSON, &out.ParentRequestID, &out.CloudDestination,
 		&out.BotID, &out.BotUsername,
 		&out.Pin, &out.PinOK, &out.PinTotal,
@@ -412,11 +414,11 @@ func (s *Store) FinishRequest(ctx context.Context, id int64, r RequestResult) er
 	// v12 复用坐标列（sent_chat_id/sent_message_ids_json）自转存频道方案起
 	// 停止写入（列保留在 schema，历史行仍可读——迁移只增不改）
 	res, err := s.ex.ExecContext(ctx, `UPDATE requests SET
-		status = ?, error_code = ?, media_type = ?, media_types_json = ?, file_size = ?, file_name = ?,
+		status = ?, error_code = ?, error_detail = ?, media_type = ?, media_types_json = ?, file_size = ?, file_name = ?,
 		delivery_mode = ?, source_media_dc_ids_json = ?,
 		finished_at = ?, duration_ms = ? - COALESCE(started_at, queued_at, requested_at)
 		WHERE id = ? AND status IN (?, ?, ?, ?)`,
-		r.Status, nullStr(r.ErrorCode), nullStr(r.MediaType), mediaTypesJSON,
+		r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail), nullStr(r.MediaType), mediaTypesJSON,
 		nullInt64(r.FileSize), nullStr(r.FileName), mode, dcJSON, r.At, r.At, id,
 		RequestQueued, RequestProcessing, RequestSucceeded, RequestFailed)
 	if err != nil {
@@ -433,14 +435,14 @@ func (s *Store) FinishRequest(ctx context.Context, id int64, r RequestResult) er
 // RetryRequest 把 failed 请求重置回 queued 并累加 attempt（复用同一行）。
 // 前置条件（状态 failed、attempt 上限、用户 enabled、队列容量、不扣额度）
 // 由 internal/access 的 Retry 在同一事务内校验后再调用本方法；
-// 清空 error_code 与阶段时间戳，等待下一轮处理重新落。
+// 清空 error_code/error_detail 与阶段时间戳，等待下一轮处理重新落。
 func (s *Store) RetryRequest(ctx context.Context, id int64, queuedAt int64) error {
 	if queuedAt == 0 {
 		queuedAt = nowMillis()
 	}
 	res, err := s.ex.ExecContext(ctx, `UPDATE requests SET
 		status = ?, attempt = attempt + 1, queued_at = ?,
-		started_at = NULL, finished_at = NULL, duration_ms = NULL, error_code = NULL,
+		started_at = NULL, finished_at = NULL, duration_ms = NULL, error_code = NULL, error_detail = NULL,
 		pin_ok = 0, pin_total = 0
 		WHERE id = ? AND status IN (?, ?, ?)`, RequestQueued, queuedAt, id, RequestFailed, RequestSucceeded, RequestQueued)
 	if err != nil {

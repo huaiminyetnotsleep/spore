@@ -83,15 +83,19 @@ func TestRequestFailedAndRetry(t *testing.T) {
 	_ = s.MarkRequestStarted(ctx, r.ID, 100)
 
 	if err := s.FinishRequest(ctx, r.ID, RequestResult{
-		Status:    RequestFailed,
-		ErrorCode: "CHANNEL_NOT_ACCESSIBLE",
-		At:        900,
+		Status:      RequestFailed,
+		ErrorCode:   "CHANNEL_NOT_ACCESSIBLE",
+		ErrorDetail: "rpc error code 400: CHANNEL_PRIVATE",
+		At:          900,
 	}); err != nil {
 		t.Fatalf("落库失败终态失败: %v", err)
 	}
 	got, _ := s.GetRequest(ctx, r.ID)
 	if got.Status != RequestFailed || got.ErrorCode != "CHANNEL_NOT_ACCESSIBLE" {
 		t.Fatalf("失败终态应带错误码: %+v", got)
+	}
+	if got.ErrorDetail != "rpc error code 400: CHANNEL_PRIVATE" {
+		t.Fatalf("失败根因应往返一致，得到 %q", got.ErrorDetail)
 	}
 
 	// 未及开始即失败：duration 回退到 queued_at 起算
@@ -112,7 +116,8 @@ func TestRequestFailedAndRetry(t *testing.T) {
 	if got.Status != RequestQueued || got.Attempt != 2 {
 		t.Fatalf("重试后应 queued/attempt=2: %+v", got)
 	}
-	if got.ErrorCode != "" || got.StartedAt != 0 || got.FinishedAt != 0 || got.DurationMs != 0 {
+	if got.ErrorCode != "" || got.ErrorDetail != "" ||
+		got.StartedAt != 0 || got.FinishedAt != 0 || got.DurationMs != 0 {
 		t.Errorf("重试应清空错误与阶段时间: %+v", got)
 	}
 	if got.QueuedAt != 5000 {

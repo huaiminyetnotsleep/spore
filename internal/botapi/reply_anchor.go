@@ -157,7 +157,7 @@ func handlePinReply(ctx context.Context, opt Options, snd delivery.Sender, from 
 
 // pinExistingResultText 渲染事后补置顶结果文案（HTML：目标名可能含特殊
 // 字符，一律转义；与 queue.pinResultText 同风格，但被回复的消息本身就是
-// 上下文，不再附原消息链接）。
+// 上下文，不再附原消息链接）。失败目标按错误码给出具体处置指引。
 func pinExistingResultText(o queue.PinOutcome) string {
 	var pinned, failed []string
 	for _, t := range o.Targets {
@@ -165,7 +165,7 @@ func pinExistingResultText(o queue.PinOutcome) string {
 		if t.Pinned {
 			pinned = append(pinned, label)
 		} else {
-			failed = append(failed, label)
+			failed = append(failed, label+"（"+queue.PinFailureHint(t.ErrCode)+"）")
 		}
 	}
 	var b strings.Builder
@@ -176,7 +176,7 @@ func pinExistingResultText(o queue.PinOutcome) string {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "置顶失败：%s（请检查机器人的置顶权限）", strings.Join(failed, "、"))
+		fmt.Fprintf(&b, "置顶失败：%s", strings.Join(failed, "、"))
 	}
 	return b.String()
 }

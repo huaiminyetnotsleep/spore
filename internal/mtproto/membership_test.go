@@ -46,6 +46,9 @@ func TestClassifyMembershipError(t *testing.T) {
 		{tgerr.New(400, "CHANNEL_PRIVATE"), apperr.CodeChannelInaccessible},
 		{tgerr.New(400, "USER_ALREADY_PARTICIPANT"), apperr.CodeChannelInaccessible},
 		{tgerr.New(400, "FLOOD_WAIT_X"), apperr.CodeRateLimited},
+		{tgerr.New(420, "SLOWMODE_WAIT_X"), apperr.CodeRateLimited},
+		{tgerr.New(400, "PEER_FLOOD"), apperr.CodePeerFlood},
+		{tgerr.New(400, "INVITE_PEER_FLOOD"), apperr.CodePeerFlood},
 		{errors.New("别的错误"), apperr.CodeInternal},
 	}
 	for _, c := range cases {

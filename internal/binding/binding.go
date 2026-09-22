@@ -19,10 +19,35 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
+
+// ClassifyVerifyError 把绑定/监听校验中 Bot API 调用（GetChat/GetChatMember）
+// 的失败归类：网络故障与限流直接透传分类结果（提示稍后重试，而非误导用户
+// 去调整机器人权限），其余失败语义上仍是"机器人看不到该聊天/无权限"，
+// 保持调用方给定的频道错误码（CHANNEL_NOT_POSTABLE / CHANNEL_NOT_PINNABLE）。
+// 导出供 internal/watch 的监听源校验复用同一口径。
+func ClassifyVerifyError(err error, fallback apperr.Code) error {
+	ae := apperr.From(delivery.ClassifyBotError(err))
+	switch ae.Code {
+	case apperr.CodeNetworkError, apperr.CodeRateLimited, apperr.CodePeerFlood:
+		return ae
+	}
+	return apperr.Wrap(fallback, err)
+}
+
+// classifyPinError 把频道置顶（PinChatMessage）失败归类为错误码：
+// 置顶目标消息已被删除单列（与权限无关，重试无意义），其余复用 delivery
+// 的 Bot API 分类（被移出/权限不足 → SEND_TARGET_INVALID，限流单列）。
+func classifyPinError(err error) apperr.Code {
+	if strings.Contains(strings.ToLower(err.Error()), "message to pin not found") {
+		return apperr.CodeMessageNotFound
+	}
+	return apperr.From(delivery.ClassifyBotError(err)).Code
+}
 
 // verifyTimeout 是绑定校验（GetChat + GetChatMember）的时间窗。
 const verifyTimeout = 15 * time.Second
@@ -167,9 +192,9 @@ func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.Chann
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
-		// Bot 看不见目标聊天基本等于"不在该频道/无权限"，统一归类提示用户
-		// 先把机器人拉进频道设为管理员
-		return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		// 网络故障/限流透传真实原因；其余失败 = bot 看不见目标聊天，基本等于
+		// "不在该频道/无权限"，统一归类提示用户先把机器人拉进频道设为管理员
+		return store.ChannelBinding{}, "", ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	// 类型门槛：频道与超级群组可绑定（副本 + 置顶的落点）；普通群、话题群
 	// 与其他类型一律拒绝——话题群的副本/置顶需要按话题路由，本期不支持。
@@ -500,8 +525,15 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 			MessageIDs: msgIDs,
 		})
 		if err != nil {
+			code := apperr.From(delivery.ClassifyBotError(err)).Code
 			s.log.Warn("频道副本发送失败",
-				"user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs), "error", err.Error())
+				"user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs),
+				"code", string(code), "error", err.Error())
+			if pin {
+				// 副本没发出去则置顶无从谈起：目标计入 Total 但 Pinned=false，
+				// ErrCode 供确认文案给出具体处置指引
+				outcome.Targets[len(outcome.Targets)-1].ErrCode = string(code)
+			}
 			continue
 		}
 		s.log.Info("频道副本已发送", "user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs))
@@ -525,8 +557,11 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 			MessageID:           sent[0].ID,
 			DisableNotification: true,
 		}); err != nil {
+			code := classifyPinError(err)
 			s.log.Warn("频道置顶失败",
-				"user_id", userID, "channel_id", bnd.ChannelID, "error", err.Error())
+				"user_id", userID, "channel_id", bnd.ChannelID,
+				"code", string(code), "error", err.Error())
+			outcome.Targets[len(outcome.Targets)-1].ErrCode = string(code)
 			continue
 		}
 		outcome.OK++
@@ -579,8 +614,11 @@ func (s *Service) PinExistingCopies(ctx context.Context, userID, requestID int64
 			MessageID:           int(c.MessageID),
 			DisableNotification: true,
 		}); err != nil {
+			code := classifyPinError(err)
 			s.log.Warn("事后置顶失败",
-				"request_id", requestID, "channel_id", c.ChatID, "error", err.Error())
+				"request_id", requestID, "channel_id", c.ChatID,
+				"code", string(code), "error", err.Error())
+			target.ErrCode = string(code)
 			outcome.Targets = append(outcome.Targets, target)
 			continue
 		}
@@ -681,7 +719,7 @@ func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, stri
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
-		return 0, "", apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return 0, "", ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	if chat.Type != models.ChatTypeChannel {
 		return 0, "", apperr.New(apperr.CodeChannelTargetInvalid,
@@ -698,7 +736,7 @@ func (s *Service) VerifyChannel(ctx context.Context, target string) (int64, stri
 func verifyBotCanPost(ctx context.Context, b *tgbot.Bot, botID, chatID int64) error {
 	member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chatID, UserID: botID})
 	if err != nil {
-		return apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
 	switch member.Type {
 	case models.ChatMemberTypeOwner:
@@ -770,7 +808,7 @@ func botReadinessAdvice(ctx context.Context, bots []*tgbot.Bot, hard *tgbot.Bot,
 func verifyBotCanPin(ctx context.Context, b *tgbot.Bot, botID, chatID int64) error {
 	member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chatID, UserID: botID})
 	if err != nil {
-		return apperr.Wrap(apperr.CodeChannelNotPinnable, err)
+		return ClassifyVerifyError(err, apperr.CodeChannelNotPinnable)
 	}
 	switch member.Type {
 	case models.ChatMemberTypeOwner:

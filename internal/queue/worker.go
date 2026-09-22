@@ -70,8 +70,30 @@ type EventSink interface {
 
 // PinTarget 描述单个置顶目标（绑定频道/群组）的置顶结果。
 type PinTarget struct {
-	Label  string // 目标显示名（标题优先，回退 @用户名 / 数字 ID）
-	Pinned bool   // 置顶是否成功（副本发送失败与置顶失败均为 false）
+	Label string // 目标显示名（标题优先，回退 @用户名 / 数字 ID）
+	// Pinned 置顶是否成功（副本发送失败与置顶失败均为 false）。
+	Pinned bool
+	// ErrCode 失败时的 apperr 错误码（副本发送与置顶失败均已分类；
+	// 空串表示未分类的历史路径），PinFailureHint 据此给出具体处置指引。
+	ErrCode string
+}
+
+// PinFailureHint 按置顶失败错误码返回给用户的处置指引；未知码回落通用
+// 权限提示。worker 完工确认文案与 /pin 事后补置顶回复共用，保证同一
+// 错误在任何入口看到同一句话。
+func PinFailureHint(code string) string {
+	switch apperr.Code(code) {
+	case apperr.CodeSendTargetInvalid:
+		return "机器人已被移出该频道/群组或权限被收回，请解绑后重新绑定"
+	case apperr.CodeMessageNotFound:
+		return "副本消息已被删除，无法置顶"
+	case apperr.CodeRateLimited:
+		return "Telegram 限流，稍后可用 /pin 重试"
+	case apperr.CodePeerFlood:
+		return "Telegram 对账号的临时限制，请稍后再试"
+	default:
+		return "请检查机器人的置顶权限"
+	}
 }
 
 // PinOutcome 汇总一轮置顶结果：OK 为 Targets 中 Pinned 的计数，Total 为
@@ -269,6 +291,7 @@ func Process(d Deps) Processor {
 			if finishErr := finishRequest(d, ctx, j, store.RequestResult{
 				Status:           store.RequestFailed,
 				ErrorCode:        string(ae.Code),
+				ErrorDetail:      errorDetailText(ae),
 				MediaType:        meta.MediaType,
 				MediaTypes:       meta.MediaTypes,
 				FileSize:         meta.FileSize,
@@ -337,11 +360,15 @@ func Process(d Deps) Processor {
 		d.Log.Info("任务结束", "job_id", j.ID)
 		// 事件上报放在收尾最后：成功清零连续失败计数，失败累计并按阈值告警；
 		// 云盘任务另经 CloudResult 进入独立计数（cloud.upload_failed 事件源）。
-		// 失败时附带来源链接人可读形式，随告警通知展示最近失败上下文。
+		// 失败时附带来源链接与错误码人可读形式，随告警通知展示最近失败上下文，
+		// 管理员收到告警即可知失败类别，无需先翻 Web 查询。
 		if d.Events != nil {
 			detail := ""
 			if err != nil {
 				detail = j.Ref.String()
+				if code := string(apperr.From(err).Code); code != "" {
+					detail += "（" + code + "）"
+				}
 			}
 			d.Events.TaskResult(ctx, err == nil, detail)
 			if j.CloudDest != "" {
@@ -448,7 +475,7 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 		if t.Pinned {
 			pinned = append(pinned, label)
 		} else {
-			failed = append(failed, label)
+			failed = append(failed, label+"（"+PinFailureHint(t.ErrCode)+"）")
 		}
 	}
 	skipped := make([]string, 0, len(o.Skipped))
@@ -464,9 +491,9 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 			b.WriteByte('\n')
 		}
 		if len(pinned) == 0 {
-			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：%s（请检查机器人的发帖与置顶权限）", link, strings.Join(failed, "、"))
+			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：%s", link, strings.Join(failed, "、"))
 		} else {
-			fmt.Fprintf(&b, "置顶失败：%s（请检查机器人的置顶权限）", strings.Join(failed, "、"))
+			fmt.Fprintf(&b, "置顶失败：%s", strings.Join(failed, "、"))
 		}
 	}
 	if len(skipped) > 0 {
@@ -803,6 +830,28 @@ func failureNoticeHTML(code apperr.Code, ref tmeurl.SourceRef) string {
 	text := apperr.UserText(code)
 	if url, ok := ref.URL(); ok {
 		return fmt.Sprintf("%s\n<a href=\"%s\">%s</a>", text, url, url)
+	}
+	return text
+}
+
+// errorDetailLimit 是 error_detail 落库列的截断上限（字符数）。
+const errorDetailLimit = 300
+
+// errorDetailText 提取失败根因文本（仅落库与 Web 管理端展示，不发给
+// Telegram 用户）：优先取 AppError 的 cause（保留错误链上下文，如
+// "FLOOD_WAIT_X: 3000"、Bot API 响应描述），无 cause 时用内部描述；
+// 超长按字符截断，避免异常错误串撑爆列。
+func errorDetailText(ae *apperr.AppError) string {
+	text := ""
+	if ae.Cause != nil {
+		text = ae.Cause.Error()
+	} else if ae.Message != "" {
+		text = ae.Message
+	} else {
+		text = string(ae.Code)
+	}
+	if runes := []rune(text); len(runes) > errorDetailLimit {
+		return string(runes[:errorDetailLimit]) + "…"
 	}
 	return text
 }

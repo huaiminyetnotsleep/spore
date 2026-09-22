@@ -461,6 +461,8 @@ export interface RequestDetail extends RequestRow {
   /** 规范化来源 URL；结构化字段异常时为空串（展示为"链接不可用"）。 */
   message_url: string;
   error_text: string;
+  /** 失败根因：截断后的原始错误串（v23 起持久化）；成功/未记录为空。 */
+  error_detail?: string;
   attempt_max: number;
   file_name: string;
   file_size: number;

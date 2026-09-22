@@ -121,11 +121,11 @@ func (s *telegramSender) sendMediaByUpload(ctx context.Context, chatID int64, m 
 	}
 }
 
-// sentMessageID 提取发送结果的消息 ID：失败统一走 classifyBotError；
+// sentMessageID 提取发送结果的消息 ID：失败统一走 ClassifyBotError；
 // 成功但未返回消息对象按内部防御错误处理（调用方无法对无 ID 的消息做频道副本）。
 func sentMessageID(m *models.Message, err error) (int, error) {
 	if err != nil {
-		return 0, classifyBotError(err)
+		return 0, ClassifyBotError(err)
 	}
 	if m == nil {
 		return 0, apperr.New(apperr.CodeInternal, "发送成功但未返回消息对象")

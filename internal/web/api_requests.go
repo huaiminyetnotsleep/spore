@@ -78,13 +78,16 @@ type apiRequestDetail struct {
 	MessageURL      string `json:"message_url"`
 	Username        string `json:"username"`     // 所属用户名（可为空）
 	DisplayName     string `json:"display_name"` // 所属显示名（可为空）
-	ErrorText       string `json:"error_text"`
-	AttemptMax      int    `json:"attempt_max"`
-	FileName        string `json:"file_name"`
-	FileSize        int64  `json:"file_size"`
-	QueuedAt        int64  `json:"queued_at"`
-	StartedAt       int64  `json:"started_at"`
-	FinishedAt      int64  `json:"finished_at"`
+	// ErrorText 错误码对应的受控用户文案；ErrorDetail 截断后的原始错误串
+	//（v23 起持久化；管理端定位根因用，不发给 Telegram 用户）。
+	ErrorText   string `json:"error_text"`
+	ErrorDetail string `json:"error_detail,omitempty"`
+	AttemptMax  int    `json:"attempt_max"`
+	FileName    string `json:"file_name"`
+	FileSize    int64  `json:"file_size"`
+	QueuedAt    int64  `json:"queued_at"`
+	StartedAt   int64  `json:"started_at"`
+	FinishedAt  int64  `json:"finished_at"`
 	// ParentRequestID：云盘补存新建的行指向原请求；普通请求为 0。
 	ParentRequestID int64               `json:"parent_request_id"`
 	CloudUploads    []apiCloudUploadRow `json:"cloud_uploads"` // 无记录时为 []
@@ -180,6 +183,7 @@ func (s *Server) handleAPIRequestDetail(w http.ResponseWriter, r *http.Request, 
 	detail.Progress = s.requestProgress(rq)
 	if rq.ErrorCode != "" {
 		detail.ErrorText = apperr.UserText(apperr.Code(rq.ErrorCode))
+		detail.ErrorDetail = rq.ErrorDetail
 	}
 	writeAPISingle(w, detail)
 }

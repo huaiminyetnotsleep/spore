@@ -407,7 +407,10 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 			}
 			id, title, err := s.bindings.VerifyChannel(ctx, target)
 			if err != nil {
-				return res, &settingsParamError{"缓存频道校验失败：请确认频道存在且机器人已被设为管理员（公开频道填 @用户名 或 t.me 链接，私有频道填 -100 数字 ID）。"}
+				if apperr.From(err).Code == apperr.CodeChannelNotPostable {
+					return res, &settingsParamError{"缓存频道校验失败：请确认频道存在且机器人已被设为管理员（多机器人部署时需把全部机器人都设为该频道的管理员；公开频道填 @用户名 或 t.me 链接，私有频道填 -100 数字 ID）。"}
+				}
+				return res, &settingsParamError{"缓存频道校验失败：" + apperr.UserText(apperr.From(err).Code)}
 			}
 			if id != before {
 				if err := s.saveSettingValue(ctx, settingKeyDumpChannelID, "保存缓存频道", id); err != nil {

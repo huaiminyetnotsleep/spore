@@ -408,6 +408,12 @@ ON sent_messages(bot_id, chat_id, message_id);
 
 CREATE INDEX idx_sent_messages_request
 ON sent_messages(request_id);`,
+
+	// v23：请求失败根因持久化——requests.error_detail 存放截断后的原始
+	// 错误串（AppError cause 链最内层），管理端详情页据此直接看到 Telegram
+	// 原始错误（如 FLOOD_WAIT_X 的秒数、PEER_FLOOD 等），无需翻远程日志；
+	// 重试/重置时随 error_code 一并清空。只存错误文本，不存凭据路径。
+	`ALTER TABLE requests ADD COLUMN error_detail TEXT;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。
