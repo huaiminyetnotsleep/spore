@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.25.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.24.0...v1.25.0) (2026-09-22)
+
+
+### Features
+
+* **pin:** 绑定逐 bot 校验与路由归属（v21），超级群组绑定文案准确化 ([c9d759c](https://github.com/huaiminyetnotsleep/spore/commit/c9d759c70b31b4fdf6a0bdc06f3aaebac49c15ad))
+* **pin:** 绑定逐 bot 校验与路由归属（v21），超级群组绑定文案准确化 ([26b77b8](https://github.com/huaiminyetnotsleep/spore/commit/26b77b81d80d681c64f96d0291b6f84f89cea220))
+
 ## [1.24.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.23.0...v1.24.0) (2026-09-21)
 
 
