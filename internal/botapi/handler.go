@@ -30,45 +30,49 @@ import (
 // cloud 为 true（该用户具备云盘下载权限且功能已开启，见 helpCloudAllowed）
 // 才包含 /download 命令行与目的地说明——与 handleDownload 的"未授权不暴露
 // 云盘功能"口径一致。
+// 注意：命令词必须保持纯文本——HTML 模式下纯 /命令 会被自动识别为
+// bot_command 实体（客户端可点击直达）；包进 <code> 会变成代码实体，
+// 与命令实体互斥，点击能力即丢失（勿回归）。
 func helpText(name string, cloud bool) string {
 	downloadCmd, downloadNote := "", ""
 	if cloud {
-		downloadCmd = "<code>/download</code> 链接 — 把消息媒体下载到网盘（不重发到聊天）\n"
+		downloadCmd = "/download 链接 — 把消息媒体下载到网盘（不重发到聊天）\n"
 		downloadNote = "/download 可指定目的地：/download 目的地 链接；不带目的地时使用默认目的地。" +
 			"可用目的地由管理员配置；纯文本消息不支持网盘下载。\n\n"
 	}
-	return `🦞 <b>` + html.EscapeString(name) + ` — 受保护消息提取</b>
+	return `🦞 <b>` + html.EscapeString(name) + `</b> — 受保护消息提取
 
 把消息链接直接发给我即可：内容会以全新消息发回给你（无转发标记，可正常再次转发），一条消息可同时包含多个链接。
 
-<b>链接格式</b>
+🔗 <b>链接格式</b>
 • <code>https://t.me/username/message_id</code>
 • <code>https://t.me/c/internal_id/message_id</code>
 
-<b>账号与服务</b>
-<code>/start</code> — 申请使用或查看账号状态
-<code>/help</code> — 查看帮助
-<code>/status</code> — 查看服务运行详情
-<code>/health</code> — 健康自检（正常/降级/不可用）
-<code>/usage</code> — 查看今日额度
+👤 <b>账号与服务</b>
+/start — 申请使用或查看账号状态
+/help — 查看帮助
+/status — 查看服务运行详情
+/health — 健康自检（正常/降级/不可用）
+/usage — 查看今日额度
 
-<b>提取任务</b>
-<code>/cancel</code> 链接 — 取消进行中的任务（也可回复任务消息使用）
-` + downloadCmd + `<code>/pin</code> 链接 — 提取并置顶到绑定目标（回复任务消息：在途或已完成均可补置顶）
+📥 <b>提取任务</b>
+/cancel 链接 — 取消进行中的任务（也可回复任务消息使用）
+` + downloadCmd + `/pin 链接 — 提取并置顶到绑定目标（回复任务消息：在途或已完成均可补置顶）
 
-<b>频道与监听</b>
-<code>/bind</code> 频道 — 绑定频道/超级群组（@用户名、t.me 链接、t.me/+… 邀请链接、-100 ID）
-<code>/unbind</code> 频道 — 解绑频道
-<code>/channels</code> — 查看我的绑定
-<code>/join</code> 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
-<code>/watch</code> 频道 — 添加监听源（写法同 /bind；不带参数查看列表）
-<code>/unwatch</code> 频道 — 移除监听源
+📡 <b>频道与监听</b>
+/bind 频道 — 绑定频道/超级群组（@用户名、t.me 链接、t.me/+… 邀请链接、-100 ID）
+/unbind 频道 — 解绑频道
+/channels — 查看我的绑定
+/join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
+/watch 频道 — 添加监听源（写法同 /bind；不带参数查看列表）
+/unwatch 频道 — 移除监听源
 
-绑定与监听前，先把本机器人拉入目标并设为管理员：频道需发言权限、超级群组需置顶权限，话题群不支持。邀请链接只会让系统读取账号加入，不会自动添加本机器人。
+💡 <b>说明</b>
+<b>绑定与监听</b>前，先把本机器人拉入目标并设为管理员：频道需发言权限、超级群组需置顶权限，话题群不支持。邀请链接只会让系统读取账号加入，不会自动添加本机器人。
 
-绑定后，每次提取的内容除发给你外，还会同步一份到绑定目标；/pin 提交的任务会自动置顶。
+<b>绑定后</b>，每次提取的内容除发给你外，还会同步一份到绑定目标；/pin 提交的任务会自动置顶。
 
-监听源生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
+<b>监听源</b>生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
 
 ` + downloadNote + `<blockquote>要求：我的系统账号需要能访问来源频道；私有频道可先用 /join 加入。</blockquote>`
 }
