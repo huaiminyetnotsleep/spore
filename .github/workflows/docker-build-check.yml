@@ -5,8 +5,14 @@ name: docker-build-check
 
 on:
   # main 的合并提交与直接 push 都重新做完整镜像验证，作为主分支兜底。
+  # 发版合并只改 CHANGELOG 与 manifest（release-please 无 extra-files），
+  # 不影响镜像——paths-ignore 让这类纯版本文件推送完全不触发本 workflow。
+  # 过滤只作用于 push 事件：只要变更含任何其他文件，本 workflow 照常启动。
   push:
     branches: [main]
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - '.release-please-manifest.json'
   # 合并到 main 前必须完成完整镜像构建；不设 paths，保证 required check
   # 对每个 PR 都会产生状态，不会因跳过而一直停在 Expected/Pending。
   pull_request:

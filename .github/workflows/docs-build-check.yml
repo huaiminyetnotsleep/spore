@@ -5,8 +5,14 @@ name: docs-build-check
 
 on:
   # main 的合并提交与直接 push 都构建文档，防止绕过 PR 门禁后留下坏状态。
+  # 发版合并只改 CHANGELOG 与 manifest（release-please 无 extra-files），
+  # 不影响文档站——paths-ignore 让这类纯版本文件推送完全不触发本 workflow。
+  # 过滤只作用于 push 事件：只要变更含任何其他文件，本 workflow 照常启动。
   push:
     branches: [main]
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - '.release-please-manifest.json'
   # 合并到 main 前每个 PR 都构建文档；不设 paths，保证 required check
   # 始终产生状态。这里只验证 VitePress，不上传/部署 Pages。
   pull_request:

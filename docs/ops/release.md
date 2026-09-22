@@ -9,16 +9,19 @@ CI 与发版由五个 GitHub Actions workflow 分工完成；日常 PR 先通过
 
 | Workflow | 职责 | 触发时机 |
 | --- | --- | --- |
-| `docker-build-check` | 完整验证 Dockerfile（前端、Go、FFmpeg、运行时镜像），不产出、不推送镜像 | **所有目标为 main 的 Pull Request**；**所有 push 到 main（含直接 push）**；手动 |
-| `docs-build-check` | 执行 `npm ci && npm run build` 验证 VitePress，不部署 Pages | **所有目标为 main 的 Pull Request**；**所有 push 到 main（含直接 push）**；手动 |
+| `docker-build-check` | 完整验证 Dockerfile（前端、Go、FFmpeg、运行时镜像），不产出、不推送镜像 | **所有目标为 main 的 Pull Request**；**push 到 main（含直接 push，发版合并除外）**；手动 |
+| `docs-build-check` | 执行 `npm ci && npm run build` 验证 VitePress，不部署 Pages | **所有目标为 main 的 Pull Request**；**push 到 main（含直接 push，发版合并除外）**；手动 |
 | `release` | 运行 release-please：分析提交、计算版本号、维护 CHANGELOG，以 release PR 呈现；合并后创建 tag 与 GitHub Release | 每次 push 到 main |
 | `docker-release` | 构建并推送**全部镜像**：`vX.Y.Z` / `vX.Y` / `vX` / `latest` / `sha-<commit>` | 版本 tag 出现时（自动发版经 `release` 派发的事件中转） |
 | `docs-release` | 构建并部署该版本文档到 GitHub Pages | 版本 tag 出现时（自动发版经 `release` 派发的事件中转） |
 
 `main` 的仓库 ruleset/branch protection 应把 `docker-build-check / build-check` 与
 `docs-build-check / build-check` 设为 required status checks：任一失败都不得合并。
-两个 workflow 对每个 main PR 和 main push 都启动，以保证 required status 始终存在；
-内部先按变更路径判断，只有确实影响镜像（cmd/internal/frontend/public/Dockerfile 等）
+两个 workflow 对每个 main PR 都启动，以保证 required status 始终存在；对 push 到
+main 则在触发器上以 `paths-ignore` 排除纯版本文件变更（`CHANGELOG.md` 与
+`.release-please-manifest.json`，即发版合并的全部内容），发版合并不再启动这两个
+workflow，其余 push（含直接 push、feature PR 合并）照常启动。启动后内部先按变更
+路径判断，只有确实影响镜像（cmd/internal/frontend/public/Dockerfile 等）
 或文档站（docs/public）的变更才执行昂贵构建，其余走明确的成功跳过步骤。手动触发
 始终执行完整构建。两个检查只读源码，不拥有 GHCR/Pages 写权限；镜像推送与文档
 部署仍只发生在正式 release。Docker 检查的 GHA cache 仅是性能优化，缓存
@@ -83,6 +86,9 @@ release PR，内容是该版本的 CHANGELOG 更新，并打上 `autorelease: pe
 4. main 上的普通提交不产出任何镜像：`docker-build-check` 只做构建验证、不推送。
    `latest` 与 `sha-<commit>` 同样在本步骤随发版更新，永远指向有版本号的发布。
 
+发版合并（只改 CHANGELOG 与 manifest）不会启动两项 build-check：它们的 push
+触发器以 `paths-ignore` 排除了这两个文件的纯变更，发版链路无需重复校验。
+
 ## 4. GHCR 镜像标签
 
 镜像地址为 `ghcr.io/huaiminyetnotsleep/spore`，可用标签分两类：
@@ -116,6 +122,11 @@ tag 与 CHANGELOG.md 不一致。除非明确知道后果，否则不要手改�
 - **版本镜像构建独立且无路径过滤**：`paths` 过滤对 tag 推送同样生效，而发版
   合并往往只改 CHANGELOG.md——v1.1.0 曾因此漏发镜像。现在镜像由
   `docker-release` 无条件构建，只要版本 tag 出现就必然出镜像。
+- **发版合并不重复校验**：两个 build-check 的 push 触发器以 `paths-ignore` 排除
+  纯 `CHANGELOG.md` / `.release-please-manifest.json` 变更（即 release PR 合并的
+  全部内容）。`paths-ignore` 仅当全部变更文件都匹配时才跳过，且只作用于 push
+  事件、不影响 PR 侧 required status；若有人向 release PR 塞入代码文件，其合并
+  仍会照常触发校验。
 - **`repository_dispatch` 中转**：`GITHUB_TOKEN` 创建的 tag 其 push 事件不会
   触发其他 workflow，这是 GitHub 的防循环规则；派发事件是官方豁免的接续方式，
   同时覆盖人工打 tag 的场景（直接由 `push: tags` 触发）。
