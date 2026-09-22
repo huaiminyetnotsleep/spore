@@ -3,6 +3,8 @@ package mtproto
 import (
 	"context"
 	"errors"
+	"net"
+	"syscall"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -37,6 +39,17 @@ func TestFirstChannel(t *testing.T) {
 	}
 }
 
+func TestInviteInfoFromChatDistinguishesGroups(t *testing.T) {
+	channel := inviteInfoFromChat(&tg.Channel{ID: 42, Title: "频道", AccessHash: 7}, true)
+	if !channel.IsChannel || !channel.AlreadyJoined || channel.ChannelID != 42 {
+		t.Fatalf("频道邀请概要不符: %+v", channel)
+	}
+	group := inviteInfoFromChat(&tg.Chat{ID: 9, Title: "普通群"}, true)
+	if group.IsChannel || !group.AlreadyJoined || group.Title != "普通群" || group.ChannelID != 0 {
+		t.Fatalf("普通群邀请不应标记为频道: %+v", group)
+	}
+}
+
 func TestClassifyMembershipError(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -49,6 +62,8 @@ func TestClassifyMembershipError(t *testing.T) {
 		{tgerr.New(420, "SLOWMODE_WAIT_X"), apperr.CodeRateLimited},
 		{tgerr.New(400, "PEER_FLOOD"), apperr.CodePeerFlood},
 		{tgerr.New(400, "INVITE_PEER_FLOOD"), apperr.CodePeerFlood},
+		{tgerr.New(500, "INTERNAL_SERVER_ERROR"), apperr.CodeTelegramServer},
+		{&net.OpError{Op: "dial", Err: syscall.ECONNRESET}, apperr.CodeNetworkError},
 		{errors.New("别的错误"), apperr.CodeInternal},
 	}
 	for _, c := range cases {

@@ -187,11 +187,11 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `pending` / `approved` / `rejected` / `failed` | int | 加入申请各状态计数 |
-| `active_joined` | int | 当前加入中的频道总数（三来源合计） |
+| `active_joined` | int | 当前加入中的频道总数（全部来源合计） |
 | `external_active` | int | 外部拉入且当前仍加入的频道数 |
-| `left_total` | int | 已退出频道总数（三来源合计） |
+| `left_total` | int | 已退出频道总数（全部来源合计） |
 | `max_channels` | int | 加入数量上限（syscfg；0 = 不限） |
-| `source_dist` | array | 来源分布固定三行 `{key: join_command\|approved\|external, count}`（含 0；count 为该来源当前加入数） |
+| `source_dist` | array | 来源分布固定五行 `{key: join_command\|approved\|external\|watch_source\|bind_resolve, count}`（含 0；count 为该来源当前加入数） |
 
 错误：`500/503`（存储类，经统一映射）。
 
@@ -870,16 +870,16 @@ cloud-drive.json.enc
 
 ### POST /api/v1/channel-bindings
 
-为指定用户绑定频道（认证 + CSRF）。绑定校验经 Bot API `getChat`/`getChatMember`：机器人必须是目标频道的管理员（有发言权限）或创建者；同一频道已被其他用户绑定时拒绝。
+为指定用户绑定频道（认证 + CSRF）。公开标识直接经 Bot API 校验；邀请链接先由 MTProto 读取账号预检并实际加入以解析频道 ID。随后经主 Bot 的 `getChat`/`getChatMember` 校验：机器人必须是目标频道的管理员（有发言权限）或创建者；同一频道已被其他用户绑定时拒绝。
 
 请求体：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `user_id` | int64 | 是 | 绑定归属用户的 Telegram ID（须已存在） |
-| `target` | string | 是 | `@username`、`t.me/频道` 链接或 `-100…` 频道 ID |
+| `target` | string | 是 | `@username`、`t.me/频道`、`t.me/c/…`、`t.me/+…` / `t.me/joinchat/…` 邀请链接，或 `-100…` 频道 ID |
 
-响应 `{"ok":true,"binding":apiChannelBindingRow}`。错误：`400 CHANNEL_TARGET_INVALID`（频道标识无法识别）；`400`（参数非法/用户不存在）；`409 CHANNEL_NOT_POSTABLE`（机器人不是该频道管理员或无发言权限）；`409 CHANNEL_ALREADY_BOUND`（已被其他用户绑定）。
+邀请链接只让读取账号加入，不会自动添加 Bot；调用前仍须把主 Bot 设为目标管理员。响应 `{"ok":true,"binding":apiChannelBindingRow}`。错误：`400 CHANNEL_TARGET_INVALID`（频道标识无法识别）；`400 CHANNEL_INVITE_INVALID`（邀请无效/过期/普通群组）；`503 CHANNEL_INVITE_UNRESOLVED`（读取账号离线、加入需审核或暂未取得频道 ID）；`400`（参数非法/用户不存在）；`409 CHANNEL_NOT_POSTABLE` / `CHANNEL_NOT_PINNABLE`（Bot 权限不足）；`409 CHANNEL_ALREADY_BOUND`（已被其他用户绑定）；`409 CHANNEL_BIND_LIMIT`（达到绑定上限）。网络、Telegram 服务端、限流与 `PEER_FLOOD` 保留对应受控错误码并返回 `503`。
 
 ### POST /api/v1/channel-bindings/{id}/delete
 
@@ -1515,7 +1515,10 @@ MTProto 登录会话状态（认证）。**扫码 URL 是敏感值，不在本 A
 | `OAUTH_STATE_INVALID` | — | OAuth state 缺失、过期或已使用 |
 | `OAUTH_EXCHANGE_FAILED` | — | 与 GitHub 的 token/账号交换失败 |
 | `CHANNEL_TARGET_INVALID` | 400 | 频道标识无法识别（频道绑定） |
+| `CHANNEL_INVITE_INVALID` | 400 | 绑定邀请无效、过期或指向普通群组 |
+| `CHANNEL_INVITE_UNRESOLVED` | 503 | 读取账号当前无法通过邀请取得频道 ID |
 | `CHANNEL_NOT_POSTABLE` | 409 | 机器人不是该频道管理员或无发言权限 |
+| `CHANNEL_NOT_PINNABLE` | 409 | 机器人缺少超级群组置顶权限 |
 | `CHANNEL_ALREADY_BOUND` | 409 | 该频道已被其他用户绑定 |
 | `CHANNEL_BIND_LIMIT` | 409 | 已达到可绑定频道的数量上限 |
 

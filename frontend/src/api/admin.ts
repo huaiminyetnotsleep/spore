@@ -104,15 +104,15 @@ export interface OverviewJoin {
   approved: number;
   rejected: number;
   failed: number;
-  /** 当前加入中的频道总数（三来源合计）。 */
+  /** 当前加入中的频道总数（全部来源合计）。 */
   active_joined: number;
   /** 外部拉入且当前仍加入的频道数。 */
   external_active: number;
-  /** 已退出频道总数（三来源合计）。 */
+  /** 已退出频道总数（全部来源合计）。 */
   left_total: number;
   /** 加入数量上限（syscfg；0 = 不限）。 */
   max_channels: number;
-  /** 来源分布固定四行（join_command/approved/external/watch_source，含 0）。 */
+  /** 来源分布固定五行（join_command/approved/external/watch_source/bind_resolve，含 0）。 */
   source_dist: DistRow[];
 }
 
@@ -995,7 +995,7 @@ export interface JoinedChannelRow {
   username: string;
   /** channel（广播频道）| supergroup。 */
   kind: string;
-  /** 留痕来源：join_command（号主 /join）| approved（审批通过）| external（外部拉入）| watch_source（监听源邀请）。 */
+  /** 留痕来源：join_command（号主 /join）| approved（审批通过）| external（外部拉入）| watch_source（监听源邀请）| bind_resolve（绑定邀请解析）。 */
   source: string;
   joined_by: number;
   joined_at: number;

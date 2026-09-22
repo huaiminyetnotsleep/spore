@@ -89,8 +89,10 @@ const (
 	CodeCloudDownloadDenied Code = "CLOUD_DOWNLOAD_DENIED"
 
 	// 频道绑定码（internal/binding 绑定/解绑流程使用）。
-	CodeChannelTargetInvalid Code = "CHANNEL_TARGET_INVALID" // 频道标识无法解析
-	CodeChannelNotPostable   Code = "CHANNEL_NOT_POSTABLE"   // 机器人不是该频道管理员或无发言权限
+	CodeChannelTargetInvalid    Code = "CHANNEL_TARGET_INVALID"    // 频道标识无法解析
+	CodeChannelInviteInvalid    Code = "CHANNEL_INVITE_INVALID"    // 邀请无效、过期或指向普通群组
+	CodeChannelInviteUnresolved Code = "CHANNEL_INVITE_UNRESOLVED" // 读取账号当前无法完成邀请解析
+	CodeChannelNotPostable      Code = "CHANNEL_NOT_POSTABLE"      // 机器人不是该频道管理员或无发言权限
 	// CodeChannelNotPinnable 超级群组置顶校验失败：任一机器人不在该群组、
 	// 非管理员或缺「置顶消息」权限（can_pin_messages）。与频道发帖校验
 	// （CHANNEL_NOT_POSTABLE）分码，用户文案才能给出群组语义的指引。
@@ -141,11 +143,13 @@ var userTexts = map[Code]string{
 	CodeOAuthStateInvalid:   "登录状态校验失败，请重新发起登录。",
 	CodeOAuthExchangeFailed: "GitHub 登录暂时不可用，请稍后重试。",
 
-	CodeChannelTargetInvalid: "无法识别该频道标识，请发送频道用户名（如 @mychannel）、t.me/频道 链接或 -100 开头的频道 ID。",
-	CodeChannelNotPostable:   "本机器人还不是这个频道的成员或管理员（或是管理员但没有发送消息权限）。请把本机器人——即你正在对话的这个机器人，而不是任何 Telegram 账号——拉进频道并设置为管理员，再重试绑定。",
-	CodeChannelNotPinnable:   "本机器人还不是这个超级群组的管理员（或是管理员但缺「置顶消息」权限）。请把本机器人——即你正在对话的这个机器人——设为该群组的管理员并勾选「置顶消息」，再重试绑定。",
-	CodeChannelAlreadyBound:  "该频道已被其他用户绑定。",
-	CodeChannelBindLimit:     "已达到可绑定频道的数量上限，可先解绑不需要的频道再绑定。",
+	CodeChannelTargetInvalid:    "无法识别该频道标识，请发送频道用户名（如 @mychannel）、t.me/频道 链接、t.me/+… 邀请链接或 -100 开头的频道 ID。",
+	CodeChannelInviteInvalid:    "无法使用该邀请链接：链接可能已失效、已过期或指向普通群组。请换一个频道/超级群组邀请链接后重试。",
+	CodeChannelInviteUnresolved: "暂时无法通过邀请链接解析频道。若频道开启了加入审核，请先等待管理员批准读取账号加入；也可改用 t.me/c/… 链接或 -100 开头的频道 ID。",
+	CodeChannelNotPostable:      "本机器人还不是这个频道的成员或管理员（或是管理员但没有发送消息权限）。请把本机器人——即你正在对话的这个机器人，而不是任何 Telegram 账号——拉进频道并设置为管理员，再重试绑定。",
+	CodeChannelNotPinnable:      "本机器人还不是这个超级群组的管理员（或是管理员但缺「置顶消息」权限）。请把本机器人——即你正在对话的这个机器人——设为该群组的管理员并勾选「置顶消息」，再重试绑定。",
+	CodeChannelAlreadyBound:     "该频道已被其他用户绑定。",
+	CodeChannelBindLimit:        "已达到可绑定频道的数量上限，可先解绑不需要的频道再绑定。",
 
 	CodeCloudAuthFailed:     "网盘账号验证失败，请联系管理员。",
 	CodeCloudQuota:          "网盘空间不足。",

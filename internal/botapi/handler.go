@@ -957,9 +957,10 @@ func handleUnwatch(ctx context.Context, opt Options, snd delivery.Sender, from m
 	sendText(ctx, opt, snd, chatID, fmt.Sprintf("已移除监听源「%s」。", title))
 }
 
-// bindUsage 是 /bind 与 /unbind 共用的参数提示。
-const bindUsage = "用法：/bind 频道/群组用户名（@mychannel）、t.me/频道 链接或 -100 开头的 ID\n\n" +
-	"私有频道没有用户名，请发送 t.me/c/… 链接或 -100 开头的频道 ID。" +
+// bindUsage 是 /bind 的参数提示。
+const bindUsage = "用法：/bind 频道/群组用户名（@mychannel）、t.me/频道 链接、t.me/+… 邀请链接或 -100 开头的 ID\n\n" +
+	"私有频道可发送 t.me/c/… 链接、t.me/+… 邀请链接或 -100 开头的频道 ID。" +
+	"邀请链接会让系统读取账号实际加入目标，但不会自动添加本机器人。" +
 	"请先把本机器人拉进频道/群组并设置为管理员，再发送绑定命令：" +
 	"频道需发言权限（置顶还需「编辑消息」），超级群组需置顶权限；话题群暂不支持。"
 

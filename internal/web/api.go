@@ -101,24 +101,28 @@ func apiAppErrStatus(err error) (status int, code string) {
 	if errors.Is(err, store.ErrNotFound) {
 		return http.StatusNotFound, apiCodeNotFound
 	}
-	if errors.Is(err, mtproto.ErrMembershipUnavailable) {
-		// 用户号离线是瞬态资源条件：同"稍后重试"语义，受控文案提示先登录
-		return http.StatusServiceUnavailable, apiCodeMTProtoOffline
-	}
 	var ae *apperr.AppError
 	if errors.As(err, &ae) {
 		switch ae.Code {
-		case apperr.CodeStoreUnavailable, apperr.CodeQueueFull, apperr.CodePeerFlood:
-			// 队列饱和与 PEER_FLOOD 都是瞬态资源条件，与存储不可用同归"稍后重试"
+		case apperr.CodeStoreUnavailable, apperr.CodeQueueFull, apperr.CodePeerFlood,
+			apperr.CodeRateLimited, apperr.CodeNetworkError, apperr.CodeTelegramServer,
+			apperr.CodeChannelInviteUnresolved:
+			// 瞬态资源条件统一提示稍后重试，同时保留稳定业务码。
 			return http.StatusServiceUnavailable, string(ae.Code)
 		case apperr.CodeStoreConstraint, apperr.CodeRetryExhausted, apperr.CodeUserDisabled,
-			apperr.CodeChannelNotPostable, apperr.CodeChannelAlreadyBound:
+			apperr.CodeChannelNotPostable, apperr.CodeChannelNotPinnable,
+			apperr.CodeChannelAlreadyBound, apperr.CodeChannelBindLimit:
 			return http.StatusConflict, string(ae.Code)
-		case apperr.CodeChannelTargetInvalid:
+		case apperr.CodeChannelTargetInvalid, apperr.CodeChannelInviteInvalid:
 			return http.StatusBadRequest, string(ae.Code)
 		case apperr.CodeInvalidURL, apperr.CodeInvalidInviteURL:
 			return http.StatusBadRequest, string(ae.Code)
 		}
+	}
+	if errors.Is(err, mtproto.ErrMembershipUnavailable) {
+		// 未经业务码包装的用户号离线保持通用 MTProto 不可用语义；绑定邀请
+		// 已包装为 CHANNEL_INVITE_UNRESOLVED，优先在上方按业务码返回。
+		return http.StatusServiceUnavailable, apiCodeMTProtoOffline
 	}
 	return http.StatusInternalServerError, string(apperr.CodeInternal)
 }

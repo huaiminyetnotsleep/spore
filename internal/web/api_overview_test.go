@@ -22,8 +22,8 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 	j := e.login(t)
 	ctx := context.Background()
 
-	// 种子数据：用户 2 人 + 申请 4 态各 1 + 留痕三来源（command 在加入 1 退出 1、
-	// approved 在加入 2 退出 1、external 在加入 1）
+	// 种子数据：用户 2 人 + 申请 4 态各 1 + 留痕五来源中的四类有数据
+	//（command 在加入 1 退出 1、approved 在加入 2 退出 1、external/bind 各在加入 1）
 	seedUser(t, e, 101, store.UserEnabled)
 	seedUser(t, e, 102, store.UserPending)
 	for i, status := range []string{
@@ -48,6 +48,7 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 		{1, store.JoinedViaCommand}, {2, store.JoinedViaCommand},
 		{3, store.JoinedViaApproved}, {4, store.JoinedViaApproved},
 		{5, store.JoinedViaApproved}, {6, store.JoinedViaExternal},
+		{7, store.JoinedViaBindResolve},
 	}
 	for _, s := range seedJoined {
 		if err := e.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
@@ -92,7 +93,7 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 	if view.Join.Pending != 1 || view.Join.Approved != 1 || view.Join.Rejected != 1 || view.Join.Failed != 1 {
 		t.Errorf("申请状态计数不对: %+v", view.Join)
 	}
-	if view.Join.ActiveJoined != 4 || view.Join.ExternalActive != 1 || view.Join.LeftTotal != 2 {
+	if view.Join.ActiveJoined != 5 || view.Join.ExternalActive != 1 || view.Join.LeftTotal != 2 {
 		t.Errorf("频道加入计数不对: %+v", view.Join)
 	}
 	if view.Join.MaxChannels != wantMax {
@@ -101,9 +102,10 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 	wantDist := map[string]int{
 		store.JoinedViaCommand: 1, store.JoinedViaApproved: 2,
 		store.JoinedViaExternal: 1, store.JoinedViaWatchSource: 0,
+		store.JoinedViaBindResolve: 1,
 	}
-	if len(view.Join.SourceDist) != 4 {
-		t.Fatalf("来源分布应固定四行（含 watch_source 0 行）: %+v", view.Join.SourceDist)
+	if len(view.Join.SourceDist) != 5 {
+		t.Fatalf("来源分布应固定五行（含 watch_source 0 行）: %+v", view.Join.SourceDist)
 	}
 	for _, row := range view.Join.SourceDist {
 		if row.Count != wantDist[row.Key] {
@@ -112,7 +114,7 @@ func TestAPIOverviewSnapshotJoinTally(t *testing.T) {
 	}
 }
 
-// 空库时 join 快照为零值 + 四来源 0 行（join 功能未启用也照常下发）。
+// 空库时 join 快照为零值 + 五来源 0 行（join 功能未启用也照常下发）。
 func TestAPIOverviewJoinZeroState(t *testing.T) {
 	e := newTestEnv(t, nil)
 	j := e.login(t)
@@ -122,8 +124,8 @@ func TestAPIOverviewJoinZeroState(t *testing.T) {
 	if view.Join.Pending != 0 || view.Join.ActiveJoined != 0 || view.Join.LeftTotal != 0 {
 		t.Errorf("空库 join 计数应为零: %+v", view.Join)
 	}
-	if len(view.Join.SourceDist) != 4 {
-		t.Fatalf("来源分布应固定四行（含 0）: %+v", view.Join.SourceDist)
+	if len(view.Join.SourceDist) != 5 {
+		t.Fatalf("来源分布应固定五行（含 0）: %+v", view.Join.SourceDist)
 	}
 	for _, row := range view.Join.SourceDist {
 		if row.Count != 0 {

@@ -54,14 +54,14 @@ type apiOverviewRequests struct {
 }
 
 // apiJoinTallyView 是频道加入的全时段快照统计（join 功能关闭时历史数据
-// 仍有意义，照常下发）。SourceDist 固定三来源各一行（含 0），Key 为
+// 仍有意义，照常下发）。SourceDist 固定五来源各一行（含 0），Key 为
 // joined_via raw 值，中文标签由前端处理。
 type apiJoinTallyView struct {
 	Pending        int          `json:"pending"`
 	Approved       int          `json:"approved"`
 	Rejected       int          `json:"rejected"`
 	Failed         int          `json:"failed"`
-	ActiveJoined   int          `json:"active_joined"` // 当前加入中的频道总数（三来源合计）
+	ActiveJoined   int          `json:"active_joined"` // 当前加入中的频道总数（全部来源合计）
 	ExternalActive int          `json:"external_active"`
 	LeftTotal      int          `json:"left_total"`
 	MaxChannels    int          `json:"max_channels"` // 加入数量上限（syscfg；0 = 不限）
@@ -206,6 +206,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request, _ ses
 			{Key: store.JoinedViaApproved, Count: chTally.ApprovedActive},
 			{Key: store.JoinedViaExternal, Count: chTally.ExternalActive},
 			{Key: store.JoinedViaWatchSource, Count: chTally.WatchSourceActive},
+			{Key: store.JoinedViaBindResolve, Count: chTally.BindResolveActive},
 		},
 	}
 

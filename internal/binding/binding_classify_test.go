@@ -39,6 +39,26 @@ func TestClassifyVerifyError(t *testing.T) {
 	}
 }
 
+func TestWrapVerifyContextPreservesTransientCodes(t *testing.T) {
+	for _, code := range []apperr.Code{
+		apperr.CodeNetworkError,
+		apperr.CodeTelegramServer,
+		apperr.CodeRateLimited,
+		apperr.CodePeerFlood,
+	} {
+		err := wrapVerifyContext(apperr.New(code, "temporary"), apperr.CodeChannelNotPostable,
+			errors.New("bot context"))
+		if got := apperr.From(err).Code; got != code {
+			t.Errorf("应保留 %s，得到 %s", code, got)
+		}
+	}
+	permission := wrapVerifyContext(apperr.New(apperr.CodeChannelNotPostable, "permission"),
+		apperr.CodeChannelNotPostable, errors.New("bot context"))
+	if got := apperr.From(permission).Code; got != apperr.CodeChannelNotPostable {
+		t.Fatalf("权限错误应保持频道码，得到 %s", got)
+	}
+}
+
 func TestClassifyPinError(t *testing.T) {
 	cases := []struct {
 		name string

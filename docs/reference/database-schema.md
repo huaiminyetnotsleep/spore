@@ -243,7 +243,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `title` | TEXT | 可空 | 频道标题 |
 | `username` | TEXT | 可空 | 频道公开用户名 |
 | `kind` | TEXT | NOT NULL DEFAULT 'channel' | 对象类型（当前恒为 `channel`） |
-| `joined_via` | TEXT | NOT NULL DEFAULT 'external' | 留痕来源：`join_command`（owner `/join` 即时）/ `approved`（审批加入）/ `external`（外部拉入或无留痕）/ `watch_source`（私有邀请监听源流程加入） |
+| `joined_via` | TEXT | NOT NULL DEFAULT 'external' | 留痕来源：`join_command`（owner `/join` 即时）/ `approved`（审批加入）/ `external`（外部拉入或无留痕）/ `watch_source`（私有邀请监听源流程加入）/ `bind_resolve`（绑定邀请解析流程加入） |
 | `joined_by` | INTEGER | 可空，FK → `users(id)` | 触发加入的用户；NULL = 外部加入或未关联用户 |
 | `joined_at` | INTEGER | NOT NULL | 加入时间 |
 | `left_at` | INTEGER | 可空 | 退出时间（NULL = 仍在加入中） |

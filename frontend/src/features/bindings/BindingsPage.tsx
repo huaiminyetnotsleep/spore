@@ -217,8 +217,8 @@ export function BindingsPage() {
             />
           )}
           <Text type="secondary">
-            共 {items.length} 条绑定。用户可经 Bot /bind 自行绑定频道（需先把机器人设为频道管理员）；
-            任务成功后，提取内容会同步发送一份到该用户绑定的频道。
+            共 {items.length} 条绑定。用户可经 Bot /bind 自行绑定频道（需先把当前机器人设为频道管理员）；
+            邀请链接只会让系统读取账号加入目标，不会自动添加机器人。任务成功后，提取内容会同步发送一份到该用户绑定的频道。
           </Text>
         </Space>
       </PageSection>
@@ -244,10 +244,10 @@ export function BindingsPage() {
         <Form.Item
           name="target"
           label="频道标识"
-          rules={[{ required: true, message: "请填写频道用户名、t.me 链接或频道 ID。" }]}
-          extra="支持 @mychannel、https://t.me/mychannel 或 -100 开头的频道 ID。"
+          rules={[{ required: true, message: "请填写频道用户名、t.me 链接、邀请链接或频道 ID。" }]}
+          extra="支持 @mychannel、https://t.me/mychannel、t.me/c/…、t.me/+… 邀请链接或 -100 开头的频道 ID。邀请链接会让系统读取账号实际加入目标。"
         >
-          <Input placeholder="@mychannel" allowClear />
+          <Input placeholder="@mychannel 或 https://t.me/+…" allowClear />
         </Form.Item>
       </FormModal>
     </PageScaffold>

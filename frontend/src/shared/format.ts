@@ -65,6 +65,7 @@ export const JOIN_SOURCE_LABELS: Record<string, string> = {
   approved: "审批通过",
   external: "外部拉入",
   watch_source: "监听源邀请",
+  bind_resolve: "绑定邀请解析",
 };
 
 /** 来源 raw key → 中文标签；未知来源回退原值。 */
@@ -161,6 +162,8 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   CLOUD_VERIFY_FAILED: "云盘核验不可用",
   // 频道绑定
   CHANNEL_TARGET_INVALID: "频道标识无法解析",
+  CHANNEL_INVITE_INVALID: "绑定邀请无效",
+  CHANNEL_INVITE_UNRESOLVED: "绑定邀请暂不可解析",
   CHANNEL_NOT_POSTABLE: "机器人无发言权限",
   CHANNEL_NOT_PINNABLE: "机器人缺置顶权限",
   CHANNEL_ALREADY_BOUND: "频道已被绑定",

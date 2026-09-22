@@ -80,28 +80,35 @@ func (f *Fetcher) checkInvite(ctx context.Context, hash string) (InviteInfo, err
 			RequestedToJoin: v.RequestNeeded,
 		}, nil
 	case *tg.ChatInviteAlready:
-		// 已是成员：取实际频道标题与定位信息
-		info := InviteInfo{AlreadyJoined: true, IsChannel: true}
+		// 已是成员：从实际 ChatClass 判断频道/普通群，避免把普通群组误标为频道。
+		info := inviteInfoFromChat(v.Chat, true)
 		if ch, ok := v.Chat.(*tg.Channel); ok {
 			_ = f.cache.putBatch([]tg.ChatClass{ch})
 			_ = f.cache.save()
-			info.Title = ch.Title
-			info.ChannelID = ch.ID
-			info.AccessHash = ch.AccessHash
 		}
 		return info, nil
 	case *tg.ChatInvitePeek:
-		// 仅可窥视的频道：同样按已加入不可用处理（无法读历史）
-		info := InviteInfo{IsChannel: true}
-		if ch, ok := v.Chat.(*tg.Channel); ok {
-			info.Title = ch.Title
-			info.ChannelID = ch.ID
-			info.AccessHash = ch.AccessHash
-		}
-		return info, nil
+		// 仅可窥视的频道：按实际 ChatClass 返回定位（无法读历史）。
+		return inviteInfoFromChat(v.Chat, false), nil
 	default:
 		return InviteInfo{}, apperr.New(apperr.CodeInvalidURL, "邀请链接指向未知的聊天形态")
 	}
+}
+
+// inviteInfoFromChat 从邀请响应携带的实际聊天对象提取概要。超级群组同广播
+// 频道一样由 tg.Channel 表示；普通群组是 tg.Chat，必须保持 IsChannel=false。
+func inviteInfoFromChat(chat tg.ChatClass, alreadyJoined bool) InviteInfo {
+	info := InviteInfo{AlreadyJoined: alreadyJoined}
+	switch ch := chat.(type) {
+	case *tg.Channel:
+		info.Title = ch.Title
+		info.IsChannel = true
+		info.ChannelID = ch.ID
+		info.AccessHash = ch.AccessHash
+	case *tg.Chat:
+		info.Title = ch.Title
+	}
+	return info
 }
 
 // joinInvite 通过邀请链接加入频道，按 opts 执行加入后动作。
@@ -505,8 +512,8 @@ func (b *MembershipBridge) CheckInvite(ctx context.Context, hash string) (Invite
 }
 
 // JoinInvite 通过邀请链接加入频道并执行加入后动作。
-// 返回频道 ID 与标题；alreadyJoined 为 true 表示此前已是成员（未重复加入，
-// 此时频道 ID 未知，返回 0）。
+// 返回频道 ID 与标题；alreadyJoined 为 true 表示此前已是成员（未重复加入），
+// 此时通过 CheckInvite 回查并返回已有频道定位。
 func (b *MembershipBridge) JoinInvite(ctx context.Context, hash string, opts JoinOptions) (channelID int64, title string, alreadyJoined bool, err error) {
 	f, release, err := b.acquire()
 	if err != nil {
@@ -576,6 +583,10 @@ func classifyMembershipError(err error) *apperr.AppError {
 	case tgerr.Is(err, "PEER_FLOOD", "INVITE_PEER_FLOOD"):
 		// 加入路径的账号级限制：与普通限流不同，通常持续数小时
 		return apperr.Wrap(apperr.CodePeerFlood, err)
+	case tgerr.IsCode(err, 500):
+		return apperr.Wrap(apperr.CodeTelegramServer, err)
+	case apperr.IsTransportFailure(err):
+		return apperr.Wrap(apperr.CodeNetworkError, err)
 	default:
 		return apperr.Wrap(apperr.CodeInternal, err)
 	}

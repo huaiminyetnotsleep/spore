@@ -156,6 +156,8 @@ describe("频道绑定管理页", () => {
     fireEvent.click(screen.getByRole("button", { name: "绑定频道" }));
     const userIdInput = await screen.findByLabelText(/所属用户/);
     const targetInput = screen.getByLabelText(/频道标识/);
+    expect(screen.getByText(/t\.me\/\+… 邀请链接/)).toBeInTheDocument();
+    expect(screen.getByText(/读取账号实际加入目标/)).toBeInTheDocument();
     fireEvent.change(userIdInput, { target: { value: "7" } });
     fireEvent.change(targetInput, { target: { value: "@mychan" } });
 

@@ -21,8 +21,10 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
+	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
 )
 
 // ClassifyVerifyError 把绑定/监听校验中 Bot API 调用（GetChat/GetChatMember）
@@ -33,10 +35,21 @@ import (
 func ClassifyVerifyError(err error, fallback apperr.Code) error {
 	ae := apperr.From(delivery.ClassifyBotError(err))
 	switch ae.Code {
-	case apperr.CodeNetworkError, apperr.CodeRateLimited, apperr.CodePeerFlood:
+	case apperr.CodeNetworkError, apperr.CodeTelegramServer, apperr.CodeRateLimited, apperr.CodePeerFlood:
 		return ae
 	}
 	return apperr.Wrap(fallback, err)
+}
+
+// wrapVerifyContext 为权限类校验补充 bot 与目标上下文，同时保留网络、
+// Telegram 服务端、限流和账号级限制等可重试错误的既有分类。
+func wrapVerifyContext(err error, fallback apperr.Code, contextual error) error {
+	ae := apperr.From(err)
+	switch ae.Code {
+	case apperr.CodeNetworkError, apperr.CodeTelegramServer, apperr.CodeRateLimited, apperr.CodePeerFlood:
+		return ae
+	}
+	return apperr.Wrap(fallback, contextual)
 }
 
 // classifyPinError 把频道置顶（PinChatMessage）失败归类为错误码：
@@ -59,10 +72,17 @@ const channelRefreshTTL = 10 * time.Minute
 // refreshTimeout 是单次频道信息刷新（GetChat）的时间窗。
 const refreshTimeout = 10 * time.Second
 
+// InviteResolver 是邀请链接绑定所需的最小 MTProto 能力。
+type InviteResolver interface {
+	CheckInvite(ctx context.Context, hash string) (mtproto.InviteInfo, error)
+	JoinInvite(ctx context.Context, hash string, opts mtproto.JoinOptions) (channelID int64, title string, alreadyJoined bool, err error)
+}
+
 // Options 聚合 Service 依赖。
 type Options struct {
-	Store *store.Store
-	Log   *slog.Logger
+	Store  *store.Store
+	Invite InviteResolver
+	Log    *slog.Logger
 }
 
 // Service 是频道绑定应用服务。Bot 客户端在装配层 Bot 就绪后经 SetBots 注入
@@ -73,8 +93,9 @@ type Options struct {
 // 执行（部署级共享目标）。副本投递按受理 bot 执行（消息坐标是 bot 私有的，
 // 跨 bot 不可复制）。
 type Service struct {
-	store *store.Store
-	log   *slog.Logger
+	store  *store.Store
+	invite InviteResolver
+	log    *slog.Logger
 
 	botMu sync.RWMutex
 	bots  []*tgbot.Bot // 装配顺序，主 bot（首项）承担元数据刷新等单通道操作
@@ -92,7 +113,7 @@ func New(opt Options) (*Service, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	return &Service{store: opt.Store, log: opt.Log, refreshAt: map[int64]time.Time{}}, nil
+	return &Service{store: opt.Store, invite: opt.Invite, log: opt.Log, refreshAt: map[int64]time.Time{}}, nil
 }
 
 // SetBots 注入 Bot 客户端列表（多机器人池；主 bot 在前，单 bot 部署长度为 1）。
@@ -143,7 +164,7 @@ func (s *Service) botFor(botID int64) *tgbot.Bot {
 func verifyAllBotsCanPost(ctx context.Context, bots []*tgbot.Bot, chatID int64) error {
 	for _, b := range bots {
 		if err := verifyBotCanPost(ctx, b, b.ID(), chatID); err != nil {
-			return apperr.Wrap(apperr.CodeChannelNotPostable,
+			return wrapVerifyContext(err, apperr.CodeChannelNotPostable,
 				fmt.Errorf("机器人 %d 无法在频道 %d 发帖（需全部机器人设为频道管理员）: %w",
 					b.ID(), chatID, err))
 		}
@@ -154,7 +175,7 @@ func verifyAllBotsCanPost(ctx context.Context, bots []*tgbot.Bot, chatID int64) 
 // BindInput 描述一次绑定请求。
 type BindInput struct {
 	UserID int64  // 绑定归属用户（Telegram 用户 ID）
-	Target string // 频道标识：@username / t.me 链接 / -100… 频道 ID
+	Target string // 频道标识：@username / t.me 链接 / 邀请链接 / -100… 频道 ID
 	Via    string // store.BoundViaBot | store.BoundViaWeb
 	// BotID 是接收绑定请求的 bot（Bot 指令路径）；0 = Web 路径，硬校验
 	// 回退主 bot。只有这台 bot 不达标才拒绝绑定，其余 bot 未就绪仅点名提示。
@@ -169,6 +190,71 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 	return bound, err
 }
 
+// resolveInviteTarget 把邀请链接解析为 Bot API 频道 ID。预检先拒绝普通群组，
+// 未加入时读取账号实际加入；只有本次确实加入才写留痕，避免覆盖既有来源。
+func (s *Service) resolveInviteTarget(ctx context.Context, userID int64, target string) (string, error) {
+	hash, ok := tmeurl.ParseInviteLink(target)
+	if !ok {
+		return target, nil
+	}
+	if s.invite == nil {
+		return "", apperr.New(apperr.CodeChannelInviteUnresolved, "邀请解析能力未接入")
+	}
+
+	info, err := s.invite.CheckInvite(ctx, hash)
+	if err != nil {
+		return "", classifyInviteResolveError(err)
+	}
+	if !info.IsChannel {
+		return "", apperr.New(apperr.CodeChannelInviteInvalid, "邀请链接指向普通群组")
+	}
+
+	channelID, title, already := info.ChannelID, info.Title, info.AlreadyJoined
+	if !already {
+		joinedID, joinedTitle, joinedAlready, jerr := s.invite.JoinInvite(ctx, hash, mtproto.JoinOptions{})
+		if jerr != nil {
+			return "", classifyInviteResolveError(jerr)
+		}
+		channelID, already = joinedID, joinedAlready
+		if joinedTitle != "" {
+			title = joinedTitle
+		}
+	}
+	if channelID <= 0 {
+		return "", apperr.New(apperr.CodeChannelInviteUnresolved, "邀请解析未返回频道 ID")
+	}
+
+	if !already {
+		if err := s.store.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
+			ChannelID: channelID,
+			Title:     title,
+			Kind:      "channel",
+			JoinedVia: store.JoinedViaBindResolve,
+			JoinedBy:  userID,
+		}); err != nil {
+			s.log.Error("写入绑定邀请加入留痕失败（不影响绑定）",
+				"channel_id", channelID, "error", err.Error())
+		}
+	}
+	return strconv.FormatInt(BotChannelID(channelID), 10), nil
+}
+
+// classifyInviteResolveError 保留 MTProto 已分类的限流、账号限制与内部故障；
+// 只有确定的无效/不可访问邀请和同步无法继续的状态映射为绑定专用错误码。
+func classifyInviteResolveError(err error) error {
+	switch {
+	case errors.Is(err, mtproto.ErrMembershipUnavailable), errors.Is(err, mtproto.ErrJoinRequestSent):
+		return apperr.Wrap(apperr.CodeChannelInviteUnresolved, err)
+	}
+	ae := apperr.From(err)
+	switch ae.Code {
+	case apperr.CodeInvalidURL, apperr.CodeInvalidInviteURL, apperr.CodeChannelInaccessible:
+		return apperr.Wrap(apperr.CodeChannelInviteInvalid, err)
+	default:
+		return ae
+	}
+}
+
 // BindWithAdvice 在 Bind 之上返回其余 bot 的未就绪提示（advice，可为空）。
 // 绑定校验按 bot 逐台判定：只有接收请求的 bot（in.BotID，Web 路径回退主
 // bot）不达标才拒绝——它不达标意味着用户当前使用的入口立即可见地不可用；
@@ -179,18 +265,38 @@ func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.Chann
 	if in.UserID <= 0 {
 		return store.ChannelBinding{}, "", apperr.New(apperr.CodeInternal, "频道绑定必须归属一个用户")
 	}
-	tgt, err := ParseChannelTarget(in.Target)
-	if err != nil {
-		return store.ChannelBinding{}, "", err
+	// 普通目标保持纯解析先行（非法标识不依赖 Bot 就绪）；邀请链接会产生实际
+	// 加入副作用，必须先确认绑定链路的 Bot 已就绪再解析。
+	_, isInvite := tmeurl.ParseInviteLink(in.Target)
+	var tgt ChannelTarget
+	var err error
+	if !isInvite {
+		tgt, err = ParseChannelTarget(in.Target)
+		if err != nil {
+			return store.ChannelBinding{}, "", err
+		}
 	}
 	bots := s.currentBots()
 	if len(bots) == 0 {
 		return store.ChannelBinding{}, "", apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
 	}
+	if isInvite {
+		target, rerr := s.resolveInviteTarget(ctx, in.UserID, in.Target)
+		if rerr != nil {
+			return store.ChannelBinding{}, "", rerr
+		}
+		tgt, err = ParseChannelTarget(target)
+		if err != nil {
+			return store.ChannelBinding{}, "", err
+		}
+	}
 
+	// 用户绑定的元数据读取与权限硬校验必须使用同一台受理 bot；否则私有频道
+	// 只授权给次级 bot 时，固定主 bot 的 GetChat 会在硬校验前误报不可访问。
+	hard := s.botFor(in.BotID)
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
+	chat, err := hard.GetChat(vctx, tgt.ChatParams())
 	if err != nil {
 		// 网络故障/限流透传真实原因；其余失败 = bot 看不见目标聊天，基本等于
 		// "不在该频道/无权限"，统一归类提示用户先把机器人拉进频道设为管理员
@@ -211,15 +317,14 @@ func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.Chann
 	// 硬校验只针对接收请求的 bot。权限语义按类型区分——频道校验发帖权限
 	// （can_post_messages）；超级群组校验置顶权限（can_pin_messages，
 	// can_post_messages 是频道作用域权限，群管理员通常为 false）。
-	hard := s.botFor(in.BotID)
 	if chat.Type == models.ChatTypeSupergroup {
 		if err := verifyBotCanPin(vctx, hard, hard.ID(), chat.ID); err != nil {
-			return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPinnable,
+			return store.ChannelBinding{}, "", wrapVerifyContext(err, apperr.CodeChannelNotPinnable,
 				fmt.Errorf("机器人 %d 无法在群组 %d 置顶（需设为管理员并授予「置顶消息」权限）: %w",
 					hard.ID(), chat.ID, err))
 		}
 	} else if err := verifyBotCanPost(vctx, hard, hard.ID(), chat.ID); err != nil {
-		return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPostable,
+		return store.ChannelBinding{}, "", wrapVerifyContext(err, apperr.CodeChannelNotPostable,
 			fmt.Errorf("机器人 %d 无法在频道 %d 发帖（需设为频道管理员并有发帖权限）: %w",
 				hard.ID(), chat.ID, err))
 	}

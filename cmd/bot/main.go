@@ -252,9 +252,12 @@ func main() {
 	}
 	// 通知时间渲染接入运营时区（设置变更即时生效；未设置回退 GMT+8）。
 	hub.SetTimezone(func() *time.Location { return accessSvc.Location(context.Background()) })
+	// 频道成员管理桥接器由 /bind 邀请解析、/join 与 /watch 共用；实际 API 与
+	// Fetcher 仍仅在 MTProto ready 生命周期内绑定，离线时返回受控不可用。
+	membership := mtproto.NewMembershipBridge()
 	// 频道绑定服务（Bot /bind 与 Web 管理端共用）：Bot 客户端在长轮询链路
 	// 就绪后经 SetBot 注入；worker 的频道副本投递也由它实现（queue.Copier）。
-	bindingSvc, err := binding.New(binding.Options{Store: st, Log: logger})
+	bindingSvc, err := binding.New(binding.Options{Store: st, Invite: membership, Log: logger})
 	if err != nil {
 		logger.Error("初始化频道绑定服务失败", "error", err.Error())
 		os.Exit(1)
@@ -300,9 +303,6 @@ func main() {
 	}
 	// Web 顶层 Bot 会话状态必须挂在真实运行的主 bot 客户端上：
 	// 单独 new 一个不 Run 的客户端会永远返回初始 offline（975db56 回归）。
-	// 频道成员管理桥接器（/join、Web 已加入频道页共用）：ready 生命周期内
-	// 绑定 API 与 Fetcher，离线时相关操作返回受控不可用。
-	membership := mtproto.NewMembershipBridge()
 	// MTProto 会话状态 → 事件中心（经观察回调，mtproto 不感知 notify）：
 	// 转入 offline 产生/合并告警；重连成功（ready）自动解决对应事件。
 	// 回调在 mtproto 状态锁外执行，Raise/Recover 内部自带限时，不会拖慢状态机。

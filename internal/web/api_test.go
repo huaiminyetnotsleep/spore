@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -263,6 +264,11 @@ func TestAPIAppErrStatusMapping(t *testing.T) {
 		{"未分类错误", errors.New("boom"), http.StatusInternalServerError, string(apperr.CodeInternal)},
 		{"邀请链接无效返回 400", apperr.New(apperr.CodeInvalidURL, "测试"), http.StatusBadRequest, string(apperr.CodeInvalidURL)},
 		{"频道邀请无效返回 400", apperr.New(apperr.CodeInvalidInviteURL, "测试"), http.StatusBadRequest, string(apperr.CodeInvalidInviteURL)},
+		{"绑定邀请无效返回 400", apperr.New(apperr.CodeChannelInviteInvalid, "测试"), http.StatusBadRequest, string(apperr.CodeChannelInviteInvalid)},
+		{"绑定邀请暂不可解析返回 503", apperr.New(apperr.CodeChannelInviteUnresolved, "测试"), http.StatusServiceUnavailable, string(apperr.CodeChannelInviteUnresolved)},
+		{"绑定邀请读取账号离线保留业务码", apperr.Wrap(apperr.CodeChannelInviteUnresolved, mtproto.ErrMembershipUnavailable), http.StatusServiceUnavailable, string(apperr.CodeChannelInviteUnresolved)},
+		{"机器人缺置顶权限返回 409", apperr.New(apperr.CodeChannelNotPinnable, "测试"), http.StatusConflict, string(apperr.CodeChannelNotPinnable)},
+		{"Telegram 限流返回 503", apperr.New(apperr.CodeRateLimited, "测试"), http.StatusServiceUnavailable, string(apperr.CodeRateLimited)},
 		{"业务错误暂回落内部错误", apperr.New(apperr.CodeMediaUnsupported, "测试"), http.StatusInternalServerError, string(apperr.CodeInternal)},
 	}
 	for _, tc := range cases {

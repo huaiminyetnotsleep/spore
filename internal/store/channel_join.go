@@ -24,6 +24,7 @@ const (
 	JoinedViaApproved    = "approved"     // 普通用户申请经审批加入
 	JoinedViaExternal    = "external"     // 检测到的外部拉入（非本系统加入）
 	JoinedViaWatchSource = "watch_source" // 私有邀请监听源流程加入
+	JoinedViaBindResolve = "bind_resolve" // 绑定邀请解析流程加入
 )
 
 // joinStatusSet 合法状态白名单。
@@ -37,6 +38,7 @@ var joinedViaSet = map[string]bool{
 	JoinedViaApproved:    true,
 	JoinedViaExternal:    true,
 	JoinedViaWatchSource: true,
+	JoinedViaBindResolve: true,
 }
 
 // JoinRequest 是 join_requests 表的行模型。
@@ -382,16 +384,18 @@ type JoinedChannelTally struct {
 	ExternalLeft      int
 	WatchSourceActive int
 	WatchSourceLeft   int
+	BindResolveActive int
+	BindResolveLeft   int
 }
 
 // Active 返回当前加入中的频道总数（全部来源合计）。
 func (t JoinedChannelTally) Active() int {
-	return t.CommandActive + t.ApprovedActive + t.ExternalActive + t.WatchSourceActive
+	return t.CommandActive + t.ApprovedActive + t.ExternalActive + t.WatchSourceActive + t.BindResolveActive
 }
 
 // Left 返回已退出的频道总数（全部来源合计）。
 func (t JoinedChannelTally) Left() int {
-	return t.CommandLeft + t.ApprovedLeft + t.ExternalLeft + t.WatchSourceLeft
+	return t.CommandLeft + t.ApprovedLeft + t.ExternalLeft + t.WatchSourceLeft + t.BindResolveLeft
 }
 
 // TallyJoinedChannels 按 joined_via 分组统计已加入频道的当前加入/已退出
@@ -420,6 +424,8 @@ func (s *Store) TallyJoinedChannels(ctx context.Context) (JoinedChannelTally, er
 			out.ExternalActive, out.ExternalLeft = active, left
 		case JoinedViaWatchSource:
 			out.WatchSourceActive, out.WatchSourceLeft = active, left
+		case JoinedViaBindResolve:
+			out.BindResolveActive, out.BindResolveLeft = active, left
 		}
 	}
 	return out, wrapDB("遍历已加入频道来源计数", rows.Err())
