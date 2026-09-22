@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.29.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.28.0...v1.29.0) (2026-09-22)
+
+
+### Features
+
+* **resilience:** 封禁场景韧性改造（v24：缓存频道迁移、封禁事件、软解绑与定时备份） ([38caaf3](https://github.com/huaiminyetnotsleep/spore/commit/38caaf3932ab1ceab5981d0c093406a3f58482b4))
+
 ## [1.28.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.27.1...v1.28.0) (2026-09-22)
 
 
