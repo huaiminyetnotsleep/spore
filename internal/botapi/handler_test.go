@@ -413,7 +413,7 @@ func TestHandleStartOutcomes(t *testing.T) {
 	opt2, fa2, fs2 := newHarness(t, 4)
 	fa2.startOut = access.StartWelcome
 	run(opt2, fs2, "/start")
-	if got := lastText(t, fs2); got != helpText(syscfg.DefaultName) {
+	if got := lastText(t, fs2); got != helpText(syscfg.DefaultName, false) {
 		t.Errorf("enabled 应回欢迎文案，得到 %q", got)
 	}
 
@@ -579,19 +579,17 @@ func TestHandleStatusUnavailableWithoutProvider(t *testing.T) {
 }
 
 func TestHelpListsPublicCommands(t *testing.T) {
+	// 未注入云盘：命令清单完整，但不向无权限用户暴露 /download
 	opt, _, fs := newHarness(t, 4)
 	run(opt, fs, "/help")
 	got := lastText(t, fs)
-	for _, command := range []string{"/start", "/help", "/status", "/health", "/usage", "/cancel", "/download"} {
+	for _, command := range []string{"/start", "/help", "/status", "/health", "/usage", "/cancel", "/pin", "/bind", "/channels", "/join", "/watch"} {
 		if !strings.Contains(got, command) {
 			t.Errorf("帮助文案应列出 %s，得到 %q", command, got)
 		}
 	}
-	// /download 用法说明：目的地由管理员配置、纯文本不支持
-	for _, want := range []string{"目的地", "默认目的地", "纯文本"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("帮助文案的 /download 说明应包含 %q，得到 %q", want, got)
-		}
+	if strings.Contains(got, "/download") {
+		t.Errorf("未注入云盘时帮助不应暴露 /download：%q", got)
 	}
 	if strings.Contains(got, "/whoami") {
 		t.Errorf("隐藏调试命令不应出现在帮助文案：%q", got)
@@ -599,13 +597,33 @@ func TestHelpListsPublicCommands(t *testing.T) {
 	if strings.Contains(got, "<用户名>") || strings.Contains(got, "<消息ID>") {
 		t.Errorf("帮助文案不应包含会被 Telegram HTML 模式误解析的尖括号占位符：%q", got)
 	}
+
+	// 有云盘权限且功能开启：展示 /download 段与目的地说明
+	opt2, _, fs2 := newHarness(t, 4)
+	opt2.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
+	run(opt2, fs2, "/help")
+	got2 := lastText(t, fs2)
+	for _, want := range []string{"/download", "目的地", "默认目的地", "纯文本"} {
+		if !strings.Contains(got2, want) {
+			t.Errorf("云盘用户的帮助应包含 %q，得到 %q", want, got2)
+		}
+	}
+
+	// 功能开启但用户无下载权限：同样不暴露
+	opt3, fa3, fs3 := newHarness(t, 4)
+	opt3.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
+	fa3.statusCode = apperr.CodeCloudDownloadDenied
+	run(opt3, fs3, "/help")
+	if got3 := lastText(t, fs3); strings.Contains(got3, "/download") {
+		t.Errorf("无云盘权限的帮助不应暴露 /download：%q", got3)
+	}
 }
 
 func TestHandleUsageAndWhoamiMisc(t *testing.T) {
 	// /help 恒定帮助文案
 	opt, _, fs := newHarness(t, 4)
 	run(opt, fs, "/help@somebot")
-	if got := lastText(t, fs); got != helpText(syscfg.DefaultName) {
+	if got := lastText(t, fs); got != helpText(syscfg.DefaultName, false) {
 		t.Errorf("/help@bot 应回帮助文案，得到 %q", got)
 	}
 

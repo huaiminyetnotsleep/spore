@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 
 	tgbot "github.com/go-telegram/bot"
@@ -23,41 +24,53 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
-// helpText 渲染帮助文案：系统名称可配置（internal/syscfg，管理端修改即时生效），
-// 其余为固定说明。🦞 是固定品牌符号，不随名称变化。
-func helpText(name string) string {
-	return `🦞 ` + name + ` — 受保护消息提取
+// helpText 渲染帮助文案（HTML，sendText 恒以 HTML 模式发送）：系统名称可
+// 配置（internal/syscfg，管理端修改即时生效），其余为固定说明。🦞 是固定
+// 品牌符号，不随名称变化；名称经 HTML 转义，防止配置值破坏消息解析。
+// cloud 为 true（该用户具备云盘下载权限且功能已开启，见 helpCloudAllowed）
+// 才包含 /download 命令行与目的地说明——与 handleDownload 的"未授权不暴露
+// 云盘功能"口径一致。
+func helpText(name string, cloud bool) string {
+	downloadCmd, downloadNote := "", ""
+	if cloud {
+		downloadCmd = "<code>/download</code> 链接 — 把消息媒体下载到网盘（不重发到聊天）\n"
+		downloadNote = "/download 可指定目的地：/download 目的地 链接；不带目的地时使用默认目的地。" +
+			"可用目的地由管理员配置；纯文本消息不支持网盘下载。\n\n"
+	}
+	return `🦞 <b>` + html.EscapeString(name) + ` — 受保护消息提取</b>
 
-把 Telegram 消息链接发给我，我会以全新消息的形式把内容发回给你（可以正常再次转发）；一条消息可同时发送多个链接。
+把消息链接直接发给我即可：内容会以全新消息发回给你（无转发标记，可正常再次转发），一条消息可同时包含多个链接。
 
-支持的链接格式：
-• https://t.me/username/message_id
-• https://t.me/c/internal_id/message_id
+<b>链接格式</b>
+• <code>https://t.me/username/message_id</code>
+• <code>https://t.me/c/internal_id/message_id</code>
 
-可用命令：
-/start — 申请使用或查看账号状态
-/help — 查看帮助
-/status — 查看服务运行状态
-/health — 查看服务健康状态
-/usage — 查看今日额度
-/cancel 链接 — 取消该链接的下载/上传任务（也可回复任务消息直接使用）
-/download 链接 — 把消息媒体下载到网盘（不重发到聊天）
-/pin 链接 — 提交任务并自动置顶到绑定的频道/群组（也可回复任务消息：在途补标记、已完成补置顶）
-/bind 频道 — 绑定我的频道或超级群组（先把本机器人拉进去并设为管理员）
-/unbind 频道 — 解绑我的频道
-/channels — 查看我绑定的频道
-/join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
-/watch 频道 — 监听源频道/群组，新消息自动预热缓存（先把本机器人加为该频道/群管理员）
-/watch — 查看我的监听源
-/unwatch 频道 — 移除我的监听源
+<b>账号与服务</b>
+<code>/start</code> — 申请使用或查看账号状态
+<code>/help</code> — 查看帮助
+<code>/status</code> — 查看服务运行详情
+<code>/health</code> — 健康自检（正常/降级/不可用）
+<code>/usage</code> — 查看今日额度
 
-绑定频道后，每次提取的内容会在发给你之后同步发送一份到你的频道；/pin 提交的任务还会自动置顶该消息。
+<b>提取任务</b>
+<code>/cancel</code> 链接 — 取消进行中的任务（也可回复任务消息使用）
+` + downloadCmd + `<code>/pin</code> 链接 — 提取并置顶到绑定目标（回复任务消息：在途或已完成均可补置顶）
 
-监听源生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我，都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
+<b>频道与监听</b>
+<code>/bind</code> 频道 — 绑定频道/超级群组（@用户名、t.me 链接、t.me/+… 邀请链接、-100 ID）
+<code>/unbind</code> 频道 — 解绑频道
+<code>/channels</code> — 查看我的绑定
+<code>/join</code> 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
+<code>/watch</code> 频道 — 添加监听源（写法同 /bind；不带参数查看列表）
+<code>/unwatch</code> 频道 — 移除监听源
 
-/download 可指定目的地：/download 目的地 链接；不带目的地时使用默认目的地。可用目的地由管理员配置；纯文本消息不支持网盘下载。
+绑定与监听前，先把本机器人拉入目标并设为管理员：频道需发言权限、超级群组需置顶权限，话题群不支持。邀请链接只会让系统读取账号加入，不会自动添加本机器人。
 
-要求：我的用户账号需要能访问来源频道。`
+绑定后，每次提取的内容除发给你外，还会同步一份到绑定目标；/pin 提交的任务会自动置顶。
+
+监听源生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
+
+` + downloadNote + `<blockquote>要求：我的系统账号需要能访问来源频道；私有频道可先用 /join 加入。</blockquote>`
 }
 
 const (
@@ -153,7 +166,7 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 			opt.CleanChatCommands(ctx, chatID, from.LanguageCode)
 		}
 	case "/help":
-		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt)))
+		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
 	case "/whoami":
 		handleWhoami(ctx, opt, snd, chatID)
 	case "/usage":
@@ -197,6 +210,25 @@ func systemName(ctx context.Context, opt Options) string {
 	return syscfg.DefaultName
 }
 
+// helpCloudAllowed 判定帮助文案是否包含 /download 段，与 handleDownload
+// 预检同口径：功能已注入并开启、rclone 可用、且该用户具备云盘下载权限。
+// 预检出错按隐藏处理并记日志——帮助宁可少列，不向无权限用户暴露功能。
+func helpCloudAllowed(ctx context.Context, opt Options, userID int64) bool {
+	if opt.Access == nil || opt.CloudStatus == nil {
+		return false
+	}
+	if !opt.CloudStatus.Enabled() || !opt.CloudStatus.Available() {
+		return false
+	}
+	code, err := opt.Access.UserDownloadStatus(ctx, userID)
+	if err != nil {
+		ae := apperr.From(err)
+		opt.Log.Warn("帮助文案云盘权限预检失败", "user_id", userID, "code", ae.Code, "error", err.Error())
+		return false
+	}
+	return code == ""
+}
+
 // commandOf 从消息文本中提取规范化的命令词（首词，去 @bot 后缀，小写）。
 func commandOf(text string) string {
 	cmd := text
@@ -228,7 +260,7 @@ func handleStart(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	}
 	switch outcome {
 	case access.StartWelcome:
-		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt)))
+		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
 	case access.StartPending:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeUserPending))
 	default:

@@ -230,7 +230,7 @@ func TestCommandCleanupPreservesStartRepliesAndInjection(t *testing.T) {
 		fail    bool
 		want    string
 	}{
-		{"enabled", access.StartWelcome, false, helpText("Spore")},
+		{"enabled", access.StartWelcome, false, helpText("Spore", false)},
 		{"pending", access.StartPending, false, apperr.UserText(apperr.CodeUserPending)},
 		{"disabled", access.StartDisabled, false, apperr.UserText(apperr.CodeUserDisabled)},
 		{"archived", access.StartDisabled, false, apperr.UserText(apperr.CodeUserDisabled)},
