@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.28.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.27.1...v1.28.0) (2026-09-22)
+
+
+### Features
+
+* **frontend:** 全量移动端响应式兼容、CSP 样式重构与导航交互优化 ([71d384c](https://github.com/huaiminyetnotsleep/spore/commit/71d384c1425eb55ae155008ab7cc863a849020a2))
+* **frontend:** 全量移动端响应式兼容、CSP 样式重构与导航交互优化 ([5ea8eab](https://github.com/huaiminyetnotsleep/spore/commit/5ea8eabf3a30e293396579babce6d8379fed8fcd))
+
 ## [1.27.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.27.0...v1.27.1) (2026-09-22)
 
 
