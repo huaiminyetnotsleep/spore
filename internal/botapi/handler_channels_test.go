@@ -9,6 +9,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -28,6 +29,11 @@ type fakeChannels struct {
 	unbindErr    error
 	listResult   []store.ChannelBinding
 	hintResult   string
+	// PinExistingCopies（/pin 引用回复事后补置顶）
+	pinCopiesFor []int64
+	pinCopiesOut queue.PinOutcome
+	pinCopiesFnd bool
+	pinCopiesErr error
 }
 
 func (f *fakeChannels) BindBot(_ context.Context, userID int64, target string, botID int64) (store.ChannelBinding, string, error) {
@@ -57,6 +63,19 @@ func (f *fakeChannels) PinCapabilityHint(_ context.Context, _ int64) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hintResult
+}
+
+func (f *fakeChannels) PinExistingCopies(_ context.Context, userID, requestID int64) (queue.PinOutcome, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pinCopiesFor = append(f.pinCopiesFor, requestID)
+	return f.pinCopiesOut, f.pinCopiesFnd, f.pinCopiesErr
+}
+
+func (f *fakeChannels) pinCopyCalls() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.pinCopiesFor...)
 }
 
 func channelsHarness(t *testing.T) (Options, *fakeAccess, *fakeChannels, *fakeSender) {

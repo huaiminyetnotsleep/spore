@@ -277,7 +277,7 @@ func TestCopyToChannelsNoBotIsNoop(t *testing.T) {
 	s := openStore(t)
 	svc, _ := New(Options{Store: s, Log: testLog()})
 	// bot 未注入 & 无绑定：不得 panic
-	svc.CopyToChannels(context.Background(), 0, 1, 1, []int{1, 2}, false)
+	svc.CopyToChannels(context.Background(), 0, 0, 1, 1, []int{1, 2}, false)
 }
 
 const privateChatJSON = `{"id":-1009876543210,"type":"channel","title":"私有频道"}`

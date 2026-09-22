@@ -18,6 +18,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
+	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
 )
@@ -39,6 +40,18 @@ type fakeAccess struct {
 	cancelErr  error
 	statusCode apperr.Code // UserDownloadStatus 返回码；零值 = 允许
 	statusErr  error
+	// 引用回复锚点路径（Resolve/CancelByID/MarkPin/RecordStatus）
+	anchors        map[int64]store.SentMessage // replyMsgID → 锚点
+	requestsByID   map[int64]store.Request     // requestID → 请求行
+	resolveErr     error
+	cancelByIDFor  []int64
+	cancelByIDOut  int
+	cancelByIDErr  error
+	pinMarkedFor   []int64
+	pinMarkedOut   bool
+	pinMarkedErr   error
+	recordedAnchor []store.SentMessage
+	recordErr      error
 }
 
 func (f *fakeAccess) Submit(_ context.Context, in access.Submission) (access.Decision, error) {
@@ -77,6 +90,64 @@ func (f *fakeAccess) CancelOwnByLink(_ context.Context, userID int64, ref tmeurl
 	f.cancelFor = append(f.cancelFor, userID)
 	f.cancelRefs = append(f.cancelRefs, ref)
 	return f.cancelOut, f.cancelErr
+}
+
+func (f *fakeAccess) RecordStatusMessage(_ context.Context, botID, chatID, messageID, requestID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordedAnchor = append(f.recordedAnchor, store.SentMessage{
+		RequestID: requestID, BotID: botID, ChatID: chatID, MessageID: messageID, Kind: store.SentKindStatus,
+	})
+	return f.recordErr
+}
+
+func (f *fakeAccess) ResolveOwnSentMessage(_ context.Context, userID, botID, chatID, messageID int64) (store.SentMessage, store.Request, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resolveErr != nil {
+		return store.SentMessage{}, store.Request{}, f.resolveErr
+	}
+	m, ok := f.anchors[messageID]
+	if !ok {
+		return store.SentMessage{}, store.Request{}, store.ErrNotFound
+	}
+	r, ok := f.requestsByID[m.RequestID]
+	if !ok || r.UserID != userID {
+		return store.SentMessage{}, store.Request{}, store.ErrNotFound
+	}
+	return m, r, nil
+}
+
+func (f *fakeAccess) CancelOwnByID(_ context.Context, userID, requestID int64) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelByIDFor = append(f.cancelByIDFor, requestID)
+	return f.cancelByIDOut, f.cancelByIDErr
+}
+
+func (f *fakeAccess) MarkOwnRequestPin(_ context.Context, userID, requestID int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pinMarkedFor = append(f.pinMarkedFor, requestID)
+	return f.pinMarkedOut, f.pinMarkedErr
+}
+
+func (f *fakeAccess) recordedAnchors() []store.SentMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.SentMessage(nil), f.recordedAnchor...)
+}
+
+func (f *fakeAccess) cancelledByIDs() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.cancelByIDFor...)
+}
+
+func (f *fakeAccess) pinMarks() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.pinMarkedFor...)
 }
 
 func (f *fakeAccess) submitted() []access.Submission {
@@ -160,7 +231,7 @@ func newHarness(t *testing.T, capacity int) (Options, *fakeAccess, *fakeSender) 
 
 func run(opt Options, fs *fakeSender, text string) {
 	handleUpdate(context.Background(), opt, fs,
-		models.User{ID: 7, FirstName: "Alice", LastName: "Doe", Username: "alice"}, 7, text)
+		models.User{ID: 7, FirstName: "Alice", LastName: "Doe", Username: "alice"}, 7, text, 0)
 }
 
 func lastText(t *testing.T, fs *fakeSender) string {

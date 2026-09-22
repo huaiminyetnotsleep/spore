@@ -31,7 +31,7 @@ func joinUser(id int64) models.User { return models.User{ID: id, FirstName: "测
 
 func TestHandleJoinNoService(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
-	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678", 0)
 	if got := snd.texts(); len(got) != 1 || !strings.Contains(got[0], "不可用") {
 		t.Fatalf("未接入服务应回复不可用: %v", got)
 	}
@@ -41,7 +41,7 @@ func TestHandleJoinUsage(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	fake := &fakeChannelJoin{}
 	opt.ChannelJoin = fake
-	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join")
+	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join", 0)
 	got := snd.texts()
 	if len(got) != 1 || !strings.Contains(got[0], "用法") || !strings.Contains(got[0], "t.me/+") {
 		t.Fatalf("无参数应回用法: %v", got)
@@ -75,7 +75,7 @@ func TestHandleJoinOutcomes(t *testing.T) {
 			opt, _, snd := newHarness(t, 2)
 			fake := &fakeChannelJoin{out: c.out}
 			opt.ChannelJoin = fake
-			handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678")
+			handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678", 0)
 			got := snd.texts()
 			if len(got) != 1 {
 				t.Fatalf("应回复一条: %v", got)
@@ -93,7 +93,7 @@ func TestHandleJoinPassesOnlyInviteArgument(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	fake := &fakeChannelJoin{}
 	opt.ChannelJoin = fake
-	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/JOIN@spore_bot AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/JOIN@spore_bot AbCdEfGh12345678", 0)
 	if fake.gotText != "AbCdEfGh12345678" {
 		t.Fatalf("应只传递邀请参数，得到 %q", fake.gotText)
 	}
@@ -106,11 +106,11 @@ func TestHandleJoinOwnerFlag(t *testing.T) {
 	opt.IsOwner = func(ctx context.Context, userID int64) (bool, error) {
 		return userID == 1, nil
 	}
-	handleUpdate(context.Background(), opt, snd, joinUser(1), 1, "/join https://t.me/+AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(1), 1, "/join https://t.me/+AbCdEfGh12345678", 0)
 	if !fake.gotOwner {
 		t.Fatalf("owner 应即时提交")
 	}
-	handleUpdate(context.Background(), opt, snd, joinUser(2), 2, "/join https://t.me/+AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(2), 2, "/join https://t.me/+AbCdEfGh12345678", 0)
 	if fake.gotOwner {
 		t.Fatalf("非 owner 应走审核")
 	}
@@ -126,7 +126,7 @@ func TestHandleJoinOwnerCheckFailureFallback(t *testing.T) {
 	opt.IsOwner = func(ctx context.Context, userID int64) (bool, error) {
 		return false, errors.New("db down")
 	}
-	handleUpdate(context.Background(), opt, snd, joinUser(1), 1, "/join https://t.me/+AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(1), 1, "/join https://t.me/+AbCdEfGh12345678", 0)
 	if fake.gotOwner {
 		t.Fatalf("判定失败应按普通用户处理（审核兜底）")
 	}
@@ -136,7 +136,7 @@ func TestHandleJoinInvalidInviteUsesInvite文案(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	fake := &fakeChannelJoin{err: apperr.New(apperr.CodeInvalidInviteURL, "邀请链接格式无效")}
 	opt.ChannelJoin = fake
-	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+invalid")
+	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+invalid", 0)
 	got := snd.texts()
 	if len(got) != 1 || !strings.Contains(got[0], "频道邀请链接") || strings.Contains(got[0], "消息链接") {
 		t.Fatalf("邀请链接错误不应显示消息链接文案: %v", got)
@@ -147,7 +147,7 @@ func TestHandleJoinServiceError(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	fake := &fakeChannelJoin{err: apperr.New(apperr.CodeInvalidURL, "链接已失效")}
 	opt.ChannelJoin = fake
-	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678")
+	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join https://t.me/+AbCdEfGh12345678", 0)
 	got := snd.texts()
 	if len(got) != 1 || !strings.Contains(got[0], apperr.UserText(apperr.CodeInvalidURL)) {
 		t.Fatalf("服务错误应转为用户文案: %v", got)

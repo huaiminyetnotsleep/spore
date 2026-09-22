@@ -40,6 +40,20 @@ type Access interface {
 	Usage(ctx context.Context, userID int64) (access.Usage, error)
 	// CancelOwnByLink 取消该用户名下与链接匹配的在途任务，返回实际取消数（/cancel 命令）。
 	CancelOwnByLink(ctx context.Context, userID int64, ref tmeurl.SourceRef) (int, error)
+	// RecordStatusMessage 落库一条进度占位消息坐标（submitRefs 提交成功后
+	// 顺手记录）：/pin、/cancel 引用回复的反查锚点。尽力而为，调用方失败
+	// 只记日志不阻断提交。
+	RecordStatusMessage(ctx context.Context, botID, chatID, messageID, requestID int64) error
+	// ResolveOwnSentMessage 按消息坐标（bot_id+chat_id+message_id，坐标
+	// bot 私有）反查锚点与请求行（/pin、/cancel 回复路径）；坐标未命中、
+	// 请求缺失或归属不匹配统一返回 store.ErrNotFound（不泄露他人请求）。
+	ResolveOwnSentMessage(ctx context.Context, userID, botID, chatID, messageID int64) (store.SentMessage, store.Request, error)
+	// CancelOwnByID 取消该用户名下的在途请求（/cancel 回复路径），返回实际
+	// 取消数（终态竞态为 0）。
+	CancelOwnByID(ctx context.Context, userID, requestID int64) (int, error)
+	// MarkOwnRequestPin 对在途请求补置顶标记（/pin 回复在途任务的消息）；
+	// 任务已到终态时返回 false，由调用方转事后补置顶。
+	MarkOwnRequestPin(ctx context.Context, userID, requestID int64) (bool, error)
 }
 
 // CloudStatus 是云盘下载功能（/download）在 Bot 侧所需的最小状态接口。
@@ -72,6 +86,10 @@ type Channels interface {
 	ListByUser(ctx context.Context, userID int64) ([]store.ChannelBinding, error)
 	// PinCapabilityHint 返回绑定目标的置顶可行性软提示文案；全部可行返回空串。
 	PinCapabilityHint(ctx context.Context, userID int64) string
+	// PinExistingCopies 对已成功完成的请求执行事后补置顶（/pin 回复其投递
+	// 消息）：按落库的频道副本组首坐标逐目标静音置顶并回写 pin 结果。
+	// found=false 表示该请求没有副本坐标（完成时无绑定或同步关闭）。
+	PinExistingCopies(ctx context.Context, userID, requestID int64) (queue.PinOutcome, bool, error)
 }
 
 // ChannelJoin 是频道加入服务（joinmgr.Service）在 Bot 侧所需的最小接口。

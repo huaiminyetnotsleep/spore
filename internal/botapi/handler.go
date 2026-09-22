@@ -40,9 +40,9 @@ func helpText(name string) string {
 /status — 查看服务运行状态
 /health — 查看服务健康状态
 /usage — 查看今日额度
-/cancel 链接 — 取消该链接的下载/上传任务
+/cancel 链接 — 取消该链接的下载/上传任务（也可回复任务消息直接使用）
 /download 链接 — 把消息媒体下载到网盘（不重发到聊天）
-/pin 链接 — 提交任务并自动置顶到绑定的频道/群组
+/pin 链接 — 提交任务并自动置顶到绑定的频道/群组（也可回复任务消息：在途补标记、已完成补置顶）
 /bind 频道 — 绑定我的频道或超级群组（先把我拉进去并设为管理员）
 /unbind 频道 — 解绑我的频道
 /channels — 查看我绑定的频道
@@ -126,13 +126,21 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 				cleaner.clean(ctx, b, opt.Log, chatID, code)
 			}
 		}
-		handleUpdate(ctx, localOpt, senderFor(localOpt, b), *from, msg.Chat.ID, strings.TrimSpace(msg.Text))
+		// 引用回复交互：命令作为对 bot 消息的回复发送时（Telegram 原生
+		// 用法），把被回复消息 ID 传入分流层供 /pin、/cancel 反查锚点。
+		// 私聊中被回复消息必在同一 chat，无需另传 chat。
+		var replyMsgID int64
+		if rm := msg.ReplyToMessage; rm != nil {
+			replyMsgID = int64(rm.ID)
+		}
+		handleUpdate(ctx, localOpt, senderFor(localOpt, b), *from, msg.Chat.ID, strings.TrimSpace(msg.Text), replyMsgID)
 	}
 }
 
 // handleUpdate 是剥离 tgbot 依赖后的业务分流（sender 为接口，便于测试）：
-// 命令 → 相应处理；其余按链接提交处理。
-func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
+// 命令 → 相应处理；其余按链接提交处理。replyMsgID 是命令作为回复发送时
+// 被回复消息的 ID（非回复形态为 0），仅 /pin、/cancel 消费。
+func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string, replyMsgID int64) {
 	if text == "" {
 		sendText(ctx, opt, snd, chatID, textOnlyMsg)
 		return
@@ -151,11 +159,11 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 	case "/usage":
 		handleUsage(ctx, opt, snd, from.ID, chatID)
 	case "/cancel":
-		handleCancel(ctx, opt, snd, from.ID, chatID, text)
+		handleCancel(ctx, opt, snd, from.ID, chatID, text, replyMsgID)
 	case "/download":
 		handleDownload(ctx, opt, snd, from, chatID, text)
 	case "/pin":
-		handlePin(ctx, opt, snd, from, chatID, text)
+		handlePin(ctx, opt, snd, from, chatID, text, replyMsgID)
 	case "/status":
 		handleStatus(ctx, opt, snd, chatID)
 	case "/health":
@@ -431,6 +439,14 @@ func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from mode
 		succeeded++
 		opt.Log.Info("任务已入队", "job_id", dec.JobID, "user_id", from.ID,
 			"request_id", dec.RequestID, "ref", ref.String(), "cloud_dest", cloudDest)
+		// 引用回复锚点：占位消息坐标落库（/pin、/cancel 回复占位可反查本
+		// 请求）。尽力而为：失败只记日志，不阻断提交回复。
+		if statusMsgID != 0 && dec.RequestID != 0 {
+			if err := opt.Access.RecordStatusMessage(ctx, botInfo.ID, chatID, int64(statusMsgID), dec.RequestID); err != nil {
+				opt.Log.Warn("占位消息坐标落库失败", "user_id", from.ID,
+					"request_id", dec.RequestID, "error", err.Error())
+			}
+		}
 	}
 	if multi {
 		sendText(ctx, opt, snd, chatID, batchSubmitSummary(succeeded, failures))
@@ -450,14 +466,21 @@ func handleLinkWithProfile(ctx context.Context, opt Options, snd delivery.Sender
 	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", false)
 }
 
-const cancelUsage = "用法：/cancel 消息链接（即当初提交的那条链接）"
+const cancelUsage = "用法：/cancel 消息链接（即当初提交的那条链接）\n\n" +
+	"也可以直接回复机器人发出的任务消息（进度提示、投递结果或失败通知）发送 /cancel，无需链接。"
 
 // handleCancel 处理 /cancel <链接>：取消该用户名下与链接匹配的在途任务
 // （queued/processing）。链接与提交入口同源解析（tmeurl），归属校验由 access
-// 按 user_id 限定；取首条有效链接，其余忽略。
-func handleCancel(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64, text string) {
+// 按 user_id 限定；取首条有效链接，其余忽略。命令作为对 bot 消息的回复
+// 发送时走引用路径（replyMsgID 非 0 且不带链接参数），作用于被回复消息
+// 对应的请求。
+func handleCancel(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64, text string, replyMsgID int64) {
 	args := strings.Fields(text)
 	if len(args) < 2 {
+		if replyMsgID != 0 {
+			handleCancelReply(ctx, opt, snd, userID, chatID, replyMsgID)
+			return
+		}
 		sendText(ctx, opt, snd, chatID, cancelUsage)
 		return
 	}
@@ -597,15 +620,22 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 const pinUsage = "用法：/pin 消息链接（可一次多条）\n\n" +
 	"• 提交转发任务，完成后自动同步到您绑定的频道/群组并置顶\n" +
 	"• 置顶落在任务完工时的绑定目标上，未绑定时不置顶（/bind 绑定）\n" +
-	"• 需要机器人在目标拥有置顶权限（频道「编辑消息」/群组「置顶消息」）"
+	"• 需要机器人在目标拥有置顶权限（频道「编辑消息」/群组「置顶消息」）\n" +
+	"• 也可以回复机器人发出的任务消息发送 /pin：在途任务补标记，已完成任务事后补置顶"
 
 // handlePin 处理 /pin <链接>：与裸链接完全同一提交链（requireEnabled 准入、
 // 六步校验、批量语义），仅额外标记自动置顶——任务成功后副本到绑定频道/
 // 群组并静音置顶组首。零绑定时任务照常提交并附提示（完成后绑定的目标仍
-// 会收到副本与置顶）；空参回用法提示。
-func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
+// 会收到副本与置顶）；空参回用法提示。命令作为对 bot 消息的回复发送时走
+// 引用路径（replyMsgID 非 0 且不带链接参数）：在途任务补置顶标记、已完
+// 成任务按频道副本坐标事后补置顶。
+func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string, replyMsgID int64) {
 	args := strings.Fields(text)
 	if len(args) < 2 {
+		if replyMsgID != 0 {
+			handlePinReply(ctx, opt, snd, from, chatID, replyMsgID)
+			return
+		}
 		sendText(ctx, opt, snd, chatID, pinUsage)
 		return
 	}

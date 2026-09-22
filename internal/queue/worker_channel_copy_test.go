@@ -21,7 +21,7 @@ type fakeCopier struct {
 	outcome  PinOutcome
 }
 
-func (f *fakeCopier) CopyToChannels(_ context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome {
+func (f *fakeCopier) CopyToChannels(_ context.Context, requestID, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userIDs = append(f.userIDs, userID)

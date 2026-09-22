@@ -158,7 +158,7 @@ func TestCopyToChannelsPin(t *testing.T) {
 		svc, _ := New(Options{Store: s, Log: testLog()})
 		svc.SetBots([]*tgbot.Bot{b})
 
-		outcome := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, true)
+		outcome := svc.CopyToChannels(ctx, 0, testBotID, 100, 100, []int{11, 12}, true)
 		if outcome.OK != 1 || outcome.Total != 1 {
 			t.Fatalf("置顶结果应为 1/1，得到 %d/%d", outcome.OK, outcome.Total)
 		}
@@ -176,7 +176,7 @@ func TestCopyToChannelsPin(t *testing.T) {
 		svc, _ := New(Options{Store: s, Log: testLog()})
 		svc.SetBots([]*tgbot.Bot{b})
 
-		outcome := svc.CopyToChannels(ctx, testBotID, 100, 100, []int{11, 12}, false)
+		outcome := svc.CopyToChannels(ctx, 0, testBotID, 100, 100, []int{11, 12}, false)
 		if outcome.OK != 0 || outcome.Total != 0 || len(outcome.Targets) != 0 {
 			t.Fatalf("非 pin 调用结果应为零值，得到 %+v", outcome)
 		}

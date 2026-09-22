@@ -89,10 +89,12 @@ type PinOutcome struct {
 // 由装配层提供实现（internal/binding.Service）；nil 表示未配置频道绑定，
 // worker 跳过全部副本投递。实现必须尽力而为：内部失败只记日志，
 // 不向调用方传播错误，更不得影响任务结果。
-// pin 为 true 时实现须对每个副本发送成功的目标执行静音置顶（组首消息），
-// 并返回逐目标置顶结果（Label 供确认文案展示）；pin 为 false 时返回零值。
+// requestID 非 0 时实现须顺手把副本组首坐标落库 sent_messages（供 /pin
+// 事后补置顶定位）。pin 为 true 时实现须对每个副本发送成功的目标执行
+// 静音置顶（组首消息），并返回逐目标置顶结果（Label 供确认文案展示）；
+// pin 为 false 时返回零值。
 type ChannelCopier interface {
-	CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome
+	CopyToChannels(ctx context.Context, requestID, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome
 }
 
 // ChannelLinksProvider 提供该用户绑定频道的脚注跳转链接（消息末尾的
@@ -207,6 +209,7 @@ func Process(d Deps) Processor {
 					"job_id", j.ID, "request_id", j.RequestID, "error", serr.Error())
 			} else {
 				j.StatusMsgID = id
+				d.recordAnchors(ctx, j, store.SentKindStatus, []int{id})
 				d.Log.Info("重试任务已补发占位提示",
 					"job_id", j.ID, "request_id", j.RequestID, "status_msg_id", id)
 			}
@@ -286,8 +289,10 @@ func Process(d Deps) Processor {
 					// 原因与错误码），不发错误提示
 					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 				} else {
-					if _, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
+					if id, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
 						d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+					} else {
+						d.recordAnchors(ctx, j, store.SentKindFailure, []int{id})
 					}
 					delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 				}
@@ -316,6 +321,9 @@ func Process(d Deps) Processor {
 				// 天然不适用
 				sendCloudConfirm(ctx, d, j, cloudPaths, cloudSkipped)
 			default:
+				// 引用回复锚点：投递到用户私聊的消息坐标（相册/分卷逐条、
+				// 任意一条被回复都能反查回本请求）
+				d.recordAnchors(ctx, j, store.SentKindMedia, meta.SentIDs)
 				// 缓存频道干净副本：同链接后续提交直接复制的来源（尽力而为）
 				d.writeCleanDump(ctx, j, meta)
 				// 频道副本：任务整体成功后，把刚发给用户的消息复制到该用户
@@ -343,6 +351,34 @@ func Process(d Deps) Processor {
 	}
 }
 
+// recordAnchors 把本任务 bot 已发出消息的坐标落库（sent_messages，引用
+// 回复交互锚点）：进度占位 / 投递媒体 / 失败通知（频道副本坐标由 binding
+// 在 CopyToChannels 内落库）。尽力而为，失败只记日志——锚点缺行最坏影响
+// 是 /pin、/cancel 回复该消息时反查不到（回引导文案），不得反噬任务主流程。
+// RequestID==0（无持久化记录的任务）或 Store 未接时跳过。
+func (d Deps) recordAnchors(ctx context.Context, j Job, kind string, ids []int) {
+	if d.Store == nil || j.RequestID == 0 || len(ids) == 0 {
+		return
+	}
+	rows := make([]store.SentMessage, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		rows = append(rows, store.SentMessage{
+			RequestID: j.RequestID,
+			BotID:     j.BotID,
+			ChatID:    j.ChatID,
+			MessageID: int64(id),
+			Kind:      kind,
+		})
+	}
+	if err := d.Store.InsertSentMessages(ctx, rows); err != nil {
+		d.Log.Warn("消息坐标落库失败",
+			"job_id", j.ID, "request_id", j.RequestID, "kind", kind, "error", err.Error())
+	}
+}
+
 // copyToChannels 在任务成功后把已发送消息复制到该用户绑定的频道。
 // 使用剥离取消信号的 ctx 与独立时间窗：任务收尾（含进程退出）时副本投递
 // 仍可完成；Copier 自身尽力而为，失败不向任务结果传播。
@@ -358,7 +394,7 @@ func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int, pin bool)
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
 	defer cancel()
-	outcome := d.Copier.CopyToChannels(cctx, j.BotID, j.UserID, j.ChatID, msgIDs, pin)
+	outcome := d.Copier.CopyToChannels(cctx, j.RequestID, j.BotID, j.UserID, j.ChatID, msgIDs, pin)
 	if pin {
 		d.finishPin(cctx, j, outcome)
 	}

@@ -42,10 +42,10 @@
 
 ## 2. Schema 总览
 
-当前版本 v21 包含 **16 张业务表、16 个显式索引、4 个数据库外键**：
+当前版本 v22 包含 **17 张业务表、18 个显式索引、4 个数据库外键**：
 
 - 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
-- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`）自动维护的内部表，**不属于业务 schema**。
+- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`）自动维护的内部表，**不属于业务 schema**。
 - 频道没有独立表：频道维度的一切数据都是 `requests` 行的聚合（见 [第 4 节](#_4-表关系与约束)）。
 
 | 表 | 用途 | 引入版本 |
@@ -66,6 +66,7 @@
 | `watch_sources` | 监听源（/watch）配置与申请审批（预热缓存频道） | v17 |
 | `watch_events` | 监听转储逐次留痕（哪个 bot 在哪个源转发了哪些消息） | v18 |
 | `watch_invite_requests` | 私有邀请链接监听申请的异步处理状态与安全展示快照 | v19 |
+| `sent_messages` | bot 发出消息坐标 → 请求的映射（/pin、/cancel 引用回复锚点；含频道副本组首坐标，供事后补置顶） | v22 |
 
 ## 3. 表数据字典
 
@@ -353,6 +354,22 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 
 活动列表、全局/按用户计数及相同 hash 查重只统计三个活动状态；终态历史行不阻止同一邀请重新申请。管理列表（全部状态）待审批在前、其余按申请时间倒序；Bot 用户列表按申请时间倒序。
 
+### 3.17 sent_messages
+
+引用回复交互锚点：bot 发出的消息坐标到请求的映射。`/pin`、`/cancel` 作为对 bot 消息的回复发送时（Telegram 原生命令用法），按 `(bot_id, chat_id, message_id)` 三元组反查本表定位请求——坐标按 bot 隔离（用户私聊内消息 ID 按 bot 私有，跨 bot 查不到）。只存运营坐标，不存正文/媒体/凭据（与 `dump_entries` 同类红线）。写入在各发送点顺手记录返回的 message ID（`INSERT OR IGNORE`，重复坐标静默去重）；不设 GC（行极小，与 `requests` 同生命周期）。
+
+`kind` 取值：`status`（提交/重试补发的进度占位）、`media`（投递到用户私聊的媒体/文本，相册与分卷逐条）、`channel_copy`（复制到绑定频道的副本组首，`/pin` 事后补置顶的定位依据）、`failure`（任务失败通知）。`channel_copy` 不作回复入口（bot 收频道消息依赖管理员权限与 privacy 设置）。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 行 ID |
+| `request_id` | INTEGER | NOT NULL | 关联请求（逻辑关联，无外键） |
+| `bot_id` | INTEGER | NOT NULL | 发出消息的受理 bot ID |
+| `chat_id` | INTEGER | NOT NULL | 消息所在聊天（私聊即用户 ID；channel_copy 为频道 ID） |
+| `message_id` | INTEGER | NOT NULL | 消息 ID |
+| `kind` | TEXT | NOT NULL | 消息类别（见上） |
+| `created_at` | INTEGER | NOT NULL | 写入时间（Unix 毫秒） |
+
 ## 4. 表关系与约束
 
 ### 4.1 数据库外键（均指向 `users(id)`，均 NO ACTION）
@@ -402,6 +419,8 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `idx_watch_invite_requests_active` | `watch_invite_requests` | (status, requested_at, id) | v19 | 活动申请恢复列表与全局计数 |
 | `idx_watch_invite_requests_user_active` | `watch_invite_requests` | (user_id, status, requested_at, id) | v19 | 按用户统计活动申请 |
 | `idx_watch_invite_requests_hash_active` | `watch_invite_requests` | (invite_hash, status) | v19 | 相同完整 hash 的活动申请查重 |
+| `idx_sent_messages_msg` | `sent_messages` | (bot_id, chat_id, message_id) UNIQUE | v22 | 引用回复按坐标反查请求 |
+| `idx_sent_messages_request` | `sent_messages` | (request_id) | v22 | 按请求取频道副本坐标（事后补置顶） |
 
 隐式索引：`events.key` 的 UNIQUE 索引，以及各主键索引（含 `usage_daily` 复合主键）。
 
@@ -499,7 +518,7 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 **导入校验**（`ValidateBackup`）：普通文件、SQLite 可打开、`integrity_check=ok`、`user_version ≤ 当前迁移版本`（高版本拒绝），且必要表存在、必要列存在：
 
 - 基础集：`users(id,status,username,display_name)`、`requests(id,user_id,source_kind,channel_key,message_id,status)`、`usage_daily(user_id,day,used)`、`audit_log(id,at,action)`、`events(id,key,severity,message,status)`、`settings(key,value_json)`、`web_sessions(id_hash,expires_at,csrf_token)`；
-- 按备份版本校验的结构：v8 `requests.source_media_dc_ids_json`、v9 `requests.media_types_json`、v11 `users.cloud_download`、v19 `watch_invite_requests.id`（用于确认 v19 表存在）。
+- 按备份版本校验的结构：v8 `requests.source_media_dc_ids_json`、v9 `requests.media_types_json`、v11 `users.cloud_download`、v19 `watch_invite_requests.id`（用于确认 v19 表存在）、v22 `sent_messages.request_id`（用于确认 v22 表存在）。
 
 低版本备份导入后由当前 Store 补齐迁移；**新增迁移时必须评估**：新表/新列是否属于"低版本备份导入后必须存在"的兼容面，若是则扩展上述按版本校验并同步更新本节与对应测试。
 
@@ -532,3 +551,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v19 | `watch_invite_requests` 私有邀请链接监听申请表（管理员路径 `user_id=0`，无外键）及活动状态、用户与 hash 索引 |
 | v20 | `requests.pin`、`requests.pin_ok`、`requests.pin_total`；`users.auto_pin`（自动置顶标记、结果回写与用户级偏好） |
 | v21 | `channel_bindings.bot_id`（绑定路由到 bot：仅该 bot 受理的任务投递；0 = 通配） |
+| v22 | `sent_messages` 表与坐标/请求两索引（引用回复锚点：/pin、/cancel 回复 bot 消息反查请求；含频道副本组首坐标供事后补置顶） |

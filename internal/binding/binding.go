@@ -463,9 +463,12 @@ func (s *Service) bindLimitReached(ctx context.Context, userID int64) bool {
 // 展开展示整个相册），并返回逐目标置顶结果——Label 为目标显示名（标题
 // 优先，回退 @用户名 / 数字 ID），供 worker 置顶确认文案展示。
 // pin 为 false 时返回零值。
+// requestID 非 0 时，每个发送成功的副本组首坐标顺手落库 sent_messages
+// （kind=channel_copy），作为 /pin 事后补置顶的定位依据；落库失败只记
+// 日志（副本投递本身尽力而为，不因锚点缺行反噬）。
 // 实现 queue.ChannelCopier；尽力而为：单频道失败只记日志，不中断其余频道，
 // 更不向调用方传播错误（worker 以此保证副本不影响任务结果）。
-func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID int64, msgIDs []int, pin bool) queue.PinOutcome {
+func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, userChatID int64, msgIDs []int, pin bool) queue.PinOutcome {
 	var outcome queue.PinOutcome
 	b := s.botFor(botID)
 	if b == nil || userID <= 0 || userChatID == 0 || len(msgIDs) == 0 {
@@ -502,6 +505,18 @@ func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID 
 			continue
 		}
 		s.log.Info("频道副本已发送", "user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs))
+		if len(sent) > 0 && requestID != 0 {
+			if err := s.store.InsertSentMessages(ctx, []store.SentMessage{{
+				RequestID: requestID,
+				BotID:     botID,
+				ChatID:    bnd.ChannelID,
+				MessageID: int64(sent[0].ID),
+				Kind:      store.SentKindChannelCopy,
+			}}); err != nil {
+				s.log.Warn("频道副本坐标落库失败", "request_id", requestID,
+					"channel_id", bnd.ChannelID, "error", err.Error())
+			}
+		}
 		if !pin || len(sent) == 0 {
 			continue
 		}
@@ -518,6 +533,86 @@ func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID 
 		outcome.Targets[len(outcome.Targets)-1].Pinned = true
 	}
 	return outcome
+}
+
+// pinExistingWindow 是事后补置顶的时间窗：/pin 回复已完成任务的消息时，
+// 逐副本目标执行 PinChatMessage 的上限（命令处理路径，不能无限占住
+// update 分发）。
+const pinExistingWindow = 30 * time.Second
+
+// PinExistingCopies 对已成功完成的请求执行事后补置顶（/pin 回复其投递
+// 消息）：按 sent_messages 里落库的频道副本组首坐标（kind=channel_copy）
+// 逐目标静音置顶。found 为 false 表示该请求没有副本坐标（完成时无绑定
+// 或同步关闭），调用方据此回"无法事后置顶"提示。执行 bot 优先用落库的
+// 副本 bot（发副本的 bot 必在目标内有置顶可能），池中缺失回退主 bot。
+// Label 从当前绑定按频道 ID 匹配（标题优先），已解绑的目标退化为数字 ID。
+// 完成后置 pin=1 并回写 pin_ok/pin_total（SetRequestPinResult），管理端
+// 详情与"已置顶"判定随请求行走。置顶 API 幂等，重复调用安全。
+func (s *Service) PinExistingCopies(ctx context.Context, userID, requestID int64) (queue.PinOutcome, bool, error) {
+	copies, err := s.store.ListChannelCopiesByRequest(ctx, requestID)
+	if err != nil {
+		return queue.PinOutcome{}, false, err
+	}
+	if len(copies) == 0 {
+		return queue.PinOutcome{}, false, nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, pinExistingWindow)
+	defer cancel()
+	labels := s.copyLabels(cctx, userID)
+	var outcome queue.PinOutcome
+	for _, c := range copies {
+		outcome.Total++
+		label := labels[c.ChatID]
+		if label == "" {
+			label = strconv.FormatInt(c.ChatID, 10)
+		}
+		target := queue.PinTarget{Label: label}
+		b := s.botFor(c.BotID)
+		if b == nil {
+			s.log.Warn("事后置顶：副本 bot 不在池中且无主 bot 可回退",
+				"request_id", requestID, "channel_id", c.ChatID, "copy_bot", c.BotID)
+			outcome.Targets = append(outcome.Targets, target)
+			continue
+		}
+		if _, err := b.PinChatMessage(cctx, &tgbot.PinChatMessageParams{
+			ChatID:              c.ChatID,
+			MessageID:           int(c.MessageID),
+			DisableNotification: true,
+		}); err != nil {
+			s.log.Warn("事后置顶失败",
+				"request_id", requestID, "channel_id", c.ChatID, "error", err.Error())
+			outcome.Targets = append(outcome.Targets, target)
+			continue
+		}
+		target.Pinned = true
+		outcome.OK++
+		outcome.Targets = append(outcome.Targets, target)
+	}
+	if err := s.store.MarkRequestPin(cctx, userID, requestID); err != nil {
+		s.log.Warn("事后置顶：置 pin 标记失败", "request_id", requestID, "error", err.Error())
+	}
+	if err := s.store.SetRequestPinResult(cctx, requestID, outcome.OK, outcome.Total); err != nil {
+		s.log.Warn("事后置顶：结果回写失败", "request_id", requestID, "error", err.Error())
+	}
+	s.log.Info("事后置顶完成", "request_id", requestID, "user_id", userID,
+		"ok", outcome.OK, "total", outcome.Total)
+	return outcome, true, nil
+}
+
+// copyLabels 取副本目标频道的显示名映射（频道 ID → 标题/@用户名/数字 ID）：
+// 读取失败或无绑定按空映射处理，缺失目标在 PinExistingCopies 里退化为
+// 数字 ID 展示。
+func (s *Service) copyLabels(ctx context.Context, userID int64) map[int64]string {
+	labels := make(map[int64]string)
+	bindings, err := s.store.ListChannelBindingsByUser(ctx, userID)
+	if err != nil {
+		s.log.Warn("事后置顶：读取绑定失败", "user_id", userID, "error", err.Error())
+		return labels
+	}
+	for _, bnd := range bindings {
+		labels[bnd.ChannelID] = bindingLabel(bnd)
+	}
+	return labels
 }
 
 // bindingLabel 渲染绑定目标的显示名：标题优先，回退 @用户名，

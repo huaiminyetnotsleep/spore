@@ -212,7 +212,7 @@ func TestCopyToChannelsRouting(t *testing.T) {
 	svc, _ := New(Options{Store: s, Log: testLog()})
 	svc.SetBots([]*tgbot.Bot{b})
 
-	outcome := svc.CopyToChannels(ctx, ownBot, 100, 100, []int{11}, true)
+	outcome := svc.CopyToChannels(ctx, 0, ownBot, 100, 100, []int{11}, true)
 	if outcome.Total != 2 || outcome.OK != 2 {
 		t.Fatalf("应投递 2 个目标（本 bot + 通配），得到 %d/%d", outcome.OK, outcome.Total)
 	}
@@ -230,7 +230,7 @@ func TestCopyToChannelsRouting(t *testing.T) {
 	}
 
 	// 非 pin 调用恒返回零值（含路由跳过）
-	if got := svc.CopyToChannels(ctx, otherBot, 100, 100, []int{11}, false); got.Total != 0 || got.OK != 0 || len(got.Skipped) != 0 {
+	if got := svc.CopyToChannels(ctx, 0, otherBot, 100, 100, []int{11}, false); got.Total != 0 || got.OK != 0 || len(got.Skipped) != 0 {
 		t.Fatalf("非 pin 调用应返回零值: %+v", got)
 	}
 }

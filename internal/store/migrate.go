@@ -386,6 +386,28 @@ ALTER TABLE users ADD COLUMN auto_pin INTEGER NOT NULL DEFAULT 0;`,
 	// 乱投必然失败）；bot_id = 0 为通配（历史行与 Web 绑定），任意受理
 	// bot 均尝试投递、失败优雅降级。
 	`ALTER TABLE channel_bindings ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0;`,
+
+	// v22：引用回复交互锚点——sent_messages 记录 bot 发出的消息坐标到
+	// 请求的映射（kind：status 进度占位 / media 用户私聊投递 / channel_copy
+	// 绑定频道副本组首 / failure 失败通知），供 /pin、/cancel 回复消息时
+	// 反查对应请求（bot_id+chat_id+message_id 三元组定位，坐标 bot 私有）。
+	// 只存运营坐标，不存正文/媒体/凭据（红线，与 dump_entries 同类）。
+	// 写入用 INSERT OR IGNORE：唯一索引去重，重试重发的新消息 ID 天然不冲突。
+	`CREATE TABLE sent_messages (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	request_id INTEGER NOT NULL,
+	bot_id INTEGER NOT NULL,
+	chat_id INTEGER NOT NULL,
+	message_id INTEGER NOT NULL,
+	kind TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_sent_messages_msg
+ON sent_messages(bot_id, chat_id, message_id);
+
+CREATE INDEX idx_sent_messages_request
+ON sent_messages(request_id);`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。
