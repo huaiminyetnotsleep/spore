@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.30.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.29.0...v1.30.0) (2026-09-22)
+
+
+### Features
+
+* **backup:** 定时备份直传 Cloudflare R2（异地上云与配置入口） ([50e5fd4](https://github.com/huaiminyetnotsleep/spore/commit/50e5fd48b40d03ff75fa1fbd57d62b67df42c4de))
+
 ## [1.29.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.28.0...v1.29.0) (2026-09-22)
 
 
