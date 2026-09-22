@@ -62,9 +62,10 @@ type CloudStatus interface {
 // Channels 是频道绑定服务（binding.Service）在 Bot 侧所需的最小接口。
 // 绑定校验、归属限制（只能操作自己的绑定）与审计都在服务内完成。
 type Channels interface {
-	// BindBot 为用户绑定一个频道/超级群组（校验机器人管理员权限，类型
-	// 与权限语义按目标类型区分）。
-	BindBot(ctx context.Context, userID int64, target string) (store.ChannelBinding, error)
+	// BindBot 为用户绑定一个频道/超级群组（类型与权限语义按目标类型区分）。
+	// 绑定校验按 bot 逐台判定：只有接收命令的 bot（botID）不达标才拒绝；
+	// 其余 bot 未就绪在 advice 里逐台点名（可为空），不拦绑定。
+	BindBot(ctx context.Context, userID int64, target string, botID int64) (bound store.ChannelBinding, advice string, err error)
 	// UnbindBot 解除该用户的频道绑定；目标不存在或不属于该用户返回 store.ErrNotFound。
 	UnbindBot(ctx context.Context, userID int64, target string) (store.ChannelBinding, error)
 	// ListByUser 返回该用户名下的全部绑定。

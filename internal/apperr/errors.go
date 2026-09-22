@@ -87,8 +87,12 @@ const (
 	// 频道绑定码（internal/binding 绑定/解绑流程使用）。
 	CodeChannelTargetInvalid Code = "CHANNEL_TARGET_INVALID" // 频道标识无法解析
 	CodeChannelNotPostable   Code = "CHANNEL_NOT_POSTABLE"   // 机器人不是该频道管理员或无发言权限
-	CodeChannelAlreadyBound  Code = "CHANNEL_ALREADY_BOUND"  // 该频道已被其他用户绑定
-	CodeChannelBindLimit     Code = "CHANNEL_BIND_LIMIT"     // 达到频道绑定数量上限
+	// CodeChannelNotPinnable 超级群组置顶校验失败：任一机器人不在该群组、
+	// 非管理员或缺「置顶消息」权限（can_pin_messages）。与频道发帖校验
+	// （CHANNEL_NOT_POSTABLE）分码，用户文案才能给出群组语义的指引。
+	CodeChannelNotPinnable  Code = "CHANNEL_NOT_PINNABLE"  // 机器人不是该超级群组管理员或缺置顶权限
+	CodeChannelAlreadyBound Code = "CHANNEL_ALREADY_BOUND" // 该频道已被其他用户绑定
+	CodeChannelBindLimit    Code = "CHANNEL_BIND_LIMIT"    // 达到频道绑定数量上限
 )
 
 var userTexts = map[Code]string{
@@ -134,6 +138,7 @@ var userTexts = map[Code]string{
 
 	CodeChannelTargetInvalid: "无法识别该频道标识，请发送频道用户名（如 @mychannel）、t.me/频道 链接或 -100 开头的频道 ID。",
 	CodeChannelNotPostable:   "我还不是这个频道的管理员（或没有发送消息权限）。请先把我拉进频道并设置为管理员，再重试绑定。",
+	CodeChannelNotPinnable:   "我还不是这个超级群组的管理员（或缺「置顶消息」权限）。请把我设为该群组的管理员并勾选「置顶消息」，再重试绑定。",
 	CodeChannelAlreadyBound:  "该频道已被其他用户绑定。",
 	CodeChannelBindLimit:     "已达到可绑定频道的数量上限，可先解绑不需要的频道再绑定。",
 

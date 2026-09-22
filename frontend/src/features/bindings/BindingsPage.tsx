@@ -131,6 +131,18 @@ export function BindingsPage() {
         via === "bot" ? <Tag color="blue">{viaLabel(via)}</Tag> : <Tag>{viaLabel(via)}</Tag>,
     },
     {
+      title: "路由 bot",
+      dataIndex: "bot_id",
+      key: "bot_id",
+      width: 120,
+      render: (botId: number) =>
+        botId !== 0 ? (
+          <Text type="secondary">{botId}</Text>
+        ) : (
+          <Tag>任意机器人</Tag>
+        ),
+    },
+    {
       title: "绑定时间",
       dataIndex: "created_at",
       key: "created_at",

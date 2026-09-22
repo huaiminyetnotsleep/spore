@@ -75,11 +75,14 @@ type PinTarget struct {
 }
 
 // PinOutcome 汇总一轮置顶结果：OK 为 Targets 中 Pinned 的计数，Total 为
-// 参与置顶的目标总数（含副本发送失败的）。非置顶调用返回零值。
+// 参与置顶的目标总数（含副本发送失败的）。Skipped 是因路由不匹配被跳过
+// 的绑定显示名（绑定属于其他受理 bot，不计入 Total，仅提示用）。
+// 非置顶调用返回零值。
 type PinOutcome struct {
 	OK      int
 	Total   int
 	Targets []PinTarget
+	Skipped []string
 }
 
 // ChannelCopier 把已成功发送给用户的消息复制到该用户绑定的频道（频道副本）。
@@ -394,12 +397,13 @@ func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 
 // pinResultText 渲染置顶结果确认文案（HTML：原消息链接与目标名逐个列出，
 // 频道/群组名可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。
+// Skipped（绑定属于其他受理 bot）单独成行提示，不计入失败。
 func pinResultText(sourceURL string, o PinOutcome) string {
 	link := "原消息链接不可用"
 	if sourceURL != "" {
 		link = fmt.Sprintf(`<a href="%s">%s</a>`, sourceURL, sourceURL)
 	}
-	if o.Total == 0 {
+	if o.Total == 0 && len(o.Skipped) == 0 {
 		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n原消息：" + link
 	}
 	var pinned, failed []string
@@ -410,6 +414,10 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 		} else {
 			failed = append(failed, label)
 		}
+	}
+	skipped := make([]string, 0, len(o.Skipped))
+	for _, s := range o.Skipped {
+		skipped = append(skipped, html.EscapeString(s))
 	}
 	var b strings.Builder
 	if len(pinned) > 0 {
@@ -423,6 +431,17 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：%s（请检查机器人的发帖与置顶权限）", link, strings.Join(failed, "、"))
 		} else {
 			fmt.Fprintf(&b, "置顶失败：%s（请检查机器人的置顶权限）", strings.Join(failed, "、"))
+		}
+	}
+	if len(skipped) > 0 {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		if o.Total == 0 {
+			fmt.Fprintf(&b, "任务已完成，未执行置顶：本任务的受理机器人名下暂无绑定，%s 属于其他机器人（用对应机器人发链接即可投递）",
+				strings.Join(skipped, "、"))
+		} else {
+			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：%s", len(skipped), strings.Join(skipped, "、"))
 		}
 	}
 	return b.String()

@@ -161,6 +161,7 @@ export const ERROR_CODE_LABELS: Record<string, string> = {
   // 频道绑定
   CHANNEL_TARGET_INVALID: "频道标识无法解析",
   CHANNEL_NOT_POSTABLE: "机器人无发言权限",
+  CHANNEL_NOT_PINNABLE: "机器人缺置顶权限",
   CHANNEL_ALREADY_BOUND: "频道已被绑定",
   CHANNEL_BIND_LIMIT: "绑定数量达上限",
 };
