@@ -3,7 +3,8 @@
  * 待确认状态渲染、确认导入弹窗（SSR data-confirm 同款文案、danger 意图）、
  * 导出确认不是 danger（读取型操作）、文件选择提供清除入口、确认成功后
  * 失效备份 query 并提示、失败展示服务端受控文案且不误报成功。
- * 新增测试：支持全量备份导出、JSON 分项导出与打包导出。
+ * 新增测试：支持全量备份导出、JSON 分项导出与打包导出、
+ * 定时备份 + R2 上云卡片（掩码回显、保存载荷、连通性测试与失败告警）。
  * API 层以模块 mock 注入，不发起真实网络请求。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,8 +15,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../../api/client";
 import {
+  fetchBackupSchedule,
   fetchBackupStatus,
   fetchCloudDriveBackupStatus,
+  type BackupScheduleView,
   type BackupView,
   type CloudDriveBackupStatus,
 } from "../../api/admin";
@@ -25,6 +28,8 @@ import {
   exportBackupAllJSON,
   exportBackupFull,
   exportBackupJSON,
+  saveBackupSchedule,
+  testBackupR2Connection,
 } from "../../api/mutations";
 import { BackupPage, CONFIRM_IMPORT_TEXT } from "./BackupPage";
 
@@ -34,6 +39,7 @@ vi.mock("../../api/admin", async () => {
     ...actual,
     fetchBackupStatus: vi.fn(),
     fetchCloudDriveBackupStatus: vi.fn(),
+    fetchBackupSchedule: vi.fn(),
   };
 });
 
@@ -52,6 +58,8 @@ vi.mock("../../api/mutations", async () => {
     importCloudDriveBackup: vi.fn(),
     restartServer: vi.fn(),
     rollbackCloudDriveBackup: vi.fn(),
+    saveBackupSchedule: vi.fn(),
+    testBackupR2Connection: vi.fn(),
     uploadBackup: vi.fn(),
     uploadBackupAllJSON: vi.fn(),
     uploadBackupJSON: vi.fn(),
@@ -60,11 +68,14 @@ vi.mock("../../api/mutations", async () => {
 
 const fetchBackupStatusMock = vi.mocked(fetchBackupStatus);
 const fetchCloudDriveBackupStatusMock = vi.mocked(fetchCloudDriveBackupStatus);
+const fetchBackupScheduleMock = vi.mocked(fetchBackupSchedule);
 const confirmBackupImportMock = vi.mocked(confirmBackupImport);
 const exportBackupMock = vi.mocked(exportBackup);
 const exportAllJsonMock = vi.mocked(exportBackupAllJSON);
 const exportFullMock = vi.mocked(exportBackupFull);
 const exportSingleJsonMock = vi.mocked(exportBackupJSON);
+const saveScheduleMock = vi.mocked(saveBackupSchedule);
+const testR2Mock = vi.mocked(testBackupR2Connection);
 
 function backupView(overrides: Partial<BackupView> = {}): BackupView {
   return {
@@ -100,6 +111,26 @@ function cloudBackupStatus(
   };
 }
 
+function scheduleView(overrides: Partial<BackupScheduleView> = {}): BackupScheduleView {
+  return {
+    interval_hours: 6,
+    keep_count: 8,
+    last_backup_at: 1756598400000,
+    r2: {
+      enabled: true,
+      complete: true,
+      account_id: "0123456789abcdef0123456789abcdef",
+      bucket: "spore-backup",
+      endpoint: "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+      access_key_id: "********",
+      secret_access_key: "********",
+      last_upload_at: 1756598400000,
+      last_upload_error: "",
+    },
+    ...overrides,
+  };
+}
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const invalidateSpy = vi.spyOn(client, "invalidateQueries");
@@ -119,14 +150,18 @@ describe("数据备份页", () => {
   beforeEach(() => {
     fetchBackupStatusMock.mockReset();
     fetchCloudDriveBackupStatusMock.mockReset();
+    fetchBackupScheduleMock.mockReset();
     confirmBackupImportMock.mockReset();
     exportBackupMock.mockReset();
     exportAllJsonMock.mockReset();
     exportFullMock.mockReset();
     exportSingleJsonMock.mockReset();
+    saveScheduleMock.mockReset();
+    testR2Mock.mockReset();
 
     fetchBackupStatusMock.mockResolvedValue(backupView({}));
     fetchCloudDriveBackupStatusMock.mockResolvedValue(cloudBackupStatus({}));
+    fetchBackupScheduleMock.mockResolvedValue(scheduleView({}));
   });
 
   it("渲染唯一 H1「数据备份」、备份状态与导出入口；无待导入时不出现确认按钮", async () => {
@@ -265,5 +300,69 @@ describe("数据备份页", () => {
     expect(
       screen.queryByText("备份已确认，将在下一次服务启动时应用；当前数据库尚未改变。"),
     ).not.toBeInTheDocument();
+  });
+
+  it("定时备份卡片回填脱敏视图：掩码入框、开关与端点状态可见", async () => {
+    renderPage();
+
+    expect(
+      await screen.findByText("定时备份与云端同步（Cloudflare R2）"),
+    ).toBeInTheDocument();
+    // 两个密钥字段都回填为掩码（沿用语义的视觉锚点）
+    expect(await screen.findAllByDisplayValue("********")).toHaveLength(2);
+    // 开关回填为已开启
+    await waitFor(() => {
+      expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    });
+    // 端点与最近上传状态行
+    expect(await screen.findByText(/端点：.*r2\.cloudflarestorage\.com/)).toBeInTheDocument();
+    expect(screen.getByText(/最近 R2 上传/)).toBeInTheDocument();
+  });
+
+  it("保存定时备份配置提交完整载荷（掩码原样传回 = 服务端沿用）", async () => {
+    saveScheduleMock.mockResolvedValue({ ok: true, backup_schedule: scheduleView({}) });
+    renderPage();
+    await screen.findAllByDisplayValue("********");
+
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(saveScheduleMock).toHaveBeenCalledTimes(1));
+    expect(saveScheduleMock).toHaveBeenCalledWith({
+      interval_hours: 6,
+      keep_count: 8,
+      r2: {
+        enabled: true,
+        account_id: "0123456789abcdef0123456789abcdef",
+        access_key_id: "********",
+        secret_access_key: "********",
+        bucket: "spore-backup",
+      },
+    });
+  });
+
+  it("测试连接按钮触发 R2 连通性测试并提示成功", async () => {
+    testR2Mock.mockResolvedValue({ ok: true, connected: true, message: "连接成功：R2 存储桶可访问。" });
+    renderPage();
+    await screen.findAllByDisplayValue("********");
+
+    fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
+
+    await waitFor(() => expect(testR2Mock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("连接成功：R2 存储桶可访问。")).toBeInTheDocument();
+  });
+
+  it("最近上传失败时展示受控场景告警", async () => {
+    fetchBackupScheduleMock.mockResolvedValue(
+      scheduleView({
+        r2: {
+          ...scheduleView().r2,
+          last_upload_error: "R2 密钥无效或无权限（请核对 Access Key ID / Secret，或重新生成 API Token）",
+        },
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText(/最近一次 R2 上传未成功/)).toBeInTheDocument();
+    expect(screen.getByText(/本地快照不受影响/)).toBeInTheDocument();
   });
 });

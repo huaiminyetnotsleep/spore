@@ -6,7 +6,11 @@
  *    - 单项数据库备份导出
  *    - 单个 JSON 配置文件分类选择导出（Select 分组选择器 + 表格逐行导出按钮）
  *    - 数据资产明细清单（按分类展示，每项均可独立导出）
- * 2. 数据恢复与导入（Import Center）：
+ * 2. 定时备份与云端同步（Cloudflare R2）：
+ *    - 间隔/份数配置（从设置页挪入，单一入口）
+ *    - R2 连接四项配置（掩码回显，凭据只存本机 data/r2-backup.json）
+ *    - 连通性测试与最近上传状态
+ * 3. 数据恢复与导入（Import Center）：
  *    - 业务数据库恢复（.db 校验、待确认状态与原子替换）
  *    - JSON 配置文件恢复（单文件按目标覆盖、所有 JSON 压缩包批量还原，附带平滑重启入口）
  *    - 云盘加密配置恢复与回滚（密码解密、候选确认与配置回滚）
@@ -19,6 +23,7 @@ import {
   FileTextOutlined,
   FileZipOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import {
@@ -29,17 +34,20 @@ import {
   Descriptions,
   Form,
   Input,
+  InputNumber,
   Row,
   Select,
   Space,
+  Switch,
   Tabs,
   Tag,
   Typography,
   Upload,
 } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
+  fetchBackupSchedule,
   fetchBackupStatus,
   fetchCloudDriveBackupStatus,
   type JSONFileInfo,
@@ -56,6 +64,8 @@ import {
   importCloudDriveBackup,
   restartServer,
   rollbackCloudDriveBackup,
+  saveBackupSchedule,
+  testBackupR2Connection,
   uploadBackup,
   uploadBackupAllJSON,
   uploadBackupJSON,
@@ -63,6 +73,7 @@ import {
 import { fmtBytes, fmtTime } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { DataTable } from "../shared/DataTable";
+import { FormActions } from "../shared/FormActions";
 import { FormModal } from "../shared/FormModal";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState } from "../shared/QueryStates";
@@ -90,8 +101,22 @@ interface ExportCloudBackupFormValues {
   password_confirmation: string;
 }
 
+/** 定时备份卡片表单值：密钥字段展示掩码（服务端把掩码/空串视为沿用）。 */
+interface ScheduleFormValues {
+  interval_hours: number;
+  keep_count: number;
+  enabled: boolean;
+  account_id: string;
+  access_key_id: string;
+  secret_access_key: string;
+  bucket: string;
+}
+
 export function BackupPage() {
   const [selectedDbFile, setSelectedDbFile] = useState<File | null>(null);
+
+  // 定时备份 + R2 上云配置
+  const [scheduleForm] = Form.useForm<ScheduleFormValues>();
 
   // 单 JSON 导入状态
   const [selectedSingleJson, setSelectedSingleJson] = useState<File | null>(null);
@@ -117,6 +142,53 @@ export function BackupPage() {
   const cloudBackupStatus = useQuery({
     queryKey: ["cloud-drive-backup"],
     queryFn: fetchCloudDriveBackupStatus,
+  });
+
+  // ---- 定时备份 + R2 上云 ----
+  const scheduleQuery = useQuery({
+    queryKey: ["backup-schedule"],
+    queryFn: fetchBackupSchedule,
+  });
+
+  // 异步数据到达后回填表单（initialValues 仅在挂载时读取一次）
+  useEffect(() => {
+    if (!scheduleQuery.data) return;
+    const { r2 } = scheduleQuery.data;
+    scheduleForm.setFieldsValue({
+      interval_hours: scheduleQuery.data.interval_hours,
+      keep_count: scheduleQuery.data.keep_count,
+      enabled: r2.enabled,
+      account_id: r2.account_id,
+      access_key_id: r2.access_key_id,
+      secret_access_key: r2.secret_access_key,
+      bucket: r2.bucket,
+    });
+  }, [scheduleQuery.data, scheduleForm]);
+
+  const saveScheduleAction = useAdminAction({
+    action: (values: ScheduleFormValues) =>
+      saveBackupSchedule({
+        interval_hours: values.interval_hours,
+        keep_count: values.keep_count,
+        r2: {
+          enabled: values.enabled,
+          account_id: values.account_id,
+          access_key_id: values.access_key_id,
+          secret_access_key: values.secret_access_key,
+          bucket: values.bucket,
+        },
+      }),
+    invalidate: [["backup-schedule"], ["settings"], ["overview"]],
+    successText: "定时备份配置已保存，即时生效（下一轮定时检查按新配置执行）。",
+  });
+
+  const testR2Action = useAdminAction({
+    action: () => testBackupR2Connection(),
+    invalidate: [["backup-schedule"]],
+    successText: (result) =>
+      result.connected
+        ? "连接成功：R2 存储桶可访问。"
+        : { type: "warning", text: result.message },
   });
 
   // ---- 导出动作 ----
@@ -610,7 +682,128 @@ export function BackupPage() {
             </Space>
           </PageSection>
 
-          {/* ==================== 区域二：数据恢复与导入 ==================== */}
+          {/* ==================== 区域二：定时备份与云端同步 ==================== */}
+          <PageSection title="定时备份与云端同步（Cloudflare R2）">
+            <Space direction="vertical" size="middle" className="field-width-full">
+              <Paragraph type="secondary" className="layout-margin-top-0 layout-margin-bottom-0">
+                按间隔自动生成数据库一致性快照写入 data/backups 并保留最近 N 份；开启 R2
+                后，同一份快照会打成全量 ZIP（含 JSON 配置）直传 Cloudflare R2
+                异地保存，远端同样按份数轮转。间隔 0 为关闭。R2 凭据只存本机
+                data/r2-backup.json，不进数据库、不进任何备份件；上传失败会进入事件中心告警。
+                四项配置的获取步骤见部署文档《Cloudflare R2 备份指南》。
+              </Paragraph>
+
+              {scheduleQuery.data?.r2.last_upload_error ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`最近一次 R2 上传未成功：${scheduleQuery.data.r2.last_upload_error}`}
+                  description={`最近上传尝试：${fmtTime(scheduleQuery.data.r2.last_upload_at)}。本地快照不受影响，下一轮定时备份会重试上传。`}
+                />
+              ) : null}
+
+              <Form<ScheduleFormValues>
+                form={scheduleForm}
+                layout="vertical"
+                className="field-width-full"
+                disabled={scheduleQuery.isPending}
+                onFinish={(values) => void saveScheduleAction.run(values)}
+              >
+                <div className="settings-field-grid">
+                  <Form.Item
+                    name="interval_hours"
+                    label="备份间隔小时（0–168，0 = 关闭）"
+                    rules={[{ type: "integer", min: 0, max: 168, message: "备份间隔必须为 0–168 的整数小时。" }]}
+                    extra="定时生成快照的周期；缺省 6 小时。保存后即时生效。"
+                  >
+                    <InputNumber min={0} max={168} precision={0} className="field-width-160" />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="keep_count"
+                    label="保留份数（1–50）"
+                    rules={[{ type: "integer", min: 1, max: 50, message: "保留份数必须为 1–50 的整数。" }]}
+                    extra="本地与 R2 各保留最近 N 份；缺省 8 份（默认间隔下约 48 小时窗口）。"
+                  >
+                    <InputNumber min={1} max={50} precision={0} className="field-width-160" />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="enabled"
+                    label="上传到 Cloudflare R2"
+                    valuePropName="checked"
+                    extra="开启前需填齐右侧四项连接配置；关闭只停止上云，本地定时备份照常。"
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="account_id"
+                    label="Account ID（32 位十六进制）"
+                    extra="Cloudflare 控制台右侧栏「Account ID」，粘贴后自动拼出 S3 端点。"
+                  >
+                    <Input placeholder="如 0123456789abcdef0123456789abcdef" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="access_key_id"
+                    label="Access Key ID"
+                    extra="R2 API Token 生成；显示为掩码或留空表示沿用已保存值。"
+                  >
+                    <Input autoComplete="off" allowClear />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="secret_access_key"
+                    label="Secret Access Key"
+                    extra="与 Access Key 配对；显示为掩码或留空表示沿用已保存值。"
+                  >
+                    <Input.Password autoComplete="new-password" />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="bucket"
+                    label="Bucket（专用桶，如 spore-backup）"
+                    extra="建议为备份单独建桶；不开启公开访问与版本化。"
+                  >
+                    <Input placeholder="如 spore-backup" allowClear />
+                  </Form.Item>
+                </div>
+                <FormActions>
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    loading={testR2Action.pending}
+                    disabled={!scheduleQuery.data}
+                    onClick={() => void testR2Action.run(undefined)}
+                  >
+                    测试连接
+                  </Button>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    loading={saveScheduleAction.pending}
+                    disabled={!scheduleQuery.data}
+                  >
+                    保存配置
+                  </Button>
+                </FormActions>
+              </Form>
+
+              <Space wrap size={8}>
+                <Text type="secondary">
+                  最近本地快照：{scheduleQuery.data ? fmtTime(scheduleQuery.data.last_backup_at) : "—"}
+                </Text>
+                <Text type="secondary">
+                  最近 R2 上传：{scheduleQuery.data ? fmtTime(scheduleQuery.data.r2.last_upload_at) : "—"}
+                </Text>
+                {scheduleQuery.data?.r2.endpoint ? (
+                  <Text type="secondary">端点：{scheduleQuery.data.r2.endpoint}</Text>
+                ) : null}
+              </Space>
+            </Space>
+          </PageSection>
+
+          {/* ==================== 区域三：数据恢复与导入 ==================== */}
           <PageSection title="数据恢复与导入">
             <Tabs
               defaultActiveKey="json"

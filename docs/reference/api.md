@@ -1121,8 +1121,8 @@ cloud-drive.json.enc
 | `watch_max_sources` | int | 监听源总数上限（0–200，0 = 不限；仅约束用户申请；缺省 20） |
 | `watch_per_user_limit` | int | 每用户申请上限（0–20，0 = 不限；缺省 3） |
 | `max_request_attempts` | int | 单个请求累计尝试上限（1–10，含首次；即时生效；缺省 3） |
-| `backup_interval_hours` | int | 自动备份间隔小时（0–168，0 = 关闭；即时生效；缺省 6） |
-| `backup_keep_count` | int | 自动备份保留份数（1–50；即时生效；缺省 8，默认间隔下约 48 小时窗口） |
+| `backup_interval_hours` | int | 自动备份间隔小时（0–168，0 = 关闭；即时生效；缺省 6）。管理端编辑入口在备份页（见 `POST /api/v1/backup/r2`） |
+| `backup_keep_count` | int | 自动备份保留份数（1–50；即时生效；缺省 8，默认间隔下约 48 小时窗口）。管理端编辑入口在备份页 |
 | `download_threads` / `upload_threads` / `download_connections` / `upload_connections` | int | 传输并发当前生效值（1–16） |
 | `download_threads_env` / `upload_threads_env` / `download_connections_env` / `upload_connections_env` | int | 对应环境变量默认值 |
 | `download_threads_overridden` / `upload_threads_overridden` / `download_connections_overridden` / `upload_connections_overridden` | bool | 该项是否存在数据库覆盖（缺省 `false` = 跟随环境默认） |
@@ -1146,8 +1146,8 @@ cloud-drive.json.enc
 | `watch_max_sources` | int | 0–200（0 = 不限） |
 | `watch_per_user_limit` | int | 0–20（0 = 不限） |
 | `max_request_attempts` | int | 1–10（累计含首次）；缺省保持不变，保存后即时影响重试校验 |
-| `backup_interval_hours` | int | 0–168（0 = 关闭自动备份）；缺省保持不变，保存后即时生效 |
-| `backup_keep_count` | int | 1–50；缺省保持不变，保存后即时生效（轮转保留最近 N 份） |
+| `backup_interval_hours` | int | 0–168（0 = 关闭自动备份）；缺省保持不变，保存后即时生效。管理端编辑入口已挪至备份页（`POST /api/v1/backup/r2` 同键），本端点保留兼容 |
+| `backup_keep_count` | int | 1–50；缺省保持不变，保存后即时生效（轮转保留最近 N 份）。管理端编辑入口已挪至备份页，本端点保留兼容 |
 | `queue_capacity` | int | 1–4096；缺省保持不变 |
 | `worker_count` | int | 1–16；缺省保持不变 |
 | `max_file_size` + `max_file_unit` | string | 数值 + 单位（`MB`/`GB`）；缺省保持不变，**两项必须成对填写** |
@@ -1389,6 +1389,53 @@ OAuth App 的申请步骤与部署配置见 [github-oauth.md](../guide/github-oa
 | `confirm` | string | 是 | 固定 `import` |
 
 确认后写入 marker，**下次启动时应用**（安全设置保留、Web 会话清除、MTProto Session/peers 文件不受影响）。响应结构同上传。错误：`400`（确认值非法/无待导入）。
+
+### GET /api/v1/backup/r2
+
+定时备份整体状态（认证；备份页「定时备份与云端同步」卡片的读取口径）。间隔/份数沿用 settings 键（`backup_interval_hours` / `backup_keep_count`，编辑入口在本端点 POST；设置页不再展示这两个字段）。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `interval_hours` | int | 备份间隔小时（0 = 关闭；缺省 6） |
+| `keep_count` | int | 保留份数（缺省 8；本地与 R2 同步轮转） |
+| `last_backup_at` | int64 | 最近本地快照时间（0 = 从未；上传失败不影响该口径） |
+| `r2.enabled` | bool | 是否启用 R2 上云 |
+| `r2.complete` | bool | 连接四要素是否齐备（开启的前提） |
+| `r2.account_id` | string | Cloudflare Account ID（32 位十六进制） |
+| `r2.bucket` | string | 存储桶名 |
+| `r2.endpoint` | string | 由 Account ID 拼出的 S3 端点；未配置为空 |
+| `r2.access_key_id` | string | **掩码** `********`（已配置时；不下发明文） |
+| `r2.secret_access_key` | string | **掩码** `********`（已配置时；不下发明文） |
+| `r2.last_upload_at` | int64 | 最近一次上传时间（0 = 从未上传） |
+| `r2.last_upload_error` | string | 最近上传失败的受控场景文案；无错误为空 |
+
+凭据只存服务器 `data/r2-backup.json`（0600），不进数据库与备份件。
+
+### POST /api/v1/backup/r2
+
+合并保存定时备份配置（认证 + CSRF）。字段缺省不变更；间隔/份数与 `POST /api/v1/settings` 同键同审计（`settings.backup_interval` / `settings.backup_keep`）。
+
+| 请求字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `interval_hours` | int | 否 | 0–168（0 = 关闭）；即时生效 |
+| `keep_count` | int | 否 | 1–50；即时生效 |
+| `r2.enabled` | bool | 否 | 开启前需四要素齐备，否则 `400` |
+| `r2.account_id` | string | 否 | 空串 = 不变更 |
+| `r2.access_key_id` | string | 否 | 空串或掩码 = 沿用已保存值 |
+| `r2.secret_access_key` | string | 否 | 空串或掩码 = 沿用已保存值 |
+| `r2.bucket` | string | 否 | 空串 = 不变更 |
+
+响应 `{"ok":true,"backup_schedule":{...同 GET 响应}}`。连接配置变更会清除旧的上传错误记录并写 `backup.r2_config` 审计（不含密钥）。错误：`400`（参数非法 / 开启但配置不完整）。
+
+### POST /api/v1/backup/r2/test
+
+R2 连通性测试（认证 + CSRF）。用**已保存**配置做只读探测（ListObjects，不写对象）。配置不完整返回 `400`。响应：
+
+```json
+{ "ok": true, "connected": true, "message": "连接成功：R2 存储桶可访问。" }
+```
+
+`connected=false` 时 `message` 为受控失败场景（密钥无效 / 桶不存在 / 超时等）。写 `backup.r2_test` 审计。
 
 ---
 

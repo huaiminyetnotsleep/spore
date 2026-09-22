@@ -881,6 +881,39 @@ export function fetchBackupStatus(): Promise<BackupView> {
   return apiRequest<BackupView>("/api/v1/backup");
 }
 
+/** R2 上云连接配置（GET /api/v1/backup/r2 脱敏视图：密钥只回掩码）。 */
+export interface BackupR2ConfigView {
+  enabled: boolean;
+  /** 四要素（Account ID / Access Key / Secret / Bucket）是否齐备。 */
+  complete: boolean;
+  account_id: string;
+  bucket: string;
+  /** 由 Account ID 拼出的 S3 兼容端点；未配置为空串。 */
+  endpoint: string;
+  /** 已配置返回固定掩码，未配置为空串。 */
+  access_key_id: string;
+  secret_access_key: string;
+  /** 最近一次上传时间（Unix 毫秒）；0 表示从未上传。 */
+  last_upload_at: number;
+  /** 最近一次上传失败的受控场景文案；空串表示无错误。 */
+  last_upload_error: string;
+}
+
+/** 定时备份整体状态（间隔/份数沿用 settings 键的读取口径）。 */
+export interface BackupScheduleView {
+  /** 间隔小时（0 = 关闭；缺省 6）。 */
+  interval_hours: number;
+  /** 保留份数（本地与 R2 同步轮转；缺省 8 ≈ 48 小时窗口）。 */
+  keep_count: number;
+  /** 最近本地快照时间（Unix 毫秒，上传失败不影响该口径）。 */
+  last_backup_at: number;
+  r2: BackupR2ConfigView;
+}
+
+export function fetchBackupSchedule(): Promise<BackupScheduleView> {
+  return apiRequest<BackupScheduleView>("/api/v1/backup/r2");
+}
+
 // ---- MTProto 状态（高风险页面迁移） ----
 
 /**

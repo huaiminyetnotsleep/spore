@@ -41,8 +41,6 @@ interface SettingsFormValues {
   timezone?: string;
   max_links_per_message?: number;
   max_request_attempts?: number;
-  backup_interval_hours?: number;
-  backup_keep_count?: number;
   queue_capacity?: number;
   worker_count?: number;
   max_file_size?: string;
@@ -114,8 +112,6 @@ export function SettingsPage() {
       timezone: data.timezone,
       max_links_per_message: data.max_links_per_message,
       max_request_attempts: data.max_request_attempts,
-      backup_interval_hours: data.backup_interval_hours,
-      backup_keep_count: data.backup_keep_count,
       queue_capacity: data.queue_capacity,
       worker_count: data.worker_count,
       download_threads: data.download_threads,
@@ -136,12 +132,6 @@ export function SettingsPage() {
       }
       if (dirtyFields.has("max_request_attempts") && values.max_request_attempts != null) {
         input.max_request_attempts = values.max_request_attempts;
-      }
-      if (dirtyFields.has("backup_interval_hours") && values.backup_interval_hours != null) {
-        input.backup_interval_hours = values.backup_interval_hours;
-      }
-      if (dirtyFields.has("backup_keep_count") && values.backup_keep_count != null) {
-        input.backup_keep_count = values.backup_keep_count;
       }
       if (dirtyFields.has("queue_capacity") && values.queue_capacity != null) {
         input.queue_capacity = values.queue_capacity;
@@ -250,8 +240,6 @@ export function SettingsPage() {
               timezone: data?.timezone,
               max_links_per_message: data?.max_links_per_message,
               max_request_attempts: data?.max_request_attempts,
-              backup_interval_hours: data?.backup_interval_hours,
-              backup_keep_count: data?.backup_keep_count,
               queue_capacity: data?.queue_capacity,
               worker_count: data?.worker_count,
               download_threads: data?.download_threads,
@@ -301,24 +289,6 @@ export function SettingsPage() {
                   extra="单个请求可重试的总次数上限（首次执行计 1 次），仅约束管理端重试；保存后即时生效。已达上限的请求可在消息记录详情页重置尝试计数。"
                 >
                   <InputNumber min={1} max={10} precision={0} className="field-width-160" />
-                </Form.Item>
-
-                <Form.Item
-                  name="backup_interval_hours"
-                  label="自动备份间隔小时（0–168，0 = 关闭）"
-                  rules={[{ type: "integer", min: 0, max: 168, message: "自动备份间隔必须为 0–168 的整数小时。" }]}
-                  extra="定时把数据库一致性快照写入 data/backups（VACUUM INTO）；缺省 6 小时，0 为关闭。仅含数据库——会话与配置文件的备份用备份页「全量导出」。保存后即时生效。"
-                >
-                  <InputNumber min={0} max={168} precision={0} className="field-width-160" />
-                </Form.Item>
-
-                <Form.Item
-                  name="backup_keep_count"
-                  label="备份保留份数（1–50）"
-                  rules={[{ type: "integer", min: 1, max: 50, message: "备份保留份数必须为 1–50 的整数。" }]}
-                  extra="自动备份按修改时间保留最近 N 份，超出自动删除最老；缺省 8 份（默认间隔下约 48 小时窗口）。保存后即时生效。"
-                >
-                  <InputNumber min={1} max={50} precision={0} className="field-width-160" />
                 </Form.Item>
 
                 <Form.Item
@@ -508,7 +478,10 @@ export function SettingsPage() {
                     <Tag color="gold">待重启生效</Tag>
                   )}
                 </Text>
-                <Text type="secondary">最近备份：{fmtTime(data?.last_backup_at)}。</Text>
+                <Text type="secondary">
+                  最近备份：{fmtTime(data?.last_backup_at)}。定时备份间隔、保留份数与 R2
+                  上云配置已挪至<Link to="/backup">数据备份</Link>页统一维护。
+                </Text>
                 <Text type="secondary">
                   时区保存后即时生效；重复链接相关配置在频道设置页即时生效；队列容量、worker
                   数与媒体传输参数在下次重启后生效，运行中的任务不受影响。

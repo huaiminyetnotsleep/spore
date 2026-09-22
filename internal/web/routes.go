@@ -168,6 +168,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/oauth/bind", s.handleAPIOAuthBind)
 	s.mountAPIWrite(mux, "/api/v1/oauth/unbind", s.handleAPIOAuthUnbind)
 	mux.Handle("GET /api/v1/backup", s.apiAuth(s.handleAPIBackupGet))
+	// 定时备份 + R2 上云配置：GET/POST 同路径（POST 走 CSRF），不能经
+	// mountAPIWrite（其 GET 405 兜底会与 GET 端点冲突），与 settings
+	// 同款直接组合中间件；test 是纯 POST 走 mountAPIWrite。
+	mux.Handle("GET /api/v1/backup/r2", s.apiAuth(s.handleAPIBackupR2Get))
+	mux.Handle("POST /api/v1/backup/r2", s.apiAuth(s.apiCSRF(s.handleAPIBackupR2Post)))
+	s.mountAPIWrite(mux, "/api/v1/backup/r2/test", s.handleAPIBackupR2Test)
 	s.mountAPIWrite(mux, "/api/v1/backup/export", s.handleAPIBackupExport)
 	s.mountAPIWrite(mux, "/api/v1/backup/export/json", s.handleAPIBackupExportJSON)
 	s.mountAPIWrite(mux, "/api/v1/backup/export/all-json", s.handleAPIBackupExportAllJSON)

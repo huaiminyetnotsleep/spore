@@ -9,6 +9,7 @@ import { apiErrorFrom, apiRequest } from "./client";
 import { getCSRFToken } from "./session";
 import { PROJECT_IDENTITY } from "../shared/projectIdentity.generated";
 import type {
+  BackupScheduleView,
   BackupView,
   WatchEventsDeleteResult,
   WatchInviteRequestRow,
@@ -315,6 +316,42 @@ export interface SettingsSaveResult extends WriteOK {
 
 export const saveSettings = (input: SettingsSaveInput): Promise<SettingsSaveResult> =>
   postJSON<SettingsSaveResult>("/api/v1/settings", input);
+
+// ---- 定时备份 + R2 上云配置 ----
+
+/** R2 连接配置载荷：密钥字段传掩码或空串 = 沿用已保存值。 */
+export interface BackupR2ConfigInput {
+  enabled: boolean;
+  account_id?: string;
+  access_key_id?: string;
+  secret_access_key?: string;
+  bucket?: string;
+}
+
+/** 定时备份保存载荷：缺省字段不变更（间隔/份数与设置页同键同审计）。 */
+export interface BackupScheduleSaveInput {
+  interval_hours?: number;
+  keep_count?: number;
+  r2?: BackupR2ConfigInput;
+}
+
+export interface BackupScheduleSaveResult extends WriteOK {
+  backup_schedule: BackupScheduleView;
+}
+
+export const saveBackupSchedule = (
+  input: BackupScheduleSaveInput,
+): Promise<BackupScheduleSaveResult> =>
+  postJSON<BackupScheduleSaveResult>("/api/v1/backup/r2", input);
+
+/** R2 连通性测试结果：connected=false 时 message 为受控失败场景。 */
+export interface BackupR2TestResult extends WriteOK {
+  connected: boolean;
+  message: string;
+}
+
+export const testBackupR2Connection = (): Promise<BackupR2TestResult> =>
+  postJSON<BackupR2TestResult>("/api/v1/backup/r2/test", {});
 
 // ---- 监听源（/watch，预热缓存频道） ----
 

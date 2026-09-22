@@ -222,7 +222,9 @@ func main() {
 	// 缺省 6 小时、0=关闭；backup_keep_count 缺省 8 份 = 48 小时滚动窗口），
 	// 管理端修改即时生效。每 tick 重读配置而非固定 Ticker：配置变更后
 	// 下一轮即按新间隔执行。失败（含磁盘空间不足跳过）上报 backup.failed
-	// 事件；事件按 key 合并 + 通知冷却，不会刷屏。
+	// 事件；事件按 key 合并 + 通知冷却，不会刷屏。快照成功且 R2 上传
+	// 启用（data/r2-backup.json）时，随后把同一份快照打成全量 ZIP 直传
+	// Cloudflare R2 并远端轮转同份数（见 r2upload.go）。
 	go func() {
 		for {
 			hours := syscfg.LoadBackupIntervalHours(ctx, st)
@@ -253,12 +255,24 @@ func main() {
 			case <-time.After(delay):
 			}
 			keep := syscfg.LoadBackupKeepCount(ctx, st)
-			if _, err := backup.Run(ctx, st, cfg.DataDir, "", keep, "system", time.Now(), logger); err != nil {
-				scene := "定时备份执行失败"
-				if errors.Is(err, backup.ErrInsufficientSpace) {
+			res, berr := backup.Run(ctx, st, cfg.DataDir, "", keep, "system", time.Now(), logger)
+			// scene 汇总本轮失败场景（空串 = 本地快照与 R2 上传均成功
+			// 或 R2 未开启）：本地失败、R2 上传失败与空间不足跳过共用
+			// backup.failed 事件（按 key 合并 + 通知冷却，不会刷屏）。
+			var scene string
+			if berr != nil {
+				scene = "定时备份执行失败"
+				if errors.Is(berr, backup.ErrInsufficientSpace) {
 					scene = "磁盘剩余空间不足，定时备份已跳过"
 				}
-				logger.Error("定时备份失败", "error", err.Error())
+				logger.Error("定时备份失败", "error", berr.Error())
+			} else {
+				// 本地快照成功：R2 启用时把同一份快照打成全量 ZIP 直传
+				// 并远端轮转 keep 份（凭据文件不进包；失败仅告警不改
+				// last_backup_at 口径——下轮拍新快照重传即可）。
+				scene = runR2UploadStep(ctx, st, cfg.DataDir, res.Path, keep, time.Now(), logger)
+			}
+			if scene != "" {
 				hub.Raise(ctx, notify.KeyBackupFailed, notify.SeverityError,
 					notify.BackupFailData{Scene: scene})
 			} else {

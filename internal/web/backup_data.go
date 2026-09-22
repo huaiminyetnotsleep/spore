@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/backup"
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 )
 
@@ -205,6 +206,8 @@ func (s *Server) handleAPIBackupExportAllJSON(w http.ResponseWriter, r *http.Req
 }
 
 // handleAPIBackupExportFull 导出数据库快照与所有 JSON 文件的全量 ZIP 归档。
+// 打包口径由 internal/backup.BuildFullZip 统一提供（与定时 R2 上传同一
+// 实现；手动导出不排除任何 JSON，保持历史全量口径）。
 func (s *Server) handleAPIBackupExportFull(w http.ResponseWriter, r *http.Request, _ session) {
 	const op = "api.backup.export.full"
 	ctx := r.Context()
@@ -234,93 +237,44 @@ func (s *Server) handleAPIBackupExportFull(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tmpZipName := tmpZip.Name()
-	defer func() {
-		_ = tmpZip.Close()
-		_ = os.Remove(tmpZipName)
-	}()
-
-	zw := zip.NewWriter(tmpZip)
-
-	// 1. 写入数据库快照
-	dbData, err := os.ReadFile(tmpDbName)
-	if err != nil {
-		s.log.Error("读取数据库快照失败", "op", op, "error", err.Error())
-		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "读取数据库快照失败")
-		return
-	}
-	if err := writeZipEntry(zw, branding.DatabaseFile, dbData); err != nil {
-		s.log.Error("写入数据库快照到 ZIP 失败", "op", op, "error", err.Error())
-		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "生成压缩包失败")
-		return
-	}
-
-	// 2. 写入全部 JSON
-	jsonFiles := s.scanDataJSONFiles()
-	manifestFiles := make([]string, 0, len(jsonFiles))
-	for _, jf := range jsonFiles {
-		filePath := filepath.Join(s.cfg.DataDir, jf.Name)
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			s.log.Warn("全量打包跳过不可读 JSON", "file", jf.Name, "error", err.Error())
-			continue
-		}
-		if err := writeZipEntry(zw, jf.Name, data); err != nil {
-			s.log.Error("写入 JSON 文件到 ZIP 失败", "op", op, "file", jf.Name, "error", err.Error())
-			writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "生成压缩包失败")
-			return
-		}
-		manifestFiles = append(manifestFiles, jf.Name)
-	}
-
-	// 3. 写入清单
-	manifest := map[string]any{
-		"app":        branding.DisplayName,
-		"type":       "full",
-		"created_at": s.now().UTC().Format(time.RFC3339),
-		"db":         branding.DatabaseFile,
-		"files":      manifestFiles,
-	}
-	if manifestData, err := json.MarshalIndent(manifest, "", "  "); err == nil {
-		_ = writeZipEntry(zw, "manifest.json", manifestData)
-	}
-
-	if err := zw.Close(); err != nil {
-		s.log.Error("完成全量 ZIP 归档失败", "op", op, "error", err.Error())
-		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "生成压缩包失败")
-		return
-	}
+	_ = tmpZip.Close()
+	defer os.Remove(tmpZipName)
 
 	now := s.now()
+	stats, err := backup.BuildFullZip(s.cfg.DataDir, tmpDbName, tmpZipName, nil, now)
+	if err != nil {
+		s.log.Error("生成全量 ZIP 归档失败", "op", op, "error", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "生成压缩包失败")
+		return
+	}
+
 	if raw, err := json.Marshal(now.UnixMilli()); err == nil {
 		if err := s.st.SetSetting(ctx, settingKeyLastBackupAt, string(raw)); err != nil {
 			s.log.Warn("记录最近备份时间失败", "error", err.Error())
 		}
 	}
 
-	zipFi, err := tmpZip.Stat()
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "读取备份文件状态失败")
-		return
-	}
-
 	filename := fmt.Sprintf("%s-full-backup-%s.zip", branding.StoragePrefix, now.In(s.tz(ctx)).Format("20060102-150405"))
 
 	s.audit(ctx, "backup.export.full", "store", map[string]any{
-		"count":       len(manifestFiles),
-		"db_bytes":    len(dbData),
-		"total_bytes": zipFi.Size(),
+		"count":       stats.Files,
+		"db_bytes":    stats.DBBytes,
+		"total_bytes": stats.TotalBytes,
 	})
 
-	if _, err := tmpZip.Seek(0, io.SeekStart); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "定位备份文件失败")
+	f, err := os.Open(tmpZipName)
+	if err != nil {
+		s.log.Error("打开全量备份包失败", "op", op, "error", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, string(apperr.CodeInternal), "读取备份文件状态失败")
 		return
 	}
+	defer f.Close()
 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
-	w.Header().Set("Content-Length", strconv.FormatInt(zipFi.Size(), 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(stats.TotalBytes, 10))
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, tmpZip)
+	_, _ = io.Copy(w, f)
 }
 
 // handleAPIBackupImportJSON 上传单个 JSON 文件并安全覆盖。

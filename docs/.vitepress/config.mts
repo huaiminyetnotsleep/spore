@@ -42,7 +42,8 @@ export default defineConfig({
           text: '使用指南',
           items: [
             { text: 'Bot 使用指南', link: '/guide/usage' },
-            { text: '云盘下载', link: '/guide/download' }
+            { text: '云盘下载', link: '/guide/download' },
+            { text: 'R2 备份配置', link: '/guide/r2-backup' }
           ]
         },
         {

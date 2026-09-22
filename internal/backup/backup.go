@@ -122,8 +122,13 @@ func checkDiskSpace(backupDir, dbPath string) error {
 	if fi, err := os.Stat(dbPath); err == nil {
 		want = int64(float64(fi.Size()) * 1.2)
 	}
+	return ensureFreeSpace(backupDir, want)
+}
+
+// ensureFreeSpace 是空间预检的共用实现（备份快照与 R2 临时 ZIP 共用）。
+func ensureFreeSpace(dir string, want int64) error {
 	var st unix.Statfs_t
-	if err := unix.Statfs(backupDir, &st); err != nil {
+	if err := unix.Statfs(dir, &st); err != nil {
 		// 空间探测失败不阻塞备份（备份本身失败会自然报错）
 		return nil
 	}
