@@ -378,6 +378,14 @@ CREATE INDEX IF NOT EXISTS idx_watch_events_channel ON watch_events(channel_id, 
 ALTER TABLE requests ADD COLUMN pin_ok INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE requests ADD COLUMN pin_total INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN auto_pin INTEGER NOT NULL DEFAULT 0;`,
+
+	// v21：绑定路由到 bot——channel_bindings.bot_id 记录绑定经哪台 bot
+	// 建立并通过硬校验（Bot /bind 指令路径为接收命令的 bot；Web 管理端
+	// 无 bot 上下文存 0）。副本/置顶投递按受理 bot 路由：bot_id > 0 的
+	// 绑定只接受该 bot 受理的任务（消息坐标 bot 私有，跨 bot 不可复制，
+	// 乱投必然失败）；bot_id = 0 为通配（历史行与 Web 绑定），任意受理
+	// bot 均尝试投递、失败优雅降级。
+	`ALTER TABLE channel_bindings ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

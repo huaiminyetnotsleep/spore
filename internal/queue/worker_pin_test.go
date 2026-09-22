@@ -129,3 +129,74 @@ func TestProcessPinTaskZeroBindingsHint(t *testing.T) {
 		t.Fatalf("应回复零绑定提示并带原消息链接，得到 %q", sender.texts())
 	}
 }
+
+// TestProcessPinTaskSkippedBindingsHint：路由不匹配（绑定属于其他受理 bot）
+// 的目标单独成行提示，不计入置顶失败。
+func TestProcessPinTaskSkippedBindingsHint(t *testing.T) {
+	s := openStore(t)
+	job, _ := newPinJobWithRequest(t, s)
+	sender := &fakeSender{}
+	copier := &fakeCopier{outcome: PinOutcome{OK: 1, Total: 1, Targets: []PinTarget{
+		{Label: "我的频道", Pinned: true},
+	}, Skipped: []string{"他bot的群"}}}
+	deps := Deps{
+		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
+		Sender:  sender,
+		Store:   s,
+		Copier:  copier,
+		Log:     testLog(),
+	}
+
+	Process(deps)(context.Background(), job)
+
+	var confirm string
+	for _, text := range sender.texts() {
+		if strings.Contains(text, "置顶") {
+			confirm = text
+		}
+	}
+	if confirm == "" ||
+		!strings.Contains(confirm, "另有 1 个绑定属于其他机器人") ||
+		!strings.Contains(confirm, "他bot的群") ||
+		strings.Contains(confirm, "置顶失败") {
+		t.Fatalf("确认文案应提示被路由跳过的绑定且不计入失败，得到 %q", sender.texts())
+	}
+}
+
+// TestProcessPinTaskOnlySkippedHint：全部绑定都被路由跳过（0/0 + Skipped）
+// 时给出点名提示，而不是"尚未绑定"。
+func TestProcessPinTaskOnlySkippedHint(t *testing.T) {
+	s := openStore(t)
+	job, r := newPinJobWithRequest(t, s)
+	sender := &fakeSender{}
+	copier := &fakeCopier{outcome: PinOutcome{Skipped: []string{"他bot的群"}}}
+	deps := Deps{
+		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
+		Sender:  sender,
+		Store:   s,
+		Copier:  copier,
+		Log:     testLog(),
+	}
+
+	Process(deps)(context.Background(), job)
+
+	got, err := s.GetRequest(context.Background(), r.ID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
+	}
+	if got.PinOK != 0 || got.PinTotal != 0 {
+		t.Fatalf("被跳过的绑定不计入置顶结果: %+v", got)
+	}
+	var confirm string
+	for _, text := range sender.texts() {
+		if strings.Contains(text, "置顶") {
+			confirm = text
+		}
+	}
+	if confirm == "" ||
+		!strings.Contains(confirm, "受理机器人名下暂无绑定") ||
+		!strings.Contains(confirm, "他bot的群") ||
+		strings.Contains(confirm, "尚未绑定") {
+		t.Fatalf("应提示路由归属而非零绑定，得到 %q", sender.texts())
+	}
+}

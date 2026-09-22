@@ -42,7 +42,7 @@
 
 ## 2. Schema 总览
 
-当前版本 v20 包含 **16 张业务表、16 个显式索引、4 个数据库外键**：
+当前版本 v21 包含 **16 张业务表、16 个显式索引、4 个数据库外键**：
 
 - 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
 - `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`）自动维护的内部表，**不属于业务 schema**。
@@ -209,6 +209,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `username` | TEXT | 可空 | 频道公开用户名（私有频道为空） |
 | `title` | TEXT | 可空 | 绑定时取得的频道标题 |
 | `bound_via` | TEXT | NOT NULL DEFAULT 'bot' | 绑定来源：`bot`（用户 `/bind`）/ `web`（管理端） |
+| `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 路由 bot（v21）：绑定经哪台 bot 建立并通过硬校验；仅它受理的任务投递副本/置顶到此；0 = 通配（Web 绑定与历史行），任意受理 bot 均尝试 |
 | `created_at` | INTEGER | NOT NULL | 绑定时间 |
 | `updated_at` | INTEGER | NOT NULL | 最近更新时间（绑定服务刷新标题/用户名时更新；未下发到 API DTO） |
 
@@ -530,3 +531,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v18 | 重建 `watch_sources` 补齐类型/受理 bot 字段；新增 `watch_events` 与频道索引 |
 | v19 | `watch_invite_requests` 私有邀请链接监听申请表（管理员路径 `user_id=0`，无外键）及活动状态、用户与 hash 索引 |
 | v20 | `requests.pin`、`requests.pin_ok`、`requests.pin_total`；`users.auto_pin`（自动置顶标记、结果回写与用户级偏好） |
+| v21 | `channel_bindings.bot_id`（绑定路由到 bot：仅该 bot 受理的任务投递；0 = 通配） |

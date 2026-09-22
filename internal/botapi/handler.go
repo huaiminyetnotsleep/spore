@@ -965,7 +965,12 @@ func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, c
 	if !requireEnabled(ctx, opt, snd, userID, chatID) {
 		return
 	}
-	bound, err := opt.Channels.BindBot(ctx, userID, args[1])
+	// 接收命令的 bot 是绑定的硬校验对象；其余 bot 未就绪在 advice 里点名。
+	var botID int64
+	if opt.Bot != nil {
+		botID = opt.Bot.Get().ID
+	}
+	bound, advice, err := opt.Channels.BindBot(ctx, userID, args[1], botID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			sendText(ctx, opt, snd, chatID, "该频道没有绑定在你的账号下。")
@@ -977,8 +982,13 @@ func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, c
 		return
 	}
 	success := bindSuccessText(bound)
-	// 置顶可行性软提示：频道缺「编辑消息」权限时置顶必然失败，绑定本身
-	// 不受阻（尽力而为查询，失败不提示）。
+	// 其余 bot 未就绪点名提示：不拦绑定，运行时由受理 bot 各自兜底
+	// （副本失败仅记日志，置顶失败在完工确认里逐目标可见）。
+	if advice != "" {
+		success += "\n\n" + advice
+	}
+	// 置顶可行性软提示：既有绑定目标缺置顶所需权限时提醒（尽力而为查询，
+	// 失败不提示）。
 	if hint := opt.Channels.PinCapabilityHint(ctx, userID); hint != "" {
 		success += "\n\n" + hint
 	}
@@ -986,12 +996,18 @@ func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, c
 }
 
 // bindSuccessText 渲染绑定成功文案：标题 + 用户名/ID + 后续行为说明。
+// 绑定带路由归属（经哪台 bot 建立）时注明投递规则：只有该 bot 受理的
+// 任务会副本/置顶到这个目标。
 func bindSuccessText(b store.ChannelBinding) string {
 	name := "@" + b.Username
 	if b.Username == "" {
 		name = fmt.Sprintf("ID %d", b.ChannelID)
 	}
-	return fmt.Sprintf("已绑定频道「%s」（%s）。\n之后每次提取的内容会在发给你之后同步发送到该频道；用 /unbind 可解除绑定。", b.Title, name)
+	text := fmt.Sprintf("已绑定频道「%s」（%s）。\n之后每次提取的内容会在发给你之后同步发送到该频道；用 /unbind 可解除绑定。", b.Title, name)
+	if b.BotID != 0 {
+		text += fmt.Sprintf("\n该绑定经机器人 %d 建立：只有由它受理的任务会同步副本与置顶到这里。", b.BotID)
+	}
+	return text
 }
 
 // handleUnbind 处理 /unbind <频道>：只能解除当前用户自己的绑定。
@@ -1051,6 +1067,10 @@ func handleMyChannels(ctx context.Context, opt Options, snd delivery.Sender, use
 			sb.WriteString("（@" + r.Username + "）")
 		} else {
 			sb.WriteString(fmt.Sprintf("（ID %d）", r.ChannelID))
+		}
+		// 路由归属：绑定经哪台 bot 建立，只有它受理的任务会投递到这里
+		if r.BotID != 0 {
+			sb.WriteString(fmt.Sprintf("\n🤖 经机器人 %d 投递", r.BotID))
 		}
 		// 纯文本 URL 由 Telegram 客户端自动渲染为可点击链接
 		sb.WriteString("\n🔗 ")

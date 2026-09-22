@@ -23,12 +23,16 @@ var boundViaSet = map[string]bool{
 
 // ChannelBinding 是 channel_bindings 表的行模型，主键为 Bot API 的频道
 // 数字 ID（-100 前缀）。同一频道只归属一个用户；时间字段为 Unix 毫秒。
+// BotID 是绑定路由：>0 表示绑定经该 bot 建立并通过硬校验，副本/置顶只接受
+// 它受理的任务；0 为通配（Web 绑定与 v21 之前的历史行），任意受理 bot 均
+// 尝试投递（失败优雅降级，不影响任务结果）。
 type ChannelBinding struct {
 	ChannelID int64
 	UserID    int64
 	Username  string // 频道公开用户名（无 @），私有频道为空
 	Title     string
 	BoundVia  string
+	BotID     int64
 	CreatedAt int64
 	UpdatedAt int64
 }
@@ -42,19 +46,19 @@ type ChannelBindingWithUser struct {
 }
 
 const selectChannelBinding = `SELECT channel_id, user_id,
-	COALESCE(username, ''), COALESCE(title, ''), bound_via,
+	COALESCE(username, ''), COALESCE(title, ''), bound_via, bot_id,
 	created_at, updated_at
 FROM channel_bindings`
 
 func scanChannelBinding(row scanner) (ChannelBinding, error) {
 	var b ChannelBinding
 	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.BoundVia,
-		&b.CreatedAt, &b.UpdatedAt)
+		&b.BotID, &b.CreatedAt, &b.UpdatedAt)
 	return b, err
 }
 
 const selectChannelBindingWithUser = `SELECT b.channel_id, b.user_id,
-	COALESCE(b.username, ''), COALESCE(b.title, ''), b.bound_via,
+	COALESCE(b.username, ''), COALESCE(b.title, ''), b.bound_via, b.bot_id,
 	b.created_at, b.updated_at,
 	COALESCE(u.username, ''), COALESCE(u.display_name, '')
 FROM channel_bindings b
@@ -63,12 +67,13 @@ LEFT JOIN users u ON u.id = b.user_id`
 func scanChannelBindingWithUser(row scanner) (ChannelBindingWithUser, error) {
 	var b ChannelBindingWithUser
 	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.BoundVia,
-		&b.CreatedAt, &b.UpdatedAt, &b.UserUsername, &b.UserDisplayName)
+		&b.BotID, &b.CreatedAt, &b.UpdatedAt, &b.UserUsername, &b.UserDisplayName)
 	return b, err
 }
 
 // UpsertChannelBinding 写入或刷新绑定。channel_id 是主键：
-//   - 同一用户重复绑定 → 更新 username/title/来源与 updated_at（幂等）；
+//   - 同一用户重复绑定 → 更新 username/title/来源/路由 bot 与 updated_at
+//     （幂等；换 bot 重绑即改路由归属）；
 //   - 同一频道已被其他用户绑定 → 返回 STORE_CONSTRAINT（调用方转译为
 //     "已被其他用户绑定"的业务拒绝），避免静默夺取归属。
 //
@@ -92,10 +97,10 @@ func (s *Store) UpsertChannelBinding(ctx context.Context, in ChannelBinding) (Ch
 		switch {
 		case errors.Is(err, ErrNotFound):
 			_, err := tx.ex.ExecContext(ctx, `INSERT INTO channel_bindings
-				(channel_id, user_id, username, title, bound_via, created_at, updated_at)
-				VALUES (?,?,?,?,?,?,?)`,
+				(channel_id, user_id, username, title, bound_via, bot_id, created_at, updated_at)
+				VALUES (?,?,?,?,?,?,?,?)`,
 				in.ChannelID, in.UserID, nullStr(in.Username), nullStr(in.Title),
-				in.BoundVia, in.CreatedAt, in.UpdatedAt)
+				in.BoundVia, in.BotID, in.CreatedAt, in.UpdatedAt)
 			if err != nil {
 				return wrapDB("写入频道绑定", err)
 			}
@@ -108,9 +113,9 @@ func (s *Store) UpsertChannelBinding(ctx context.Context, in ChannelBinding) (Ch
 				fmt.Errorf("频道 %d 已被其他用户绑定", in.ChannelID))
 		}
 		_, err = tx.ex.ExecContext(ctx, `UPDATE channel_bindings SET
-			username = ?, title = ?, bound_via = ?, updated_at = ?
+			username = ?, title = ?, bound_via = ?, bot_id = ?, updated_at = ?
 			WHERE channel_id = ?`,
-			nullStr(in.Username), nullStr(in.Title), in.BoundVia, in.UpdatedAt, in.ChannelID)
+			nullStr(in.Username), nullStr(in.Title), in.BoundVia, in.BotID, in.UpdatedAt, in.ChannelID)
 		if err != nil {
 			return wrapDB("更新频道绑定", err)
 		}

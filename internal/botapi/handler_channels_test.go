@@ -17,10 +17,12 @@ type fakeChannels struct {
 	mu           sync.Mutex
 	bindUser     []int64
 	bindTarget   []string
+	bindBotID    []int64
 	unbindUser   []int64
 	unbindTarget []string
 
 	bindResult   store.ChannelBinding
+	bindAdvice   string
 	bindErr      error
 	unbindResult store.ChannelBinding
 	unbindErr    error
@@ -28,12 +30,13 @@ type fakeChannels struct {
 	hintResult   string
 }
 
-func (f *fakeChannels) BindBot(_ context.Context, userID int64, target string) (store.ChannelBinding, error) {
+func (f *fakeChannels) BindBot(_ context.Context, userID int64, target string, botID int64) (store.ChannelBinding, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bindUser = append(f.bindUser, userID)
 	f.bindTarget = append(f.bindTarget, target)
-	return f.bindResult, f.bindErr
+	f.bindBotID = append(f.bindBotID, botID)
+	return f.bindResult, f.bindAdvice, f.bindErr
 }
 
 func (f *fakeChannels) UnbindBot(_ context.Context, userID int64, target string) (store.ChannelBinding, error) {

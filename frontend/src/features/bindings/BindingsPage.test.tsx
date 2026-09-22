@@ -32,6 +32,7 @@ function bindingRow(overrides: Partial<ChannelBindingRow> = {}): ChannelBindingR
     username: "mychan",
     title: "我的频道",
     bound_via: "bot",
+    bot_id: 0,
     created_at: 1757030400000,
     user_username: "alice",
     user_display_name: "Alice",

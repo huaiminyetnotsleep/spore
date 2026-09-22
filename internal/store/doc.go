@@ -1,5 +1,5 @@
 // Package store 提供 SQLite 持久化：连接管理、版本化迁移与各聚合 DAO。
-// 当前业务表（schema v20）：users / requests / usage_daily / audit_log /
+// 当前业务表（schema v21）：users / requests / usage_daily / audit_log /
 // events / settings / web_sessions / channel_bindings / join_requests /
 // joined_channels / system_metric_samples / cloud_uploads / dump_entries /
 // watch_sources / watch_events / watch_invite_requests。

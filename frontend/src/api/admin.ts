@@ -921,6 +921,8 @@ export interface ChannelBindingRow {
   title: string;
   /** bot（用户 /bind 指令）| web（管理端）。 */
   bound_via: string;
+  /** 路由 bot：仅它受理的任务投递到此；0 = 通配（Web 绑定/历史行）。 */
+  bot_id: number;
   /** 绑定时间（Unix 毫秒）。 */
   created_at: number;
   /** 所属用户的用户名（用户被硬删除后为空串）。 */

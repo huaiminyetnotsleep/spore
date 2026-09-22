@@ -52,8 +52,24 @@ func TestBindSupergroup(t *testing.T) {
 		svc.SetBots([]*tgbot.Bot{b})
 		_, err := svc.Bind(ctx, BindInput{UserID: 200, Target: "@mygroup", Via: store.BoundViaBot})
 		var ae *apperr.AppError
-		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelNotPostable {
-			t.Fatalf("缺置顶权限应返回 CHANNEL_NOT_POSTABLE，得到 %v", err)
+		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelNotPinnable {
+			t.Fatalf("缺置顶权限应返回 CHANNEL_NOT_PINNABLE，得到 %v", err)
+		}
+	})
+
+	t.Run("getChatMember 被拒（bot 不在群）拒绝", func(t *testing.T) {
+		// bot 不在群里时 Telegram 对 getChatMember 直接回 400（真机日志为
+		// 空描述 "Bad Request:"）；与缺置顶权限同一业务码。
+		b, _ := newPinRejectBot(t, supergroupChatJSON)
+		svc, _ := New(Options{Store: s, Log: testLog()})
+		svc.SetBots([]*tgbot.Bot{b})
+		_, err := svc.Bind(ctx, BindInput{UserID: 200, Target: "@mygroup", Via: store.BoundViaBot})
+		var ae *apperr.AppError
+		if !errors.As(err, &ae) || ae.Code != apperr.CodeChannelNotPinnable {
+			t.Fatalf("getChatMember 被拒应返回 CHANNEL_NOT_PINNABLE，得到 %v", err)
+		}
+		if !strings.Contains(err.Error(), "Bad Request") {
+			t.Fatalf("错误链应保留 API 原始错误供日志定位: %v", err)
 		}
 	})
 
@@ -68,6 +84,31 @@ func TestBindSupergroup(t *testing.T) {
 			t.Fatalf("话题群应返回 CHANNEL_TARGET_INVALID，得到 %v", err)
 		}
 	})
+}
+
+// newPinRejectBot 构造 getChat 正常、getChatMember 恒回 400 的测试 bot，
+// 模拟 bot 未进群时 Telegram 拒绝成员查询的形态。
+func newPinRejectBot(t *testing.T, chatJSON string) (*tgbot.Bot, *[]string) {
+	t.Helper()
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/getMe") {
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":12345,"is_bot":true,"first_name":"Spore","username":"spore_bot"}}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/getChat") {
+			_, _ = w.Write([]byte(`{"ok":true,"result":` + chatJSON + `}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request:"}`))
+	}))
+	t.Cleanup(srv.Close)
+	b, err := tgbot.New("12345:test-token", tgbot.WithServerURL(srv.URL))
+	if err != nil {
+		t.Fatalf("构造测试 Bot 失败: %v", err)
+	}
+	return b, &methods
 }
 
 // newCopyPinBot 构造可记录 copyMessages / pinChatMessage 调用的测试 bot；

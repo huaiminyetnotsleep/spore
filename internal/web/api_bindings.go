@@ -23,6 +23,7 @@ type apiChannelBindingRow struct {
 	Username        string `json:"username"`  // 频道公开用户名（无 @），私有频道为空
 	Title           string `json:"title"`     // 绑定时取得的频道标题
 	BoundVia        string `json:"bound_via"` // bot | web
+	BotID           int64  `json:"bot_id"`    // 路由 bot：仅它受理的任务投递到此；0 = 通配
 	CreatedAt       int64  `json:"created_at"`
 	UserUsername    string `json:"user_username"`
 	UserDisplayName string `json:"user_display_name"`
@@ -73,6 +74,7 @@ func (s *Server) handleAPIChannelBindingsList(w http.ResponseWriter, r *http.Req
 			Username:        row.Username,
 			Title:           row.Title,
 			BoundVia:        row.BoundVia,
+			BotID:           row.BotID,
 			CreatedAt:       row.CreatedAt,
 			UserUsername:    row.UserUsername,
 			UserDisplayName: row.UserDisplayName,

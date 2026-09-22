@@ -42,9 +42,11 @@ type Options struct {
 
 // Service 是频道绑定应用服务。Bot 客户端在装配层 Bot 就绪后经 SetBots 注入
 // （Bot 构造依赖长轮询链路，无法在 New 时给出），重复注入无害（重连重装配）。
-// 多机器人池：校验类操作（绑定/频道校验）对池内全部 bot 执行——任一 bot
-// 无法在频道发帖都会让副本投递残缺；副本投递按受理 bot 执行（消息坐标是
-// bot 私有的，跨 bot 不可复制）。
+// 多机器人池：用户绑定按 bot 逐台判定（硬校验只卡接收请求的 bot，其余未
+// 就绪仅点名提示，2026-09-22 由"全部达标才可绑定"的一刀切放宽——每个用户
+// 实际固定使用少数 bot，全 bot 达标是过重负担）；缓存频道校验仍对全部 bot
+// 执行（部署级共享目标）。副本投递按受理 bot 执行（消息坐标是 bot 私有的，
+// 跨 bot 不可复制）。
 type Service struct {
 	store *store.Store
 	log   *slog.Logger
@@ -110,7 +112,9 @@ func (s *Service) botFor(botID int64) *tgbot.Bot {
 }
 
 // verifyAllBotsCanPost 对池内全部 bot 逐一校验频道发帖权限；任一 bot 失败
-// 即整体失败（错误带 bot id，定位需要在哪个频道补设管理员）。
+// 即整体失败（错误带 bot id，定位需要在哪个频道补设管理员）。仅缓存频道
+// 配置（VerifyChannel）使用：缓存频道是部署级共享目标，任何受理 bot 都可能
+// 写入或复用副本，缺一不可。用户绑定走逐 bot 判定（BindWithAdvice）。
 func verifyAllBotsCanPost(ctx context.Context, bots []*tgbot.Bot, chatID int64) error {
 	for _, b := range bots {
 		if err := verifyBotCanPost(ctx, b, b.ID(), chatID); err != nil {
@@ -127,53 +131,81 @@ type BindInput struct {
 	UserID int64  // 绑定归属用户（Telegram 用户 ID）
 	Target string // 频道标识：@username / t.me 链接 / -100… 频道 ID
 	Via    string // store.BoundViaBot | store.BoundViaWeb
+	// BotID 是接收绑定请求的 bot（Bot 指令路径）；0 = Web 路径，硬校验
+	// 回退主 bot。只有这台 bot 不达标才拒绝绑定，其余 bot 未就绪仅点名提示。
+	BotID int64
 }
 
-// Bind 校验并写入绑定：解析目标 → 确认机器人在该频道有发言权限 →
-// 归属查重（他人已绑定则拒绝）→ 落库 → 审计。返回落库后的绑定记录。
+// Bind 校验并写入绑定：解析目标 → 确认接收 bot 有权限（逐 bot 判定）→
+// 归属查重（他人已绑定则拒绝）→ 落库 → 审计。不消费逐 bot 提示的调用方
+// （Web 管理端）用这个入口。
 func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding, error) {
+	bound, _, err := s.BindWithAdvice(ctx, in)
+	return bound, err
+}
+
+// BindWithAdvice 在 Bind 之上返回其余 bot 的未就绪提示（advice，可为空）。
+// 绑定校验按 bot 逐台判定：只有接收请求的 bot（in.BotID，Web 路径回退主
+// bot）不达标才拒绝——它不达标意味着用户当前使用的入口立即可见地不可用；
+// 其余 bot 只探测、不拦截，未就绪者在提示里点名（副本/置顶由受理 bot 执行，
+// 缺权限只影响它受理的那部分任务，运行时已有兜底：副本失败仅记日志不伤
+// 任务结果，置顶失败在完工确认里逐目标可见）。
+func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.ChannelBinding, string, error) {
 	if in.UserID <= 0 {
-		return store.ChannelBinding{}, apperr.New(apperr.CodeInternal, "频道绑定必须归属一个用户")
+		return store.ChannelBinding{}, "", apperr.New(apperr.CodeInternal, "频道绑定必须归属一个用户")
 	}
 	tgt, err := ParseChannelTarget(in.Target)
 	if err != nil {
-		return store.ChannelBinding{}, err
+		return store.ChannelBinding{}, "", err
 	}
 	bots := s.currentBots()
 	if len(bots) == 0 {
-		return store.ChannelBinding{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
+		return store.ChannelBinding{}, "", apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
 	}
 
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
 	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
 	if err != nil {
-		// Bot 看不见目标聊天基本等于"不在该频道/无权限"，统一归类为
-		// CHANNEL_NOT_POSTABLE，提示用户先把机器人拉进频道设为管理员
-		return store.ChannelBinding{}, apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		// Bot 看不见目标聊天基本等于"不在该频道/无权限"，统一归类提示用户
+		// 先把机器人拉进频道设为管理员
+		return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPostable, err)
 	}
 	// 类型门槛：频道与超级群组可绑定（副本 + 置顶的落点）；普通群、话题群
 	// 与其他类型一律拒绝——话题群的副本/置顶需要按话题路由，本期不支持。
 	switch chat.Type {
 	case models.ChatTypeChannel, models.ChatTypeSupergroup:
 	default:
-		return store.ChannelBinding{}, apperr.New(apperr.CodeChannelTargetInvalid,
+		return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelTargetInvalid,
 			fmt.Sprintf("目标不是频道或超级群组（type=%s）", chat.Type))
 	}
 	if chat.IsForum {
-		return store.ChannelBinding{}, apperr.New(apperr.CodeChannelTargetInvalid,
+		return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelTargetInvalid,
 			"话题群（论坛）暂不支持绑定")
 	}
-	// 多机器人池：任一 bot 无法发帖都会让频道副本残缺，全部通过才可绑定。
-	// 权限语义按类型区分——频道校验发帖权限（can_post_messages）；超级群组
-	// 校验置顶权限（can_pin_messages，can_post_messages 是频道作用域权限，
-	// 群管理员通常为 false，不能复用同一判定）。
+	// 硬校验只针对接收请求的 bot。权限语义按类型区分——频道校验发帖权限
+	// （can_post_messages）；超级群组校验置顶权限（can_pin_messages，
+	// can_post_messages 是频道作用域权限，群管理员通常为 false）。
+	hard := s.botFor(in.BotID)
 	if chat.Type == models.ChatTypeSupergroup {
-		if err := verifyAllBotsCanPin(vctx, bots, chat.ID); err != nil {
-			return store.ChannelBinding{}, err
+		if err := verifyBotCanPin(vctx, hard, hard.ID(), chat.ID); err != nil {
+			return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPinnable,
+				fmt.Errorf("机器人 %d 无法在群组 %d 置顶（需设为管理员并授予「置顶消息」权限）: %w",
+					hard.ID(), chat.ID, err))
 		}
-	} else if err := verifyAllBotsCanPost(vctx, bots, chat.ID); err != nil {
-		return store.ChannelBinding{}, err
+	} else if err := verifyBotCanPost(vctx, hard, hard.ID(), chat.ID); err != nil {
+		return store.ChannelBinding{}, "", apperr.Wrap(apperr.CodeChannelNotPostable,
+			fmt.Errorf("机器人 %d 无法在频道 %d 发帖（需设为频道管理员并有发帖权限）: %w",
+				hard.ID(), chat.ID, err))
+	}
+	advice := botReadinessAdvice(vctx, bots, hard, chat)
+	// 路由归属：Bot 路径记录接收命令的 bot（硬校验对象，绑定经它建立即
+	// 由它投递）；Web 路径（in.BotID=0）存 0 通配，任意受理 bot 均尝试
+	// 投递。若配置的 bot 已不在池中（botFor 回退主 bot），按实际校验的
+	// bot 记录，避免路由指向不存在的 bot。
+	routeBot := int64(0)
+	if in.BotID > 0 {
+		routeBot = hard.ID()
 	}
 
 	// 归属预检与上限校验：本人重绑为幂等更新不受限；新绑定受数量上限约束。
@@ -181,13 +213,13 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 	existing, err := s.store.GetChannelBinding(ctx, chat.ID)
 	switch {
 	case err == nil && existing.UserID != in.UserID:
-		return store.ChannelBinding{}, apperr.New(apperr.CodeChannelAlreadyBound, "")
+		return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelAlreadyBound, "")
 	case errors.Is(err, store.ErrNotFound):
 		if s.bindLimitReached(ctx, in.UserID) {
-			return store.ChannelBinding{}, apperr.New(apperr.CodeChannelBindLimit, "")
+			return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelBindLimit, "")
 		}
 	case err != nil:
-		return store.ChannelBinding{}, err
+		return store.ChannelBinding{}, "", err
 	}
 
 	bound, err := s.store.UpsertChannelBinding(ctx, store.ChannelBinding{
@@ -196,14 +228,15 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 		Username:  chat.Username,
 		Title:     chat.Title,
 		BoundVia:  in.Via,
+		BotID:     routeBot,
 	})
 	if err != nil {
 		// 并发窗口下仍可能撞约束（他人恰好先绑定）；FK 约束（用户不存在）
 		// 也归入此码，由调用方的用户校验兜底，不会误伤正常路径
 		if apperr.From(err).Code == apperr.CodeStoreConstraint {
-			return store.ChannelBinding{}, apperr.New(apperr.CodeChannelAlreadyBound, "")
+			return store.ChannelBinding{}, "", apperr.New(apperr.CodeChannelAlreadyBound, "")
 		}
-		return store.ChannelBinding{}, err
+		return store.ChannelBinding{}, "", err
 	}
 
 	_ = s.store.AppendAudit(ctx, store.AuditEntry{
@@ -214,12 +247,13 @@ func (s *Service) Bind(ctx context.Context, in BindInput) (store.ChannelBinding,
 			bound.UserID, bound.Username, bound.Title, bound.BoundVia),
 	})
 	s.log.Info("频道已绑定", "user_id", in.UserID, "channel_id", bound.ChannelID, "via", in.Via)
-	return bound, nil
+	return bound, advice, nil
 }
 
-// BindBot 是 Bot /bind 指令路径的便捷入口：等价于 Via=bot 的 Bind。
-func (s *Service) BindBot(ctx context.Context, userID int64, target string) (store.ChannelBinding, error) {
-	return s.Bind(ctx, BindInput{UserID: userID, Target: target, Via: store.BoundViaBot})
+// BindBot 是 Bot /bind 指令路径的便捷入口：等价于 Via=bot 的 BindWithAdvice。
+// botID 是接收命令的 bot（硬校验对象）；advice 是其余 bot 的未就绪点名提示。
+func (s *Service) BindBot(ctx context.Context, userID int64, target string, botID int64) (store.ChannelBinding, string, error) {
+	return s.BindWithAdvice(ctx, BindInput{UserID: userID, Target: target, Via: store.BoundViaBot, BotID: botID})
 }
 
 // UnbindBot 是 Bot /unbind 指令路径的便捷入口：只允许解绑自己的绑定。
@@ -387,6 +421,7 @@ func (s *Service) refreshBindings(ctx context.Context, rows []store.ChannelBindi
 			Username:  chat.Username,
 			Title:     chat.Title,
 			BoundVia:  r.BoundVia,
+			BotID:     r.BotID, // 刷新不改变路由归属
 		})
 		if err != nil {
 			s.log.Warn("持久化频道信息刷新失败",
@@ -420,6 +455,9 @@ func (s *Service) bindLimitReached(ctx context.Context, userID int64) bool {
 // CopyToChannels 把已发送给用户的消息复制到该用户绑定的频道（频道副本）。
 // botID 是任务的受理 bot：已发送消息坐标是该 bot 私有的（用户私聊内消息
 // ID 按 bot 隔离），必须由同一 bot 执行复制；未命中回退主 bot。
+// 投递按绑定路由过滤：bot_id > 0 的绑定只接受该 bot 受理的任务（绑定属于
+// 其他 bot 时跳过，pin 时计入 Skipped 供确认文案提示）；bot_id = 0 通配，
+// 任意受理 bot 均尝试。
 // pin 为 true 时对每个副本发送成功的目标静音置顶组首消息（CopyMessages
 // 保序，返回首条即对应私聊 caption 主消息的副本；客户端置顶组首会自动
 // 展开展示整个相册），并返回逐目标置顶结果——Label 为目标显示名（标题
@@ -439,6 +477,16 @@ func (s *Service) CopyToChannels(ctx context.Context, botID, userID, userChatID 
 		return outcome
 	}
 	for _, bnd := range bindings {
+		if bnd.BotID != 0 && bnd.BotID != botID {
+			// 路由不匹配：绑定属于其他 bot，由它受理的任务才会投递到此
+			s.log.Info("频道副本跳过：绑定属于其他机器人",
+				"user_id", userID, "channel_id", bnd.ChannelID,
+				"binding_bot", bnd.BotID, "accepting_bot", botID)
+			if pin {
+				outcome.Skipped = append(outcome.Skipped, bindingLabel(bnd))
+			}
+			continue
+		}
 		if pin {
 			outcome.Total++
 			outcome.Targets = append(outcome.Targets, queue.PinTarget{Label: bindingLabel(bnd)})
@@ -484,11 +532,12 @@ func bindingLabel(bnd store.ChannelBinding) string {
 	return strconv.FormatInt(bnd.ChannelID, 10)
 }
 
-// PinCapabilityHint 检查该用户全部绑定目标的置顶可行性并返回软提示文案：
-// 频道需要管理员授予「编辑消息」权限（can_edit_messages，置顶权限在频道
-// 里归属它而非 can_post_messages）；超级群组绑定已强制 can_pin_messages，
-// 天然可行。任一 bot 在任一目标缺权限即提示（任一受理 bot 都可能执行置顶）。
-// 全部可行返回空串。尽力而为：查询失败按可行处理，不阻塞绑定主流程。
+// PinCapabilityHint 检查该用户全部既有绑定目标的置顶可行性并返回软提示
+// 文案：逐绑定 × 逐 bot 探测——频道需要「编辑消息」权限（置顶权限在频道
+// 里归属它而非 can_post_messages），超级群组需要「置顶消息」权限；普通
+// 成员/非管理员同样不可置顶（绑定改为逐 bot 判定后不再保证全部 bot 达标）。
+// 任一 bot 在任一目标缺权限即提示。全部可行返回空串。尽力而为：查询失败
+// 按可行处理，不阻塞调用方。
 func (s *Service) PinCapabilityHint(ctx context.Context, userID int64) string {
 	bots := s.currentBots()
 	if len(bots) == 0 || userID <= 0 {
@@ -506,10 +555,14 @@ func (s *Service) PinCapabilityHint(ctx context.Context, userID int64) string {
 			if err != nil {
 				continue // 查询失败按可行处理，不阻塞绑定
 			}
-			if member.Type == models.ChatMemberTypeAdministrator && member.Administrator != nil &&
-				!member.Administrator.CanEditMessages && !member.Administrator.CanPinMessages {
-				return "注意：部分目标未授予「编辑消息」权限，置顶将不可用（可解绑后重新绑定并补授权限）。"
+			if member.Type == models.ChatMemberTypeOwner {
+				continue
 			}
+			if member.Type == models.ChatMemberTypeAdministrator && member.Administrator != nil &&
+				(member.Administrator.CanEditMessages || member.Administrator.CanPinMessages) {
+				continue
+			}
+			return "注意：部分绑定目标有机器人缺置顶所需权限（频道「编辑消息」/群组「置顶消息」），置顶将不可用（可解绑后重新绑定并补授权限）。"
 		}
 	}
 	return ""
@@ -563,25 +616,66 @@ func verifyBotCanPost(ctx context.Context, b *tgbot.Bot, botID, chatID int64) er
 	return apperr.New(apperr.CodeChannelNotPostable, "")
 }
 
-// verifyAllBotsCanPin 对池内全部 bot 逐一校验超级群组置顶权限：任一受理
-// bot 都可能执行副本与置顶，全部要求 Owner 或带 can_pin_messages 的管理员
-// （与频道绑定的 verifyAllBotsCanPost 同一整体失败语义）。
-func verifyAllBotsCanPin(ctx context.Context, bots []*tgbot.Bot, chatID int64) error {
+// botReadinessAdvice 对硬校验对象之外的其余 bot 逐台探测目标聊天能力，
+// 生成点名提示：每台未就绪 bot 一条（缺什么、影响面），全部就绪返回空串。
+// 区分三类影响面：不在群（副本与置顶均不可用）、缺发帖权限（频道，副本与
+// 置顶均不可用）、仅缺置顶权限（副本可用、置顶不可用）。
+func botReadinessAdvice(ctx context.Context, bots []*tgbot.Bot, hard *tgbot.Bot, chat *models.ChatFullInfo) string {
+	noun := "频道"
+	if chat.Type == models.ChatTypeSupergroup {
+		noun = "超级群组"
+	}
+	lines := make([]string, 0, len(bots))
 	for _, b := range bots {
-		if err := verifyBotCanPin(ctx, b, b.ID(), chatID); err != nil {
-			return apperr.Wrap(apperr.CodeChannelNotPostable,
-				fmt.Errorf("机器人 %d 无法在群组 %d 置顶（需全部机器人设为管理员并授予置顶权限）: %w",
-					b.ID(), chatID, err))
+		if b == hard {
+			continue
+		}
+		member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chat.ID, UserID: b.ID()})
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("机器人 %d 无法读取成员身份（通常是不在该%s），由它受理的任务无法同步副本或置顶", b.ID(), noun))
+			continue
+		}
+		switch member.Type {
+		case models.ChatMemberTypeOwner:
+			continue
+		case models.ChatMemberTypeAdministrator:
+			if member.Administrator == nil {
+				continue // 成员数据缺失按就绪处理，不误报
+			}
+			if chat.Type == models.ChatTypeSupergroup {
+				if !member.Administrator.CanPinMessages {
+					lines = append(lines, fmt.Sprintf("机器人 %d 缺「置顶消息」权限（副本可用，置顶不可用）", b.ID()))
+				}
+				continue
+			}
+			switch {
+			case !member.Administrator.CanPostMessages:
+				lines = append(lines, fmt.Sprintf("机器人 %d 缺「发帖」权限（由它受理的任务无法同步副本或置顶）", b.ID()))
+			case !member.Administrator.CanEditMessages:
+				lines = append(lines, fmt.Sprintf("机器人 %d 缺「编辑消息」权限（副本可用，置顶不可用）", b.ID()))
+			}
+		default:
+			// 超级群组普通成员/受限成员：能发消息（副本可用）但不能置顶；
+			// 其余形态（left/kicked，及频道的非管理员）按不在群处理。
+			if chat.Type == models.ChatTypeSupergroup &&
+				(member.Type == models.ChatMemberTypeMember || member.Type == models.ChatMemberTypeRestricted) {
+				lines = append(lines, fmt.Sprintf("机器人 %d 是普通成员、缺「置顶消息」权限（副本可用，置顶不可用）", b.ID()))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("机器人 %d 不在该%s（由它受理的任务无法同步副本或置顶）", b.ID(), noun))
 		}
 	}
-	return nil
+	if len(lines) == 0 {
+		return ""
+	}
+	return "提醒：" + strings.Join(lines, "；") + "。"
 }
 
 // verifyBotCanPin 确认机器人是该超级群组的创建者，或拥有置顶权限的管理员。
 func verifyBotCanPin(ctx context.Context, b *tgbot.Bot, botID, chatID int64) error {
 	member, err := b.GetChatMember(ctx, &tgbot.GetChatMemberParams{ChatID: chatID, UserID: botID})
 	if err != nil {
-		return apperr.Wrap(apperr.CodeChannelNotPostable, err)
+		return apperr.Wrap(apperr.CodeChannelNotPinnable, err)
 	}
 	switch member.Type {
 	case models.ChatMemberTypeOwner:
@@ -591,7 +685,7 @@ func verifyBotCanPin(ctx context.Context, b *tgbot.Bot, botID, chatID int64) err
 			return nil
 		}
 	}
-	return apperr.New(apperr.CodeChannelNotPostable, "")
+	return apperr.New(apperr.CodeChannelNotPinnable, "")
 }
 
 func actorOf(via string, userID int64) string {
