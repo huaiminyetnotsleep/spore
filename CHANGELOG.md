@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.27.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.26.0...v1.27.0) (2026-09-22)
+
+
+### Features
+
+* **apperr:** 报错提示优化（主体指代、分类细分、根因持久化与置顶指引） ([83f1dae](https://github.com/huaiminyetnotsleep/spore/commit/83f1dae284598d1c718f1a2377712c9344e0aaf9))
+* **binding:** /bind 支持私有邀请链接 ([496420e](https://github.com/huaiminyetnotsleep/spore/commit/496420eb8de0b794748ac8e06aa17ae32fed00e7))
+* **bot:** 帮助文案重写（HTML 样式、邀请链接同步、/download 按权限展示） ([6596a9a](https://github.com/huaiminyetnotsleep/spore/commit/6596a9a62be04b1e728f42452dae91b1872c9017))
+
 ## [1.26.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.25.0...v1.26.0) (2026-09-22)
 
 
