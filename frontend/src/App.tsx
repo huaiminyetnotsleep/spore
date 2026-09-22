@@ -55,12 +55,19 @@ const routeByKey = new Map<RouteKey, (typeof routeMeta)[number]>(
   routeMeta.map((route) => [route.key, route]),
 );
 
-function Navigation() {
+function Navigation({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed?: boolean;
+  onNavigate?: () => void;
+}) {
   const location = useLocation();
   const activeRoute = getActiveNavRoute(location.pathname);
   const activeKey = activeRoute?.key;
-  // 默认只展开工作台，其他业务域由用户主动展开。
-  const defaultOpenKeys = ["workspace"];
+  // 仅在侧边栏展开时保留展开项；侧栏收起（如移动端初始加载或折叠态）时将 openKeys 置空，
+  // 杜绝 Ant Design Menu 在 collapsed 态下将 defaultOpenKeys 作为浮层弹出（.ant-menu-submenu-popup）。
+  const [openKeys, setOpenKeys] = useState<string[]>(["workspace"]);
 
   const menuItems: MenuProps["items"] = useMemo(
     () =>
@@ -94,7 +101,13 @@ function Navigation() {
     <Menu
       mode="inline"
       selectedKeys={activeKey ? [activeKey] : []}
-      defaultOpenKeys={defaultOpenKeys}
+      openKeys={collapsed ? [] : openKeys}
+      onOpenChange={(keys) => {
+        if (!collapsed) {
+          setOpenKeys(keys);
+        }
+      }}
+      onClick={() => onNavigate?.()}
       items={menuItems}
       aria-label="主导航"
     />
@@ -132,6 +145,13 @@ function AppLayout() {
     setIsMobile(broken);
     setSiderCollapsed(broken);
   };
+
+  // 移动端在路由切换后自动收起侧边栏抽屉导航
+  useEffect(() => {
+    if (isMobile) {
+      setSiderCollapsed(true);
+    }
+  }, [location.pathname, isMobile]);
   // 会话引导：交付当前用户并缓存会话级 CSRF token（写请求经其回传）。
   const session = useQuery({
     queryKey: ["session", "bootstrap"],
@@ -189,11 +209,26 @@ function AppLayout() {
         onBreakpoint={handleSiderBreakpoint}
         onCollapse={setSiderCollapsed}
       >
-        <NavLink className="brand" to="/">
+        <NavLink
+          className="brand"
+          to="/"
+          onClick={() => {
+            if (isMobile) {
+              setSiderCollapsed(true);
+            }
+          }}
+        >
           <img className="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
           <span>{name}</span>
         </NavLink>
-        <Navigation />
+        <Navigation
+          collapsed={siderCollapsed}
+          onNavigate={() => {
+            if (isMobile) {
+              setSiderCollapsed(true);
+            }
+          }}
+        />
       </Sider>
       {isMobile && !siderCollapsed ? (
         <button

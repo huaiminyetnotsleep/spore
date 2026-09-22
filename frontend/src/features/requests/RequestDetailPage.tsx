@@ -44,7 +44,7 @@ import { PageScaffold, PageSection, ResponsiveActionBar } from "../shared/PageLa
 import { DetailGate } from "../shared/PageStates";
 import { RequestProgress } from "./RequestProgress";
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
 
 function sourceMediaDCs(ids: number[] | undefined) {
   return ids?.length ? ids.map((id) => `DC ${id}`).join("、") : "—";
@@ -229,9 +229,9 @@ export function RequestDetailPage() {
                     <Tag color="red">{errorCodeLabel(detail.error_code)}</Tag>
                     <Text type="secondary">（{detail.error_code}：{detail.error_text}）</Text>
                     {detail.error_detail ? (
-                      <Text type="secondary" style={{ display: "block" }}>
+                      <Paragraph type="secondary" className="layout-margin-bottom-0">
                         根因：{detail.error_detail}
-                      </Text>
+                      </Paragraph>
                     ) : null}
                   </Descriptions.Item>
                 ) : null}

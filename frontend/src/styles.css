@@ -31,10 +31,17 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -49,8 +56,42 @@ body {
 
 .app-sider {
   height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
+  overflow-x: hidden;
   border-inline-end: 1px solid var(--color-border-secondary);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* 导航菜单底部预留充足占位空间，杜绝菜单展开时最后一项目触底 */
+.app-sider .ant-menu {
+  flex: 1 0 auto;
+  padding-bottom: 48px;
+}
+
+/* 侧边栏专属细致平滑滚动条 */
+.app-sider::-webkit-scrollbar {
+  width: 4px;
+}
+
+.app-sider::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-sider::-webkit-scrollbar-thumb {
+  background: rgb(0 0 0 / 14%);
+  border-radius: 4px;
+}
+
+.app-sider::-webkit-scrollbar-thumb:hover {
+  background: rgb(0 0 0 / 28%);
 }
 
 .app-sider.ant-layout-sider-collapsed {
@@ -74,6 +115,7 @@ body {
 
 .brand {
   display: flex;
+  flex-shrink: 0;
   gap: 0.65rem;
   align-items: center;
   height: 64px;
@@ -83,6 +125,10 @@ body {
   font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg-surface);
 }
 
 .brand-mark {
@@ -1049,6 +1095,36 @@ body {
   font-size: 12px;
 }
 
+/* 备份卡片样式（替代内联 style） */
+.backup-card {
+  height: 100%;
+}
+
+.backup-card__desc {
+  min-height: 40px;
+  margin: 0;
+}
+
+.backup-card__icon--blue {
+  font-size: 18px;
+  color: var(--color-primary);
+}
+
+.backup-card__icon--purple {
+  font-size: 18px;
+  color: #722ed1;
+}
+
+.backup-card__icon--cyan {
+  font-size: 18px;
+  color: #13c2c2;
+}
+
+.backup-card__icon--orange {
+  font-size: 18px;
+  color: var(--color-warning);
+}
+
 /* 登录页（/admin/login）：独立于主布局的居中卡片，不渲染侧边栏/头部 */
 .login-shell {
   display: flex;
@@ -1140,9 +1216,23 @@ body {
   width: 100%;
 }
 
+/* 列表筛选控件（草稿态 + 「查询」按钮模式）的最小宽度 */
+.filter-select {
+  min-width: 160px;
+}
+
+.filter-input {
+  min-width: 200px;
+}
+
+/* 表格批量操作条（选中行后出现） */
+.batch-action-bar {
+  margin-bottom: 12px;
+}
+
 /* ===== 响应式断点（同一断点的规则统一收敛在此，按分区注释组织） ===== */
 /* 说明：断点内的覆盖规则必须位于被覆盖的基础规则之后（文件末尾），相对顺序
-   保持与原分散写法一致；窄屏判定不变（平板 991px / 手机 575px）。 */
+   保持与原分散写法一致；窄屏判定（平板 991px / 小平板 768px / 手机 575px / 超窄 390px）。 */
 @media (max-width: 991px) {
   /* 应用壳：侧栏抽屉化悬浮，头部保持在遮罩之上可点 */
   .app-sider {
@@ -1151,7 +1241,18 @@ body {
     inset-inline-start: 0;
     z-index: 1001;
     height: 100vh;
+    height: 100dvh;
     box-shadow: 4px 0 16px rgb(0 0 0 / 12%);
+  }
+
+  .app-sider .ant-menu {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app-sider.ant-layout-sider-collapsed {
+    box-shadow: none;
+    pointer-events: none;
+    visibility: hidden;
   }
 
   .app-header {
@@ -1196,18 +1297,66 @@ body {
   }
 }
 
+@media (max-width: 768px) {
+  /* PageSection Card Header 允许自动换行，避免 extra 挤压标题 */
+  .page-section > .ant-card-head .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 0;
+  }
+
+  .page-section > .ant-card-head .ant-card-head-title {
+    flex: 1 0 100%;
+    padding: 0;
+  }
+
+  .page-section > .ant-card-head .ant-card-extra {
+    flex: 1 0 100%;
+    margin-inline-start: 0;
+    padding: 0;
+  }
+
+  .page-section > .ant-card-head .ant-card-extra > .ant-space {
+    width: 100%;
+  }
+
+  .app-header-breadcrumb .ant-breadcrumb-separator {
+    margin: 0 4px;
+  }
+
+  /* 防止 iOS Safari 在输入框获得焦点时强制放大整屏导致字号异常与视口错位 */
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-affix-wrapper input,
+  .ant-select-selection-search-input,
+  .ant-picker-input > input,
+  .ant-input-number-input {
+    font-size: 16px !important;
+  }
+}
+
 @media (max-width: 575px) {
-  /* 页面骨架：标题与操作区纵向堆叠，操作按钮铺满 */
+  /* 页面骨架：内边距微调以提供更大内容宽度 */
   .page-content {
-    padding: 16px;
+    padding: 16px 12px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-header {
-    padding: 0 16px;
+    padding: 0 12px;
+  }
+
+  /* 面包屑在小屏只保留当前页面标题，防止挤占头像操作 */
+  .app-header-breadcrumb > ol > li:not(:last-child) {
+    display: none;
   }
 
   .page-scaffold__header {
     flex-direction: column;
+  }
+
+  .page-scaffold__title.ant-typography {
+    font-size: 22px;
   }
 
   .page-scaffold__actions,
@@ -1222,14 +1371,13 @@ body {
     flex: 1 1 auto;
   }
 
-  /* 筛选区：字段纵向铺满（收敛 .field-width-* 桌面宽度） */
+  /* 筛选区：字段纵向铺满（收敛 .field-width-* 与 .filter-* 桌面宽度） */
   .filter-bar,
   .filter-bar__fields {
     flex-direction: column;
     align-items: stretch;
   }
 
-  /* 列方向下 480px flex-basis 会变成高度，把字段容器撑出一大片空白 */
   .filter-bar__fields {
     flex: 0 0 auto;
   }
@@ -1239,7 +1387,95 @@ body {
   .filter-bar .ant-picker,
   .filter-bar .ant-select,
   .filter-bar .ant-input-affix-wrapper,
-  .filter-bar .ant-input-number {
+  .filter-bar .ant-input-number,
+  .filter-select,
+  .filter-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* 指标卡移动端 2 列自适应，带复合指标卡片独占整行 */
+  .metric-grid {
+    gap: 10px;
+  }
+
+  .metric-grid--2,
+  .metric-grid--3,
+  .metric-grid--4,
+  .metric-grid--5,
+  .metric-grid--6,
+  .metric-grid--7,
+  .metric-grid--8 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-card {
+    padding: 10px 12px;
+  }
+
+  .metric-card__value {
+    font-size: 22px;
+  }
+
+  .metric-card:has(.metric-card__stats) {
+    grid-column: 1 / -1;
+  }
+
+  /* 表格在移动端内边距与分页器居中紧凑化 */
+  .ant-table-cell {
+    padding: 10px 8px !important;
+    font-size: 13px;
+  }
+
+  .ant-table-wrapper .ant-table-pagination.ant-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin: 12px 0 !important;
+  }
+
+  .ant-table-wrapper .ant-table-pagination-right {
+    justify-content: center;
+  }
+
+  .ant-table-wrapper .ant-table-pagination .ant-pagination-options {
+    display: none;
+  }
+
+  /* 行操作触控热区优化 */
+  .row-actions {
+    gap: 4px;
+  }
+
+  .row-actions__action.ant-btn-sm {
+    min-height: 32px;
+    padding-inline: 6px;
+    font-size: 13px;
+  }
+
+  .row-actions__more.ant-btn-sm {
+    min-height: 32px;
+    min-width: 32px;
+  }
+
+  /* 批量操作条移动端纵向堆叠 */
+  .batch-action-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .batch-action-bar > .ant-typography {
+    margin-bottom: 2px;
+  }
+
+  .batch-action-bar .ant-segmented {
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .batch-action-bar .ant-btn {
     width: 100%;
   }
 
@@ -1248,9 +1484,20 @@ body {
     grid-template-columns: 1fr;
   }
 
-  /* 云盘目的地键值编辑器 → 纵向 */
+  /* 云盘目的地卡片与键值编辑器 */
+  .cloud-dest-card__head {
+    gap: 8px;
+  }
+
+  .cloud-dest-card__actions {
+    width: 100%;
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .cloud-option-row {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .cloud-option-row__key {
@@ -1258,7 +1505,49 @@ body {
     width: 100%;
   }
 
-  /* 指标卡手机宽度单列 */
+  .cloud-option-row__value {
+    width: 100%;
+  }
+
+  .cloud-option-row .ant-btn {
+    align-self: flex-end;
+  }
+
+  /* FormModal 与抽屉移动端自适应 */
+  .ant-modal {
+    max-width: calc(100vw - 24px) !important;
+    margin: 12px auto !important;
+    top: 16px !important;
+    padding-bottom: 16px !important;
+  }
+
+  .ant-modal .ant-modal-content {
+    padding: 16px 14px;
+  }
+
+  .ant-drawer-content-wrapper {
+    max-width: 100vw !important;
+  }
+
+  /* 描述列表内容在移动端防止长链接、Hash 溢出 */
+  .ant-descriptions-item-content {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  /* 通知策略矩阵允许横向滚动且触控顺滑 */
+  .notification-policy-matrix {
+    padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 390px) {
+  /* 极窄屏（如 iPhone SE / 13 mini）下状态卡与指标卡降为单列 */
+  .status-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .metric-grid--2,
   .metric-grid--3,
   .metric-grid--4,
@@ -1268,18 +1557,4 @@ body {
   .metric-grid--8 {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-/* 列表筛选控件（草稿态 + 「查询」按钮模式）的最小宽度 */
-.filter-select {
-  min-width: 160px;
-}
-
-.filter-input {
-  min-width: 200px;
-}
-
-/* 表格批量操作条（选中行后出现） */
-.batch-action-bar {
-  margin-bottom: 12px;
 }

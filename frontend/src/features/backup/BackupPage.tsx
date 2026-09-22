@@ -415,13 +415,13 @@ export function BackupPage() {
               {/* 四张操作卡片：全量导出、所有 JSON、数据库、多级单项 JSON 导出 */}
               <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} lg={6}>
-                  <Card size="small" hoverable style={{ height: "100%" }}>
+                  <Card size="small" hoverable className="backup-card">
                     <Space direction="vertical" size={8} className="field-width-full">
                       <Space>
-                        <FileZipOutlined style={{ fontSize: 18, color: "#1677ff" }} />
+                        <FileZipOutlined className="backup-card__icon--blue" />
                         <Text strong>全量完整备份</Text>
                       </Space>
-                      <Paragraph type="secondary" style={{ minHeight: 40, margin: 0 }}>
+                      <Paragraph type="secondary" className="backup-card__desc">
                         打包一致性数据库快照与全部 JSON 配置文件为 ZIP。
                       </Paragraph>
                       <Button
@@ -445,13 +445,13 @@ export function BackupPage() {
                 </Col>
 
                 <Col xs={24} sm={12} lg={6}>
-                  <Card size="small" hoverable style={{ height: "100%" }}>
+                  <Card size="small" hoverable className="backup-card">
                     <Space direction="vertical" size={8} className="field-width-full">
                       <Space>
-                        <FileZipOutlined style={{ fontSize: 18, color: "#722ed1" }} />
+                        <FileZipOutlined className="backup-card__icon--purple" />
                         <Text strong>所有 JSON 归档</Text>
                       </Space>
-                      <Paragraph type="secondary" style={{ minHeight: 40, margin: 0 }}>
+                      <Paragraph type="secondary" className="backup-card__desc">
                         打包 data/ 下所有 JSON 文件并附带校验清单。
                       </Paragraph>
                       <Button
@@ -467,13 +467,13 @@ export function BackupPage() {
                 </Col>
 
                 <Col xs={24} sm={12} lg={6}>
-                  <Card size="small" hoverable style={{ height: "100%" }}>
+                  <Card size="small" hoverable className="backup-card">
                     <Space direction="vertical" size={8} className="field-width-full">
                       <Space>
-                        <DatabaseOutlined style={{ fontSize: 18, color: "#13c2c2" }} />
+                        <DatabaseOutlined className="backup-card__icon--cyan" />
                         <Text strong>业务主数据库</Text>
                       </Space>
-                      <Paragraph type="secondary" style={{ minHeight: 40, margin: 0 }}>
+                      <Paragraph type="secondary" className="backup-card__desc">
                         导出单一 SQLite 快照文件（spore-backup-*.db）。
                       </Paragraph>
                       <Button
@@ -496,17 +496,17 @@ export function BackupPage() {
                 </Col>
 
                 <Col xs={24} sm={12} lg={6}>
-                  <Card size="small" hoverable style={{ height: "100%" }}>
+                  <Card size="small" hoverable className="backup-card">
                     <Space direction="vertical" size={8} className="field-width-full">
                       <Space>
-                        <FileTextOutlined style={{ fontSize: 18, color: "#fa8c16" }} />
+                        <FileTextOutlined className="backup-card__icon--orange" />
                         <Text strong>单个 JSON 导出</Text>
                       </Space>
-                      <Paragraph type="secondary" style={{ minHeight: 40, margin: 0 }}>
+                      <Paragraph type="secondary" className="backup-card__desc">
                         从下拉列表中选择目标配置文件，点击按钮下载。
                       </Paragraph>
                       <Select
-                        style={{ width: "100%" }}
+                        className="field-width-full"
                         placeholder="选择要导出的 JSON 文件"
                         value={selectedExportJson}
                         onChange={(val) => setSelectedExportJson(val)}
@@ -655,7 +655,7 @@ export function BackupPage() {
                                   <Button icon={<UploadOutlined />}>选择 JSON 文件</Button>
                                 </Upload>
                                 <Select
-                                  style={{ width: 240 }}
+                                  className="field-width-240"
                                   placeholder="选择或输入目标文件名"
                                   value={singleJsonTarget || undefined}
                                   onChange={(val) => setSingleJsonTarget(val)}
@@ -672,7 +672,7 @@ export function BackupPage() {
                                   placeholder="或输入自定义文件名 (如 custom.json)"
                                   value={singleJsonTarget}
                                   onChange={(e) => setSingleJsonTarget(e.target.value)}
-                                  style={{ width: 220 }}
+                                  className="field-width-200"
                                   disabled={uploadSingleJson.pending}
                                 />
                                 <Button
@@ -914,7 +914,7 @@ export function BackupPage() {
                             <Button icon={<UploadOutlined />}>选择云盘 ZIP 备份</Button>
                           </Upload>
                           <Input.Password
-                            style={{ width: 200 }}
+                            className="field-width-200"
                             autoComplete="new-password"
                             aria-label="备份密码"
                             placeholder="输入解密密码"
