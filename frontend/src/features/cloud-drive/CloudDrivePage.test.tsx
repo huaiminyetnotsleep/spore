@@ -14,8 +14,11 @@ import { ApiError } from "../../api/client";
 import {
   fetchCloudDrive,
   fetchCloudDriveBackupStatus,
+  fetchUsers,
   type CloudDriveBackupStatus,
   type CloudDriveView,
+  type ListEnvelope,
+  type UserRow,
 } from "../../api/admin";
 import {
   cancelCloudDriveBackupPending,
@@ -24,6 +27,7 @@ import {
   importCloudDriveBackup,
   rollbackCloudDriveBackup,
   saveCloudDrive,
+  setUserCloudDownload,
   testCloudDrive,
 } from "../../api/mutations";
 import { CloudDrivePage } from "./CloudDrivePage";
@@ -34,6 +38,7 @@ vi.mock("../../api/admin", async () => {
     ...actual,
     fetchCloudDrive: vi.fn(),
     fetchCloudDriveBackupStatus: vi.fn(),
+    fetchUsers: vi.fn(),
   };
 });
 vi.mock("../../api/mutations", async () => {
@@ -46,6 +51,7 @@ vi.mock("../../api/mutations", async () => {
     importCloudDriveBackup: vi.fn(),
     rollbackCloudDriveBackup: vi.fn(),
     saveCloudDrive: vi.fn(),
+    setUserCloudDownload: vi.fn(),
     testCloudDrive: vi.fn(),
   };
 });
@@ -59,6 +65,8 @@ const importCloudDriveBackupMock = vi.mocked(importCloudDriveBackup);
 const rollbackCloudDriveBackupMock = vi.mocked(rollbackCloudDriveBackup);
 const saveCloudDriveMock = vi.mocked(saveCloudDrive);
 const testCloudDriveMock = vi.mocked(testCloudDrive);
+const fetchUsersMock = vi.mocked(fetchUsers);
+const setUserCloudDownloadMock = vi.mocked(setUserCloudDownload);
 
 function backupStatus(overrides: Partial<CloudDriveBackupStatus> = {}): CloudDriveBackupStatus {
   return {
@@ -84,6 +92,29 @@ function cloudView(overrides: Partial<CloudDriveView> = {}): CloudDriveView {
     ],
     ...overrides,
   };
+}
+
+function userRow(overrides: Partial<UserRow> = {}): UserRow {
+  return {
+    id: 7,
+    username: "alice",
+    display_name: "Alice",
+    status: "enabled",
+    is_owner: false,
+    note: "",
+    last_used_at: 0,
+    total_requests: 0,
+    has_total_requests: true,
+    cloud_download: 0,
+    effective_cloud_download: false,
+    auto_pin: false,
+    source_bot_id: 0,
+    ...overrides,
+  };
+}
+
+function usersEnvelope(items: UserRow[]): ListEnvelope<UserRow> {
+  return { items, page: 1, page_size: 20, total: items.length, total_pages: 1 };
 }
 
 function renderPage() {
@@ -144,6 +175,10 @@ describe("云盘下载设置页", () => {
     rollbackCloudDriveBackupMock.mockReset().mockResolvedValue({ ok: true });
     saveCloudDriveMock.mockReset().mockResolvedValue({ ok: true, config: cloudView() });
     testCloudDriveMock.mockReset();
+    fetchUsersMock.mockReset().mockResolvedValue(usersEnvelope([userRow()]));
+    setUserCloudDownloadMock
+      .mockReset()
+      .mockResolvedValue({ ok: true, cloud_download: 1, effective_cloud_download: true });
   });
 
   afterEach(() => {
@@ -669,5 +704,111 @@ describe("云盘下载设置页", () => {
 
     expect(await screen.findByText("数据加载失败")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重\s*试/ })).toBeInTheDocument();
+  });
+
+  it("用户云盘配置：默认收起且不请求用户列表", async () => {
+    renderPage();
+    await pageReady();
+
+    expect(screen.getByText("用户云盘配置")).toBeInTheDocument();
+    expect(fetchUsersMock).not.toHaveBeenCalled();
+    // 未展开时面板内容不渲染
+    expect(screen.queryByText(/完整搜索与用户管理见/)).not.toBeInTheDocument();
+  });
+
+  it("用户云盘配置：展开后拉取并回显三态与生效提示", async () => {
+    fetchUsersMock.mockResolvedValue(
+      usersEnvelope([
+        userRow({ id: 7, username: "alice", cloud_download: 1, effective_cloud_download: true }),
+        userRow({ id: 8, username: "bob", cloud_download: 0, effective_cloud_download: false }),
+        userRow({ id: 9, username: "carol", display_name: "", cloud_download: 2 }),
+        userRow({
+          id: 1,
+          username: "",
+          display_name: "Owner",
+          is_owner: true,
+          cloud_download: 0,
+          effective_cloud_download: true,
+        }),
+      ]),
+    );
+    renderPage();
+    await pageReady();
+
+    fireEvent.click(screen.getByText("用户云盘配置"));
+
+    expect(await screen.findByText(/@alice/)).toBeInTheDocument();
+    expect(fetchUsersMock).toHaveBeenCalled();
+    // 三态回显：跟随默认（bob 与 owner）、允许（alice）、拒绝（carol）
+    expect(screen.getAllByTitle("跟随角色默认")).toHaveLength(2);
+    expect(screen.getByTitle("允许")).toBeInTheDocument();
+    expect(screen.getByTitle("拒绝")).toBeInTheDocument();
+    // raw=0 的行展示角色默认的生效值
+    expect(screen.getByText("生效：拒绝")).toBeInTheDocument();
+    expect(screen.getByText("生效：允许")).toBeInTheDocument();
+  });
+
+  it("用户云盘配置：行内切换权限直接提交并提示成功", async () => {
+    fetchUsersMock.mockResolvedValue(usersEnvelope([userRow({ id: 7, cloud_download: 1 })]));
+    setUserCloudDownloadMock.mockResolvedValue({
+      ok: true,
+      cloud_download: 2,
+      effective_cloud_download: false,
+    });
+    const invalidateSpy = renderPage();
+    await pageReady();
+
+    fireEvent.click(screen.getByText("用户云盘配置"));
+    const selector = (await screen.findByRole("combobox", { name: "云盘下载权限 7" }))
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selector");
+    expect(selector).not.toBeNull();
+    fireEvent.mouseDown(selector as HTMLElement);
+    // antd 的 role=option 命中可访问性副本（无事件处理），
+    // 交互需点 .ant-select-item-option（title 为 label）
+    const option = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.ant-select-item-option[title="拒绝"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.click(option);
+
+    await waitFor(() => expect(setUserCloudDownloadMock).toHaveBeenCalledWith(7, 2));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["users"] })),
+    );
+    expect(
+      await screen.findByText("云盘下载权限已更新：该用户使用 /download 将被拒绝。"),
+    ).toBeInTheDocument();
+  });
+
+  it("用户云盘配置：失败展示服务端受控文案且不提示成功", async () => {
+    fetchUsersMock.mockResolvedValue(usersEnvelope([userRow({ id: 7, cloud_download: 1 })]));
+    setUserCloudDownloadMock.mockRejectedValue(
+      new ApiError("cloud_download 取值必须为 0（跟随默认）、1（允许）或 2（拒绝）。", 400, "BAD_REQUEST"),
+    );
+    renderPage();
+    await pageReady();
+
+    fireEvent.click(screen.getByText("用户云盘配置"));
+    const selector = (await screen.findByRole("combobox", { name: "云盘下载权限 7" }))
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selector");
+    expect(selector).not.toBeNull();
+    fireEvent.mouseDown(selector as HTMLElement);
+    // 同上：点击可见的 .ant-select-item-option 而非可访问性副本
+    const option = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.ant-select-item-option[title="拒绝"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.click(option);
+
+    expect(
+      await screen.findByText(
+        "cloud_download 取值必须为 0（跟随默认）、1（允许）或 2（拒绝）。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/云盘下载权限已更新/)).not.toBeInTheDocument();
   });
 });

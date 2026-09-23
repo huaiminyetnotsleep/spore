@@ -19,11 +19,13 @@ import {
   Alert,
   AutoComplete,
   Button,
+  Collapse,
   Descriptions,
   Form,
   Input,
   Modal,
   Radio,
+  Select,
   Space,
   Switch,
   Table,
@@ -31,11 +33,15 @@ import {
   Typography,
   Upload,
 } from "antd";
+import type { ColumnsType } from "antd/es/table";
+import { Link } from "react-router-dom";
 
 import {
   fetchCloudDrive,
   fetchCloudDriveBackupStatus,
+  fetchUsers,
   type CloudDriveView,
+  type UserRow,
 } from "../../api/admin";
 import {
   cancelCloudDriveBackupPending,
@@ -44,11 +50,19 @@ import {
   importCloudDriveBackup,
   rollbackCloudDriveBackup,
   saveCloudDrive,
+  setUserCloudDownload,
   testCloudDrive,
+  type CloudDownloadMode,
   type CloudDriveTestResult,
 } from "../../api/mutations";
-import { fmtBytes } from "../../shared/format";
+import {
+  fmtBytes,
+  labelOf,
+  USER_STATUS_LABELS,
+  USER_STATUS_TAG_COLORS,
+} from "../../shared/format";
 import { errorText, useAdminAction, useConfirmAction } from "../shared/actions";
+import { DataTable } from "../shared/DataTable";
 import { FormModal } from "../shared/FormModal";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState, QueryError } from "../shared/QueryStates";
@@ -117,6 +131,12 @@ export function CloudDrivePage() {
   const [testingName, setTestingName] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, CloudDriveTestResult>>({});
 
+  // 用户云盘配置折叠面板：默认收起，首次展开才拉取用户列表
+  const [usersPanelOpen, setUsersPanelOpen] = useState(false);
+  const [userPage, setUserPage] = useState(1);
+  const [userPageSize, setUserPageSize] = useState(20);
+  const [busyUserId, setBusyUserId] = useState<number | null>(null);
+
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["cloud-drive"],
     queryFn: fetchCloudDrive,
@@ -124,6 +144,11 @@ export function CloudDrivePage() {
   const backupStatus = useQuery({
     queryKey: ["cloud-drive-backup"],
     queryFn: fetchCloudDriveBackupStatus,
+  });
+  const usersQuery = useQuery({
+    queryKey: ["users", "cloud-users", { page: userPage, pageSize: userPageSize }],
+    queryFn: () => fetchUsers({ page: userPage, page_size: userPageSize }),
+    enabled: usersPanelOpen,
   });
   const confirm = useConfirmAction();
 
@@ -171,6 +196,19 @@ export function CloudDrivePage() {
     invalidate: [["cloud-drive"], ["cloud-drive-backup"]],
     successText: "已恢复上一个云盘配置并立即生效。",
     onDone: () => setTestResults({}),
+  });
+
+  // 用户云盘下载权限：行内三态切换直接生效（与用户详情页同端点、同文案口径）
+  const setCloudDownload = useAdminAction({
+    action: (vars: { userId: number; mode: CloudDownloadMode }) => {
+      setBusyUserId(vars.userId);
+      return setUserCloudDownload(vars.userId, vars.mode);
+    },
+    invalidate: [["users"]],
+    successText: (result) =>
+      result.effective_cloud_download
+        ? "云盘下载权限已更新：当前允许该用户使用 /download。"
+        : "云盘下载权限已更新：该用户使用 /download 将被拒绝。",
   });
 
   // 全局开关切换：实时生效
@@ -467,10 +505,66 @@ export function CloudDrivePage() {
     },
   ];
 
+  // 用户云盘配置表：列结构与用户管理页保持一致的只读维度 + 行内权限编辑
+  const userColumns: ColumnsType<UserRow> = [
+    {
+      title: "ID",
+      dataIndex: "id",
+      key: "id",
+      render: (id: number) => <Link to={`/users/${id}`}>{id}</Link>,
+    },
+    {
+      title: "用户名 / 显示名",
+      key: "name",
+      render: (_, row) => (
+        <>
+          {row.username ? `@${row.username}` : "—"}
+          {row.display_name ? `（${row.display_name}）` : ""}
+        </>
+      ),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      render: (status: string, row) => (
+        <>
+          <Tag color={USER_STATUS_TAG_COLORS[status]}>{labelOf(USER_STATUS_LABELS, status)}</Tag>
+          {row.is_owner ? <Tag color="blue">owner</Tag> : null}
+        </>
+      ),
+    },
+    {
+      title: "云盘下载权限",
+      key: "cloud_download",
+      width: 200,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Select<CloudDownloadMode>
+            value={row.cloud_download as CloudDownloadMode}
+            loading={busyUserId === row.id && setCloudDownload.pending}
+            disabled={setCloudDownload.pending}
+            onChange={(mode) => setCloudDownload.run({ userId: row.id, mode })}
+            className="field-width-160"
+            options={[
+              { value: 0, label: "跟随角色默认" },
+              { value: 1, label: "允许" },
+              { value: 2, label: "拒绝" },
+            ]}
+            aria-label={`云盘下载权限 ${row.id}`}
+          />
+          {row.cloud_download === 0 ? (
+            <Text type="secondary">生效：{row.effective_cloud_download ? "允许" : "拒绝"}</Text>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
+
   return (
     <PageScaffold
       title="云盘下载"
-      description="配置 /download 指令与「存到网盘」补存的多网盘目的地；配置项操作直接生效，备份恢复为整体替换。"
+      description="配置 /download 指令与「存到网盘」补存的多网盘目的地与用户下载权限；配置项操作直接生效，备份恢复为整体替换。"
       actions={
         <Button href={DOWNLOAD_DOC_URL} target="_blank" rel="noopener noreferrer">
           查看下载配置文档
@@ -484,39 +578,11 @@ export function CloudDrivePage() {
         onRetry={() => void refetch()}
       >
         <Space direction="vertical" size="middle" className="field-width-full">
-          <PageSection
-            title="全局开关"
-            extra={data?.enabled ? <Tag color="green">已开启</Tag> : <Tag>已关闭</Tag>}
-          >
-            <Space direction="vertical" size="small" className="field-width-full">
-              {data && !data.rclone_available ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="未检测到 rclone 二进制，云盘上传与目的地测试暂不可用"
-                  description="官方镜像已内置固定版本 rclone；自定义部署可通过 RCLONE_BIN 环境变量指定路径，安装后重启服务生效。"
-                />
-              ) : null}
-              <Space wrap>
-                <Switch
-                  checked={data?.enabled ?? false}
-                  disabled={save.pending || !data}
-                  onChange={(checked) => void handleToggleGlobal(checked)}
-                  aria-label="云盘下载总开关"
-                />
-                <Text>开启云盘下载（/download 指令与「存到网盘」补存）</Text>
-              </Space>
-              <Text type="secondary" className="layout-margin-block-end-0">
-                关闭时授权用户使用 /download 会收到「云盘下载功能未开启」，裸链接请求不受任何影响；开启前需保存至少一个启用的目的地并将其设为默认。
-              </Text>
-            </Space>
-          </PageSection>
-
           <PageSection title="目的地">
             {destinations.length === 0 ? (
               <div className="cloud-dest-empty">
                 <Text type="secondary">
-                  尚未配置目的地。添加一个网盘目的地（如 MEGA），填写参数并测试连通后，即可在上方开启云盘下载。
+                  尚未配置目的地。添加一个网盘目的地（如 MEGA），填写参数并测试连通后，即可在下方开启云盘下载。
                 </Text>
                 <Button
                   type="primary"
@@ -638,6 +704,82 @@ export function CloudDrivePage() {
               不指定名称时使用；用户可发送 /download 链接 或 /download 目的地名称 链接 触发云盘下载。
             </Text>
           </PageSection>
+
+          <PageSection
+            title="全局开关"
+            extra={data?.enabled ? <Tag color="green">已开启</Tag> : <Tag>已关闭</Tag>}
+          >
+            <Space direction="vertical" size="small" className="field-width-full">
+              {data && !data.rclone_available ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="未检测到 rclone 二进制，云盘上传与目的地测试暂不可用"
+                  description="官方镜像已内置固定版本 rclone；自定义部署可通过 RCLONE_BIN 环境变量指定路径，安装后重启服务生效。"
+                />
+              ) : null}
+              <Space wrap>
+                <Switch
+                  checked={data?.enabled ?? false}
+                  disabled={save.pending || !data}
+                  onChange={(checked) => void handleToggleGlobal(checked)}
+                  aria-label="云盘下载总开关"
+                />
+                <Text>开启云盘下载（/download 指令与「存到网盘」补存）</Text>
+              </Space>
+              <Text type="secondary" className="layout-margin-block-end-0">
+                关闭时授权用户使用 /download 会收到「云盘下载功能未开启」，裸链接请求不受任何影响；开启前需保存至少一个启用的目的地并将其设为默认。
+              </Text>
+            </Space>
+          </PageSection>
+
+          {/* 用户云盘配置：默认收起，展开后展示全部用户并支持行内改权限 */}
+          <Collapse
+            className="cloud-users-collapse"
+            onChange={(keys) => {
+              const active = Array.isArray(keys) ? keys : [keys];
+              setUsersPanelOpen(active.includes("users"));
+            }}
+            items={[
+              {
+                key: "users",
+                label: (
+                  <Space wrap size="small">
+                    <Text strong>用户云盘配置</Text>
+                    <Text type="secondary">展开查看各用户的云盘下载权限并可直接修改</Text>
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" size="middle" className="field-width-full">
+                    <Text type="secondary">
+                      权限为用户级三态，「跟随角色默认」时 owner 允许、普通用户拒绝；实际可用还需与上方「全局开关」同时开启。
+                      完整搜索与用户管理见 <Link to="/users">用户管理</Link>。
+                    </Text>
+                    {usersQuery.isError ? (
+                      <QueryError onRetry={() => void usersQuery.refetch()} />
+                    ) : (
+                      <DataTable<UserRow>
+                        rowKey="id"
+                        loading={usersQuery.isPending}
+                        columns={userColumns}
+                        dataSource={usersQuery.data?.items}
+                        emptyText="暂无用户。"
+                        pagination={{
+                          current: usersQuery.data?.page ?? userPage,
+                          pageSize: usersQuery.data?.page_size ?? userPageSize,
+                          total: usersQuery.data?.total ?? 0,
+                          onChange: (nextPage, nextSize) => {
+                            setUserPage(nextPage);
+                            setUserPageSize(nextSize);
+                          },
+                        }}
+                      />
+                    )}
+                  </Space>
+                ),
+              },
+            ]}
+          />
 
           <PageSection title="配置备份与恢复">
             <Space direction="vertical" size="middle" className="field-width-full">

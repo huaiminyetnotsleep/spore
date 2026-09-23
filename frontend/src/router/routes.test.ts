@@ -29,7 +29,6 @@ describe("SPA 导航信息架构", () => {
       "channels",
       "channel-bindings",
       "channel-settings",
-      "cloud-drive",
       "watch-events",
       "watch-sources",
       "watch-settings",
@@ -46,6 +45,7 @@ describe("SPA 导航信息架构", () => {
       "system-config",
       "notification",
       "mtproto",
+      "cloud-drive",
       "oauth",
       "backup",
     ]);

@@ -278,7 +278,7 @@ export const routeMeta = [
     path: "/cloud-drive",
     label: "云盘下载",
     title: "云盘下载",
-    groupKey: "request-channels",
+    groupKey: "system-operations",
     icon: <CloudDownloadOutlined />,
     menuVisible: true,
   },
@@ -426,7 +426,7 @@ export const navigationGroups = [
   {
     key: "request-channels",
     label: "请求与频道",
-    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings", "cloud-drive"],
+    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings"],
   },
   {
     key: "watch-group",
@@ -456,7 +456,15 @@ export const navigationGroups = [
   {
     key: "system-operations",
     label: "系统运维",
-    routeKeys: ["settings", "system-config", "notification", "mtproto", "oauth", "backup"],
+    routeKeys: [
+      "settings",
+      "system-config",
+      "notification",
+      "mtproto",
+      "cloud-drive",
+      "oauth",
+      "backup",
+    ],
   },
 ] as const satisfies readonly NavigationGroup[];
 
