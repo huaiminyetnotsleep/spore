@@ -177,6 +177,9 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 			// 回复“用法”查看说明：不消费 pending，输入等待继续有效。
 			sendText(ctx, localOpt, snd, msg.Chat.ID, "<blockquote>📖 "+entry.usage+"</blockquote>")
 			return
+		case promptDownloadDestination:
+			handleDownloadPromptInput(ctx, localOpt, snd, prompter, *from, msg.Chat.ID, entry, resolved)
+			return
 		case promptExecute:
 			text = resolved
 		default:
@@ -611,6 +614,37 @@ func cloudDestNotFoundText(avail []string) string {
 	return "未找到该下载目的地，可用：" + strings.Join(avail, "、") + "。"
 }
 
+// requireDownloadReady 按既有顺序执行云盘提交前的只读预检：用户状态与
+// 下载权限优先于运行状态，避免向无权限用户暴露云盘配置。通过时返回当前
+// CloudStatus；不创建请求、不扣额度。
+func requireDownloadReady(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64) (CloudStatus, bool) {
+	if opt.CloudStatus == nil {
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
+		return nil, false
+	}
+	code, err := opt.Access.UserDownloadStatus(ctx, userID)
+	if err != nil {
+		ae := apperr.From(err)
+		opt.Log.Warn("/download 状态预检失败", "user_id", userID, "code", ae.Code, "error", err.Error())
+		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+		return nil, false
+	}
+	if code != "" {
+		sendText(ctx, opt, snd, chatID, apperr.UserText(code))
+		return nil, false
+	}
+	cs := opt.CloudStatus
+	if !cs.Available() {
+		sendText(ctx, opt, snd, chatID, cloudUnavailableText)
+		return nil, false
+	}
+	if !cs.Enabled() {
+		sendText(ctx, opt, snd, chatID, cloudDisabledText)
+		return nil, false
+	}
+	return cs, true
+}
+
 // parseDownloadArgs 解析 /download 参数，返回（目的地名称, 链接文本）。
 // 第一段含 t.me 视为链接本身（默认目的地）；否则视为目的地名称、其余为
 // 链接文本。无参时由调用方发送简短输入提示，只给目的地名称时返回完整用法。
@@ -652,33 +686,14 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 			return
 		}
 		promptForInput(ctx, opt, snd, chatID, "/download",
-			"请回复本消息粘贴消息链接；如需指定网盘，请输入“目的地 链接”（5 分钟内有效）。",
+			"请回复本消息粘贴消息链接；也可输入“目的地 链接”直接提交（5 分钟内有效）。",
 			"粘贴链接或“目的地 链接”", downloadUsage)
 		return
 	}
 
-	// 1. 用户状态与下载权限预检：状态拒绝与裸链接同款申请引导（不暴露功能
-	//    存在）；无下载权限的授权用户回专门文案。
-	code, err := opt.Access.UserDownloadStatus(ctx, from.ID)
-	if err != nil {
-		ae := apperr.From(err)
-		opt.Log.Warn("/download 状态预检失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
-		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
-		return
-	}
-	if code != "" {
-		sendText(ctx, opt, snd, chatID, apperr.UserText(code))
-		return
-	}
-
-	// 2. 云盘状态：rclone 可用性 → 全局开关 → 目的地有效
-	cs := opt.CloudStatus
-	if !cs.Available() {
-		sendText(ctx, opt, snd, chatID, cloudUnavailableText)
-		return
-	}
-	if !cs.Enabled() {
-		sendText(ctx, opt, snd, chatID, cloudDisabledText)
+	// 1–2. 用户权限与云盘运行状态预检。
+	cs, ok := requireDownloadReady(ctx, opt, snd, from.ID, chatID)
+	if !ok {
 		return
 	}
 	if dest == "" {

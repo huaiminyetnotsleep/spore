@@ -1,6 +1,7 @@
 package botapi
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestInputPrompterResolveAndConsume(t *testing.T) {
 	}
 }
 
-func TestInputPrompterCommandReplyKeepsPending(t *testing.T) {
+func TestInputPrompterDownloadReplyModes(t *testing.T) {
 	p := newInputPrompter()
 	p.register(101, "/download", "download usage", 7, 7)
 
@@ -32,8 +33,20 @@ func TestInputPrompterCommandReplyKeepsPending(t *testing.T) {
 		t.Fatalf("command reply = (%q, %v), want passthrough", got, outcome)
 	}
 	got, outcome, _ = p.resolve("https://t.me/example/1", 101, 7)
-	if outcome != promptExecute || got != "/download https://t.me/example/1" {
-		t.Fatalf("pending reply = (%q, %v), want download execution", got, outcome)
+	if outcome != promptDownloadDestination || got != "https://t.me/example/1" {
+		t.Fatalf("link-only reply = (%q, %v), want destination selection", got, outcome)
+	}
+	if _, ok := p.get(101, 7); !ok {
+		t.Fatal("link-only reply must keep pending until destination is resolved")
+	}
+
+	p.register(102, "/download", "download usage", 7, 7)
+	got, outcome, _ = p.resolve("mega-2 https://t.me/example/2", 102, 7)
+	if outcome != promptExecute || got != "/download mega-2 https://t.me/example/2" {
+		t.Fatalf("explicit destination reply = (%q, %v), want direct execution", got, outcome)
+	}
+	if _, ok := p.get(102, 7); ok {
+		t.Fatal("explicit destination reply should consume pending")
 	}
 }
 
@@ -83,6 +96,96 @@ func TestInputPrompterUsageKeywordKeepsPending(t *testing.T) {
 	}
 	if _, outcome, _ := p.resolve("https://t.me/example/1", 101, 7); outcome != promptExecute {
 		t.Fatal("pending should still execute after usage reply")
+	}
+}
+
+func TestInputPrompterDownloadDestinationState(t *testing.T) {
+	p := newInputPrompter()
+	p.register(301, "/download", "download usage", 7, 7)
+
+	entry, ok := p.beginDownloadSelection(301, 7, "https://t.me/example/1",
+		[]string{"mega-1", "s3-1", "webdav-1"}, "mega-1")
+	if !ok || entry.stage != promptAwaitDownloadDestination || entry.input == "" || len(entry.destinations) != 3 {
+		t.Fatalf("selection state = (%+v, %v)", entry, ok)
+	}
+	if _, ok := p.setDownloadPage(301, 7, 1); ok {
+		t.Fatal("page 1 should be out of range for three destinations")
+	}
+	selected, destination, ok := p.selectDownloadDestination(301, 7, 1)
+	if !ok || destination != "s3-1" || selected.input != "https://t.me/example/1" {
+		t.Fatalf("selected = (%+v, %q, %v)", selected, destination, ok)
+	}
+	if _, _, ok := p.selectDownloadDestination(301, 7, 1); ok {
+		t.Fatal("destination selection must be one-shot")
+	}
+}
+
+func TestInputPrompterDownloadDestinationConcurrentSelection(t *testing.T) {
+	p := newInputPrompter()
+	p.register(303, "/download", "download usage", 7, 7)
+	if _, ok := p.beginDownloadSelection(303, 7, "https://t.me/example/1", []string{"a", "b"}, "a"); !ok {
+		t.Fatal("begin selection failed")
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	succeeded := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, ok := p.selectDownloadDestination(303, 7, 0); ok {
+				mu.Lock()
+				succeeded++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if succeeded != 1 {
+		t.Fatalf("successful selections = %d, want 1", succeeded)
+	}
+}
+
+func TestInputPrompterDownloadSelectionRelinksLatestInput(t *testing.T) {
+	p := newInputPrompter()
+	p.register(304, "/download", "download usage", 7, 7)
+	if _, ok := p.beginDownloadSelection(304, 7, "https://t.me/example/1", []string{"a", "b"}, "a"); !ok {
+		t.Fatal("begin selection failed")
+	}
+
+	got, outcome, _ := p.resolve("https://t.me/example/2", 304, 7)
+	if outcome != promptDownloadDestination || got != "https://t.me/example/2" {
+		t.Fatalf("relink = (%q, %v), want destination selection with new link", got, outcome)
+	}
+	// resolve 只产出新链接；handler 随后调用 beginDownloadSelection 刷新暂存。
+	if _, ok := p.beginDownloadSelection(304, 7, "https://t.me/example/2", []string{"a", "b"}, "a"); !ok {
+		t.Fatal("relink should be allowed from destination stage")
+	}
+	entry, ok := p.get(304, 7)
+	if !ok || entry.stage != promptAwaitDownloadDestination || entry.input != "https://t.me/example/2" {
+		t.Fatalf("selection after relink = (%+v, %v)", entry, ok)
+	}
+	selected, destination, ok := p.selectDownloadDestination(304, 7, 0)
+	if !ok || destination != "a" || selected.input != "https://t.me/example/2" {
+		t.Fatalf("selected = (%+v, %q, %v)", selected, destination, ok)
+	}
+}
+
+func TestInputPrompterDownloadDestinationOwnerAndExpiry(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	p := newInputPrompter()
+	p.now = func() time.Time { return now }
+	p.register(302, "/download", "download usage", 7, 7)
+	if _, ok := p.beginDownloadSelection(302, 8, "https://t.me/example/1", []string{"a", "b"}, "a"); ok {
+		t.Fatal("wrong owner must not enter destination selection")
+	}
+	if _, ok := p.beginDownloadSelection(302, 7, "https://t.me/example/1", []string{"a", "b"}, "a"); !ok {
+		t.Fatal("owner should enter destination selection")
+	}
+	p.now = func() time.Time { return now.Add(promptTTL + time.Second) }
+	if _, _, ok := p.selectDownloadDestination(302, 7, 0); ok {
+		t.Fatal("expired destination selection must fail")
 	}
 }
 
