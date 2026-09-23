@@ -20,16 +20,19 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
-// fakeCloudSink 是云盘端点测试用的 Sink 桩：Ping 可注入失败。
+// fakeCloudSink 是云盘端点测试用的 Sink 桩：Ping 可注入失败，并记录最近
+// 一次 Ping 收到的目的地（供掩码回传场景断言凭据未被二次加工）。
 type fakeCloudSink struct {
-	pingErr error
+	pingErr  error
+	lastPing cloudarchive.Destination
 }
 
 func (f *fakeCloudSink) Upload(context.Context, cloudarchive.Destination, cloudarchive.UploadSpec) error {
 	return nil
 }
 
-func (f *fakeCloudSink) Ping(context.Context, cloudarchive.Destination) error {
+func (f *fakeCloudSink) Ping(_ context.Context, dest cloudarchive.Destination) error {
+	f.lastPing = dest
 	return f.pingErr
 }
 
@@ -157,13 +160,23 @@ func TestAPICloudDriveGetInitialView(t *testing.T) {
 	}
 }
 
-func TestAPICloudDrivePutFlow(t *testing.T) {
-	e := newCloudTestEnv(t, cloudarchive.Config{}, &fakeCloudSink{})
+// writeDetectingObscureBin 写一个能暴露双重混淆的假 rclone 并设为
+// RCLONE_BIN：obscure 的输出依赖输入（加 "obscured:" 前缀）。此前的常量版
+// 假脚本对任何输入都返回同一字符串，若已混淆值被再次 obscure 结果不变，
+// 双重混淆 bug 在它面前不可见（真实事故的漏网原因），故必须用非常量实现。
+func writeDetectingObscureBin(t *testing.T) {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "rclone-obscure")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nif [ \"$1\" = \"obscure\" ]; then cat >/dev/null; printf 'obscured-from-api\\n'; exit 0; fi\nexit 0\n"), 0o755); err != nil {
+	script := "#!/bin/sh\nif [ \"$1\" = \"obscure\" ]; then printf 'obscured:%s\\n' \"$(cat)\"; exit 0; fi\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatalf("创建假 rclone 失败: %v", err)
 	}
 	t.Setenv("RCLONE_BIN", bin)
+}
+
+func TestAPICloudDrivePutFlow(t *testing.T) {
+	e := newCloudTestEnv(t, cloudarchive.Config{}, &fakeCloudSink{})
+	writeDetectingObscureBin(t)
 	j := e.login(t)
 	csrf := e.sessionCSRF(t, j)
 	put := func(body string, token string) *http.Response {
@@ -229,7 +242,9 @@ func TestAPICloudDrivePutFlow(t *testing.T) {
 	if d.Options["pass"] != cloudSecretMask || d.PathPrefix != "spore" {
 		t.Errorf("敏感 options 应掩码且前缀应回显: %+v", d)
 	}
-	// 管理台未修改敏感字段时会回传掩码；服务端应沿用原始凭据。
+	// 管理台未修改敏感字段时会回传掩码；服务端应沿用原始凭据。双重混淆
+	// 回归：若 preserve 先于 obscure 执行，这里会存成
+	// "obscured:obscured:p@ss&$quoted"（reveal 得到混淆值而非真实密码）。
 	resp = put(`{"enabled":false,"default_destination":"","destinations":[
 		{"name":"mega-1","type":"mega","path_prefix":"spore","enabled":true,
 		 "options":{"user":"bot@example.com","pass":"********"}}
@@ -237,8 +252,8 @@ func TestAPICloudDrivePutFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("掩码回传保存应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
 	}
-	if got := e.srv.cloudCfg.Snapshot().Destinations[0].Options["pass"]; got != "obscured-from-api" {
-		t.Fatalf("掩码回传应保留已混淆凭据，得到 %q", got)
+	if got := e.srv.cloudCfg.Snapshot().Destinations[0].Options["pass"]; got != "obscured:p@ss&$quoted" {
+		t.Fatalf("掩码回传应保留已混淆凭据（双重 obscure 回归），得到 %q", got)
 	}
 
 	// GET 反映保存结果；审计留痕且不含 options 值
@@ -257,7 +272,7 @@ func TestAPICloudDrivePutFlow(t *testing.T) {
 			continue
 		}
 		found = true
-		if strings.Contains(en.BeforeJSON+en.AfterJSON, "obscured-from-api") ||
+		if strings.Contains(en.BeforeJSON+en.AfterJSON, "obscured:p@ss&$quoted") ||
 			strings.Contains(en.BeforeJSON+en.AfterJSON, "p@ss&$quoted") ||
 			strings.Contains(en.BeforeJSON+en.AfterJSON, "bot@example.com") {
 
@@ -292,18 +307,14 @@ func TestAPICloudDrivePutFlow(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatal("obscure 失败时不得写入配置文件")
 	}
-	if got := e.srv.cloudCfg.Snapshot().Destinations[0].Options["pass"]; got != "obscured-from-api" {
+	if got := e.srv.cloudCfg.Snapshot().Destinations[0].Options["pass"]; got != "obscured:p@ss&$quoted" {
 		t.Fatalf("obscure 失败时内存快照不得改变，得到 %q", got)
 	}
 }
 
 func TestAPICloudDriveTestEndpoint(t *testing.T) {
 	e := newCloudTestEnv(t, enabledCloudCfg(), &fakeCloudSink{})
-	bin := filepath.Join(t.TempDir(), "rclone-obscure")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nif [ \"$1\" = \"obscure\" ]; then cat >/dev/null; printf 'obscured-from-api\\n'; exit 0; fi\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("创建假 rclone 失败: %v", err)
-	}
-	t.Setenv("RCLONE_BIN", bin)
+	writeDetectingObscureBin(t)
 	j := e.login(t)
 	csrf := e.sessionCSRF(t, j)
 
@@ -363,6 +374,28 @@ func TestAPICloudDriveTestEndpoint(t *testing.T) {
 	decodeAPIJSON(t, bodyOf(t, resp), &out)
 	if !out.OK {
 		t.Errorf("草稿目的地测试应成功: %+v", out)
+	}
+	if sink, ok := e.srv.cloudSink.(*fakeCloudSink); ok {
+		if got := sink.lastPing.Options["pass"]; got != "obscured:p" {
+			t.Errorf("草稿明文密码应恰好混淆一次，得到 %q", got)
+		}
+	}
+
+	// 编辑已保存目的地但未改密码（pass 回传掩码）：Ping 必须拿到已存的
+	// 混淆凭据，不得被二次 obscure（双重混淆回归）。
+	resp = post(`{"destination":{"name":"mega-1","type":"mega","path_prefix":"spore","enabled":true,
+		"options":{"user":"bot@example.com","pass":"********"}}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("掩码草稿测试应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	decodeAPIJSON(t, bodyOf(t, resp), &out)
+	if !out.OK {
+		t.Errorf("掩码草稿测试应成功: %+v", out)
+	}
+	if sink, ok := e.srv.cloudSink.(*fakeCloudSink); ok {
+		if got := sink.lastPing.Options["pass"]; got != "obscured-secret" {
+			t.Fatalf("掩码回传应沿用已存混淆凭据（双重 obscure 回归），得到 %q", got)
+		}
 	}
 }
 

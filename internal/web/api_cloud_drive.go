@@ -107,6 +107,11 @@ func maskedCloudOptions(options map[string]string) map[string]string {
 // preserveCloudSecrets restores values returned as the API mask from the current
 // in-memory snapshot. A masked value for a new destination is rejected rather than
 // persisted as a fake credential.
+//
+// 调用顺序约束：必须在 obscureCloudSecrets 之后执行。若先把掩码恢复成已
+// 混淆的旧值、再跑 obscure，旧值会被再次混淆——reveal 得到的将是一串
+// 混淆值而非真实密码，MEGA 登录按密码错误收场（双重 obscure 事故根因，
+// 回归见 TestAPICloudDrivePutFlow 的掩码回传用例）。
 func preserveCloudSecrets(previous cloudarchive.Config, next *cloudarchive.Config) error {
 	oldByName := make(map[string]cloudarchive.Destination, len(previous.Destinations))
 	for _, destination := range previous.Destinations {
@@ -128,9 +133,10 @@ func preserveCloudSecrets(previous cloudarchive.Config, next *cloudarchive.Confi
 	return nil
 }
 
-// obscureCloudSecrets 只处理管理 API 新提交的 MEGA 密码。管理台回传的
-// 掩码已经由 preserveCloudSecrets 恢复为旧值，因此不会被重复 obscure；
-// 其他后端的 pass 可能要求明文，不能按 MEGA 规则一概处理。
+// obscureCloudSecrets 只处理管理 API 新提交的 MEGA 明文密码；掩码与空值
+// 原样跳过，掩码交由随后执行的 preserveCloudSecrets 恢复为已存值（顺序不
+// 可颠倒，见其注释）。其他后端的 pass 可能要求明文，不能按 MEGA 规则一
+// 概处理。副作用语义：仅提交掩码（未改密码）的保存不依赖 rclone 二进制。
 func obscureCloudSecrets(ctx context.Context, cfg *cloudarchive.Config) error {
 	for i := range cfg.Destinations {
 		destination := &cfg.Destinations[i]
@@ -188,14 +194,16 @@ func (s *Server) handleAPICloudDrivePut(w http.ResponseWriter, r *http.Request, 
 			Enabled: d.Enabled, Options: d.Options,
 		})
 	}
-	if err := preserveCloudSecrets(previous, &cfg); err != nil {
-		s.apiBadRequest(w, r, op, err.Error())
-		return
-	}
+	// 先 obscure 新明文、再恢复掩码：顺序颠倒会把恢复出的旧混淆值再次
+	// obscure（双重 obscure），凭据静默损坏。
 	if err := obscureCloudSecrets(r.Context(), &cfg); err != nil {
 		s.log.Warn("云盘配置凭据处理失败", "op", op, "error", err.Error())
 		writeAPIError(w, http.StatusServiceUnavailable, apiCodeUnavailable,
 			"rclone 不可用或无法处理网盘凭据，请稍后重试。")
+		return
+	}
+	if err := preserveCloudSecrets(previous, &cfg); err != nil {
+		s.apiBadRequest(w, r, op, err.Error())
 		return
 	}
 	// 校验错误是 cloudarchive 的受控中文文案（只含名称与配置键，不含值）
@@ -286,15 +294,17 @@ func (s *Server) handleAPICloudDriveTest(w http.ResponseWriter, r *http.Request,
 		dummyCfg := cloudarchive.Config{
 			Destinations: []cloudarchive.Destination{dest},
 		}
-		if err := preserveCloudSecrets(cfg, &dummyCfg); err != nil {
-			s.apiBadRequest(w, r, op, err.Error())
-			return
-		}
+		// 与 PUT 相同的顺序约束：先 obscure 新明文、再恢复掩码，防止旧
+		// 混淆值被二次 obscure。
 		if err := obscureCloudSecrets(r.Context(), &dummyCfg); err != nil {
 			writeAPIJSON(w, http.StatusOK, struct {
 				OK      bool   `json:"ok"`
 				Message string `json:"message"`
 			}{false, "密码处理失败，请检查密码或确认 rclone 可用。"})
+			return
+		}
+		if err := preserveCloudSecrets(cfg, &dummyCfg); err != nil {
+			s.apiBadRequest(w, r, op, err.Error())
 			return
 		}
 		dest = dummyCfg.Destinations[0]
