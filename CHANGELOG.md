@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.34.3](https://github.com/huaiminyetnotsleep/spore/compare/v1.34.2...v1.34.3) (2026-09-23)
+
+
+### Bug Fixes
+
+* **bot:** 频道信息与云盘确认统一引用块样式 ([06f62af](https://github.com/huaiminyetnotsleep/spore/commit/06f62af795bba8cece1bd1f3f8819b9544f9c0e2))
+
 ## [1.34.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.34.1...v1.34.2) (2026-09-23)
 
 
