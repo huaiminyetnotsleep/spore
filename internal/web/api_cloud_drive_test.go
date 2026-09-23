@@ -662,7 +662,7 @@ func TestAPIRequestDetailCloudUploads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := e.st.FinishCloudUpload(context.Background(), up.ID,
-		store.CloudUploadSucceeded, "", 12345, 1700000000000); err != nil {
+		store.CloudUploadSucceeded, "", "", 12345, 1700000000000); err != nil {
 		t.Fatal(err)
 	}
 

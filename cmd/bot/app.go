@@ -15,6 +15,7 @@ import (
 
 	"errors"
 	"github.com/huaiminyetnotsleep/spore/internal/access"
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/binding"
 	"github.com/huaiminyetnotsleep/spore/internal/botapi"
 	"github.com/huaiminyetnotsleep/spore/internal/botlist"
@@ -23,6 +24,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/config"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/listener"
 	"github.com/huaiminyetnotsleep/spore/internal/media"
@@ -50,6 +52,7 @@ type app struct {
 	watch       *watch.Service    // 监听源（/watch）：申请/审批/管理，Bot 与 Web 共用
 	listener    *listener.Service // 监听源消息接收与缓存预热（ready 生命周期内重建）
 	hub         *notify.Hub
+	errLog      *errlog.Service // 错误日志写入门面（worker/监听/bot 生命周期共用）
 	userClient  *mtproto.Client
 	pool        *botpool.Pool                // 多机器人池：ready 生命周期内 Reset 重建
 	botClients  map[int64]*mtproto.BotClient // botID → 大文件直传会话（main 构建、跨生命周期复用）
@@ -117,6 +120,7 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		Store:       a.st,
 		Dump:        dumpSvc,
 		EnqueueDump: a.access.EnqueueSourceDump,
+		ErrLog:      a.errLog, // 转储复制失败/回退入队失败落错误日志
 	})
 
 	// 多机器人池：逐 token 构建 Bot 客户端与发送路由。单个 token 失效只产生
@@ -129,6 +133,8 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 			a.log.Warn("机器人接入失败，跳过该 token", "index", i, "error", err.Error())
 			a.hub.Raise(ctx, notify.KeyBotInitFailed, notify.SeverityError,
 				notify.BotIDData{BotID: botlist.BotID(bt.Token)})
+			a.errLog.Record(ctx, errlog.FromError(store.ErrorSourceBotAPI, "maintenance",
+				"机器人接入失败，已跳过该 token", err, map[string]any{"bot_id": botlist.BotID(bt.Token)}))
 			continue
 		}
 		members = append(members, m)
@@ -208,6 +214,14 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 				a.log.Error("机器人 Token 已失效（被封禁或被撤销），已标记停用", "bot_id", botID)
 				a.hub.Raise(ctx, notify.KeyBotBanned, notify.SeverityCritical,
 					notify.BotIDData{BotID: botID})
+				a.errLog.Record(ctx, errlog.Record{
+					Source:  store.ErrorSourceBotAPI,
+					Code:    string(apperr.CodeBotDisabled),
+					Stage:   "maintenance",
+					Detail:  err.Error(),
+					Message: "机器人 Token 已失效（被封禁或被撤销），已标记停用",
+					Context: map[string]any{"bot_id": botID},
+				})
 			}
 			return
 		}
@@ -218,6 +232,13 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 			a.log.Warn("机器人消息拉取冲突（token 被其他服务占用，收不到新消息）", "bot_id", botID)
 			a.hub.Raise(ctx, notify.KeyBotPollConflict, notify.SeverityError,
 				notify.BotIDData{BotID: botID})
+			a.errLog.Record(ctx, errlog.Record{
+				Source:  store.ErrorSourceBotAPI,
+				Stage:   "maintenance",
+				Detail:  err.Error(),
+				Message: "机器人消息拉取冲突（token 被其他服务占用，收不到新消息）",
+				Context: map[string]any{"bot_id": botID},
+			})
 		}
 	}
 	// NoteActive：收到该 bot 的 update 即证明轮询已恢复，清除冲突态并解决事件。
@@ -307,6 +328,14 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 				"bot_id", botID)
 			a.hub.Raise(ctx, notify.KeyBotBanned, notify.SeverityCritical,
 				notify.BotIDData{BotID: botID})
+			a.errLog.Record(ctx, errlog.Record{
+				Source:  store.ErrorSourceBotAPI,
+				Code:    string(apperr.CodeBotDisabled),
+				Stage:   "maintenance",
+				Detail:  meErr.Error(),
+				Message: "机器人 Token 已失效（接入即停用，保留配置供观测）",
+				Context: map[string]any{"bot_id": botID},
+			})
 		} else {
 			a.log.Warn("获取机器人身份失败（展示将只显示 bot id）", "bot_id", botID, "error", meErr.Error())
 		}
@@ -331,6 +360,13 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		a.log.Warn("机器人 token 已被其他服务以 webhook 方式占用（收不到新消息）", "bot_id", botID)
 		a.hub.Raise(ctx, notify.KeyBotPollConflict, notify.SeverityError,
 			"有机器人收不到新消息：其 token 已被其他服务以 webhook 方式占用。请让对方服务删除 webhook 后下线该 bot，或在管理端移除该 token 后重启。")
+		a.errLog.Record(ctx, errlog.Record{
+			Source:  store.ErrorSourceBotAPI,
+			Stage:   "maintenance",
+			Detail:  "webhook: " + hookURL,
+			Message: "机器人 token 已被其他服务以 webhook 方式占用（收不到新消息）",
+			Context: map[string]any{"bot_id": botID},
+		})
 	}
 	meCancel()
 	menuCtx, menuCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -458,7 +494,9 @@ func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher, dumpSvc *
 		// 云盘任务（/download）：上传通道与目的地解析；nil 防御在 worker 内
 		CloudSink: a.cloudSink,
 		CloudCfg:  a.cloud,
-		Transfer:  a.transfer,
+		// 错误日志中心：每次失败尝试与尽力而为操作失败逐条落 error_logs
+		ErrLog:   a.errLog,
+		Transfer: a.transfer,
 		Media: media.Options{
 			TmpDir:          a.cfg.TempDir,
 			MaxFileSize:     a.cfg.MaxFileSize,

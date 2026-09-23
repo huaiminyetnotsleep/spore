@@ -30,8 +30,10 @@ import (
 
 	"github.com/go-telegram/bot/models"
 
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -57,6 +59,9 @@ type Options struct {
 	Store       *store.Store
 	Dump        *dumpcache.Service
 	EnqueueDump EnqueueDump
+	// ErrLog 错误日志写入门面（可选，nil 安全）：转储复制失败与回退入队
+	// 失败此前只进日志，接入后逐条落 error_logs 供管理端查询。
+	ErrLog *errlog.Service
 }
 
 // Service 是监听源消息处理器。ctx 是生命周期上下文（MTProto 就绪作用域）：
@@ -69,6 +74,7 @@ type Service struct {
 	st          *store.Store
 	dump        *dumpcache.Service
 	enqueueDump EnqueueDump
+	errLog      *errlog.Service
 
 	mu      sync.Mutex
 	pending map[aggKey]*aggGroup // 聚合中的批次（相册/单条）
@@ -109,9 +115,9 @@ func New(ctx context.Context, opt Options) *Service {
 	}
 	return &Service{
 		ctx: ctx, log: opt.Log, st: opt.Store, dump: opt.Dump,
-		enqueueDump: opt.EnqueueDump,
-		pending:     make(map[aggKey]*aggGroup),
-		srcCache:    make(map[int64]srcCacheEntry),
+		enqueueDump: opt.EnqueueDump, errLog: opt.ErrLog,
+		pending:  make(map[aggKey]*aggGroup),
+		srcCache: make(map[int64]srcCacheEntry),
 	}
 }
 
@@ -310,6 +316,15 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 			"channel_id", g.chat.ID, "dump_channel", channel, "messages", len(ids),
 			"bot_id", g.botID, "bot_username", g.botUsername,
 			"hint", "请确认受理 bot 在缓存频道有发帖权限", "error", err.Error())
+		s.errLog.Record(ctx, errlog.Record{
+			Source:  store.ErrorSourceWatch,
+			Code:    string(apperr.From(err).Code),
+			Stage:   "copy",
+			Detail:  err.Error(),
+			Message: "监听源转储复制失败（跳过本批）：" + keyOf(usernameKey, numericKey),
+			Context: map[string]any{"channel_id": g.chat.ID, "dump_channel": channel,
+				"messages": len(ids), "bot_id": g.botID, "bot_username": g.botUsername},
+		})
 		return
 	}
 	// 每个成员消息 ID 都落条目（用户可能链接相册任意成员）；公开源双键，
@@ -343,6 +358,15 @@ func (s *Service) fallback(ctx context.Context, g *aggGroup, usernameKey, numeri
 	if err != nil {
 		s.log.Warn("监听源回退入队失败", "channel_id", g.src.ChannelID,
 			"message_id", messageID, "reason", reason, "error", err.Error())
+		s.errLog.Record(ctx, errlog.Record{
+			Source:  store.ErrorSourceWatch,
+			Code:    string(apperr.From(err).Code),
+			Stage:   "enqueue",
+			Detail:  err.Error(),
+			Message: "监听源回退入队失败（" + reason + "）",
+			Context: map[string]any{"channel_id": g.src.ChannelID, "message_id": messageID,
+				"bot_id": g.botID, "bot_username": g.botUsername},
+		})
 	}
 	s.recordEvent(ctx, store.WatchEvent{
 		ChannelID: g.src.ChannelID, Username: g.src.Username, Title: g.src.Title,

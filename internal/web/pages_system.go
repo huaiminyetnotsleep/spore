@@ -258,8 +258,11 @@ type settingsUpdateInput struct {
 	MaxRequestAttempts *int
 	// BackupIntervalHours / BackupKeepCount 是自动备份配置；nil 表示不变更。
 	// 即时生效（定时循环每 tick 重读 syscfg）。
-	BackupIntervalHours    *int
-	BackupKeepCount        *int
+	BackupIntervalHours *int
+	BackupKeepCount     *int
+	// ErrorLogRetentionDays 是错误日志保留天数（1–365，缺省 30）；nil 表示
+	// 不变更。即时生效（errlog 清理循环每轮重读 syscfg）。
+	ErrorLogRetentionDays  *int
 	DownloadThreads        *int
 	UploadThreads          *int
 	DownloadConnections    *int
@@ -542,6 +545,22 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				return res, &settingsStoreError{op: "保存备份保留份数", err: err}
 			}
 			s.audit(ctx, "settings.backup_keep", "settings", map[string]any{
+				"before": current, "after": n, "effect": "即时生效"})
+		}
+	}
+
+	// 错误日志保留天数（即时生效：errlog 清理循环每轮重读 syscfg）
+	if in.ErrorLogRetentionDays != nil {
+		n := *in.ErrorLogRetentionDays
+		if err := syscfg.ValidateErrorLogRetentionDays(n); err != nil {
+			return res, &settingsParamError{err.Error()}
+		}
+		current := syscfg.LoadErrorLogRetentionDays(ctx, s.st)
+		if n != current {
+			if err := syscfg.SetErrorLogRetentionDays(ctx, s.st, n); err != nil {
+				return res, &settingsStoreError{op: "保存错误日志保留天数", err: err}
+			}
+			s.audit(ctx, "settings.error_log_retention", "settings", map[string]any{
 				"before": current, "after": n, "effect": "即时生效"})
 		}
 	}

@@ -92,6 +92,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/watch-sources", s.apiAuth(s.handleAPIWatchSourcesList))
 	mux.Handle("GET /api/v1/watch-events", s.apiAuth(s.handleAPIWatchEventsList))
 	s.mountAPIWrite(mux, "/api/v1/watch-events/delete", s.handleAPIWatchEventsDelete)
+	// 错误日志中心：筛选分页查询 + 批量/按时间段删除（保留清理在 errlog.Run）
+	mux.Handle("GET /api/v1/error-logs", s.apiAuth(s.handleAPIErrorLogsList))
+	s.mountAPIWrite(mux, "/api/v1/error-logs/delete", s.handleAPIErrorLogsDelete)
 	mux.Handle("GET /api/v1/watch-stats", s.apiAuth(s.handleAPIWatchStats))
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/add", s.handleAPIWatchSourcesAdd)
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/approve", s.handleAPIWatchSourceReview(true))

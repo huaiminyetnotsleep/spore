@@ -25,6 +25,7 @@ type CloudUpload struct {
 	FileName    string // 文件名部分（caption.txt 等规划名）
 	Status      string
 	ErrorCode   string // apperr 错误码；成功时为空
+	ErrorDetail string // 原始根因串（截断后，同 requests.error_detail 规则）；成功或无根因时为空（v25）
 	Bytes       int64  // 已上传字节；成功时为文件大小
 	CreatedAt   int64
 	FinishedAt  int64
@@ -54,8 +55,9 @@ func (s *Store) InsertCloudUpload(ctx context.Context, in CloudUpload) (CloudUpl
 }
 
 // FinishCloudUpload 落库单次上传的终态：状态（succeeded/failed）、错误码、
-// 字节数与完成时间。行不存在返回 ErrNotFound。
-func (s *Store) FinishCloudUpload(ctx context.Context, id int64, status, errorCode string, bytes int64, at int64) error {
+// 根因串（截断后的原始错误，v25 起；成功传空）、字节数与完成时间。
+// 行不存在返回 ErrNotFound。
+func (s *Store) FinishCloudUpload(ctx context.Context, id int64, status, errorCode, errorDetail string, bytes int64, at int64) error {
 	if status != CloudUploadSucceeded && status != CloudUploadFailed {
 		return apperr.New(apperr.CodeInternal, "非法云盘上传终态: "+status)
 	}
@@ -63,8 +65,8 @@ func (s *Store) FinishCloudUpload(ctx context.Context, id int64, status, errorCo
 		at = nowMillis()
 	}
 	res, err := s.ex.ExecContext(ctx, `UPDATE cloud_uploads SET
-		status = ?, error_code = ?, bytes = ?, finished_at = ? WHERE id = ?`,
-		status, errorCode, bytes, at, id)
+		status = ?, error_code = ?, error_detail = ?, bytes = ?, finished_at = ? WHERE id = ?`,
+		status, errorCode, nullStr(errorDetail), bytes, at, id)
 	return affected(res, err, "落库云盘上传终态")
 }
 
@@ -72,7 +74,8 @@ func (s *Store) FinishCloudUpload(ctx context.Context, id int64, status, errorCo
 // 页的"云盘上传"区块展示；无记录返回空切片。
 func (s *Store) CloudUploadsByRequest(ctx context.Context, requestID int64) ([]CloudUpload, error) {
 	rows, err := s.ex.QueryContext(ctx, `SELECT id, request_id, destination, remote_path,
-		file_name, status, COALESCE(error_code, ''), bytes, created_at, COALESCE(finished_at, 0)
+		file_name, status, COALESCE(error_code, ''), COALESCE(error_detail, ''),
+		bytes, created_at, COALESCE(finished_at, 0)
 		FROM cloud_uploads WHERE request_id = ? ORDER BY id`, requestID)
 	if err != nil {
 		return nil, wrapDB("查询云盘上传记录", err)
@@ -82,7 +85,8 @@ func (s *Store) CloudUploadsByRequest(ctx context.Context, requestID int64) ([]C
 	for rows.Next() {
 		var u CloudUpload
 		if err := rows.Scan(&u.ID, &u.RequestID, &u.Destination, &u.RemotePath,
-			&u.FileName, &u.Status, &u.ErrorCode, &u.Bytes, &u.CreatedAt, &u.FinishedAt); err != nil {
+			&u.FileName, &u.Status, &u.ErrorCode, &u.ErrorDetail,
+			&u.Bytes, &u.CreatedAt, &u.FinishedAt); err != nil {
 			return nil, wrapDB("扫描云盘上传记录", err)
 		}
 		out = append(out, u)

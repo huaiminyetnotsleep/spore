@@ -295,6 +295,8 @@ export interface SettingsSaveInput {
   max_request_attempts?: number;
   backup_interval_hours?: number;
   backup_keep_count?: number;
+  /** 错误日志保留天数（1–365）；缺省不变更。 */
+  error_log_retention_days?: number;
   /** 文件分片传输配置；缺省不变更。 */
   download_threads?: number;
   upload_threads?: number;
@@ -411,6 +413,28 @@ export const deleteWatchInviteRequest = (id: number): Promise<WriteOK> =>
 /** 删除预热事件（单条/批量共用，单条传单元素数组）。 */
 export const deleteWatchEvents = (ids: number[]): Promise<WatchEventsDeleteResult> =>
   postJSON<WatchEventsDeleteResult>("/api/v1/watch-events/delete", { ids });
+
+// ---- 错误日志中心 ----
+
+/** 错误日志删除响应（按 ID 与按时间段共用）。 */
+export interface ErrorLogsDeleteResult {
+  ok: boolean;
+  /** 实际删除行数。 */
+  deleted: number;
+}
+
+/** 按 ID 批量删除错误日志（1–100 个）。 */
+export const deleteErrorLogs = (ids: number[]): Promise<ErrorLogsDeleteResult> =>
+  postJSON<ErrorLogsDeleteResult>("/api/v1/error-logs/delete", { ids });
+
+/** 按时间段删除错误日志（至少一个时间界；可叠加来源/错误码条件）。 */
+export const deleteErrorLogsRange = (body: {
+  after?: number;
+  before?: number;
+  source?: string;
+  code?: string;
+}): Promise<ErrorLogsDeleteResult> =>
+  postJSON<ErrorLogsDeleteResult>("/api/v1/error-logs/delete", body);
 
 // ---- 系统设置（系统身份） ----
 

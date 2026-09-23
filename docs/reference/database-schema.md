@@ -42,10 +42,10 @@
 
 ## 2. Schema 总览
 
-当前版本 v22 包含 **17 张业务表、18 个显式索引、4 个数据库外键**：
+当前版本 v25 包含 **18 张业务表、22 个显式索引、4 个数据库外键**：
 
 - 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
-- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`）自动维护的内部表，**不属于业务 schema**。
+- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`、`error_logs`）自动维护的内部表，**不属于业务 schema**。
 - 频道没有独立表：频道维度的一切数据都是 `requests` 行的聚合（见 [第 4 节](#_4-表关系与约束)）。
 
 | 表 | 用途 | 引入版本 |
@@ -67,6 +67,7 @@
 | `watch_events` | 监听转储逐次留痕（哪个 bot 在哪个源转发了哪些消息） | v18 |
 | `watch_invite_requests` | 私有邀请链接监听申请的异步处理状态与安全展示快照 | v19 |
 | `sent_messages` | bot 发出消息坐标 → 请求的映射（/pin、/cancel 引用回复锚点；含频道副本组首坐标，供事后补置顶） | v22 |
+| `error_logs` | 错误日志中心：请求管线与 Bot 相关环节错误的逐条明细（来源/环节/错误码/根因串/参数快照），管理端筛选查询 | v25 |
 
 ## 3. 表数据字典
 
@@ -111,6 +112,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `status` | TEXT | NOT NULL | `queued` / `processing` / `succeeded` / `failed` / `cancelled` |
 | `attempt` | INTEGER | NOT NULL DEFAULT 1 | 已尝试次数 |
 | `error_code` | TEXT | 可空 | 失败原因错误码 |
+| `error_detail` | TEXT | 可空 | 失败根因原始错误串（v23；截断 300 字符 + 省略号，仅管理端展示不发给用户）；重试/重置随 error_code 一并清空 |
 | `media_type` | TEXT | 可空 | 主媒体类型；多成员相册统一 `album`；空串 = 未记录（失败于消息转换前） |
 | `file_size` | INTEGER | 可空 | 媒体大小（诊断元数据） |
 | `file_name` | TEXT | 可空 | 媒体文件名 |
@@ -277,6 +279,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `file_name` | TEXT | NOT NULL DEFAULT '' | 文件名（空串 = 未记录） |
 | `status` | TEXT | NOT NULL | `uploading` / `succeeded` / `failed` |
 | `error_code` | TEXT | NOT NULL DEFAULT '' | 失败错误码（成功为空串） |
+| `error_detail` | TEXT | 可空 | 失败根因原始错误串（v25，截断规则同 requests.error_detail；rclone stderr 等根因不再只进日志） |
 | `bytes` | INTEGER | NOT NULL DEFAULT 0 | 已上传字节数 |
 | `created_at` | INTEGER | NOT NULL | 开始时间 |
 | `finished_at` | INTEGER | NOT NULL DEFAULT 0 | 结束时间（0 = 未结束） |
@@ -374,6 +377,25 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `kind` | TEXT | NOT NULL | 消息类别（见上） |
 | `created_at` | INTEGER | NOT NULL | 写入时间（Unix 毫秒） |
 
+### 3.18 error_logs
+
+错误日志中心（v25）：请求管线与 Bot 相关环节错误的逐条明细，管理端「错误日志」页筛选查询；与 `events` 互补——事件按 key 合并聚合计数（管要不要通知），本表逐条留痕（管"到底发生了什么"）。写入经 `internal/errlog` 门面（尽力而为：写库失败只记日志；无归属请求的同键错误 60 秒窗口去重防刷库）。数据范围红线：只存错误文本与纯 ID 类参数，不存凭据/消息正文/媒体 URL。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 日志 ID |
+| `source` | TEXT | NOT NULL | 错误域：`request` / `botapi` / `cloud` / `backup` / `watch` / `mtproto`（白名单校验） |
+| `code` | TEXT | NOT NULL DEFAULT '' | apperr 错误码；空串 = 未分类 |
+| `stage` | TEXT | NOT NULL DEFAULT '' | 环节名（`fetch` / `download` / `split` / `send` / `upload` / `pin` / `enqueue` / `test` / `maintenance` 等） |
+| `severity` | TEXT | NOT NULL DEFAULT 'error' | `error`（任务失败或进程级异常）/ `warn`（尽力而为操作失败） |
+| `message` | TEXT | NOT NULL | 受控中文描述（发生了什么） |
+| `detail` | TEXT | NOT NULL DEFAULT '' | 原始错误串（截断规则同 `requests.error_detail`） |
+| `context_json` | TEXT | NOT NULL DEFAULT '{}' | 参数快照（job_id、bot_id、channel_key、destination 等纯 ID/名称类值） |
+| `request_id` | INTEGER | NOT NULL DEFAULT 0 | 关联 `requests` 行（**无外键**）；0 = 无归属请求；请求详情页据此深链反查 |
+| `created_at` | INTEGER | NOT NULL | 写入时间（Unix 毫秒） |
+
+保留策略：settings 键 `error_log_retention_days`（缺省 30 天）周期自动清理（每小时 + 启动即清一次）+ 管理端手动批量/按时间段删除（写审计）。
+
 ## 4. 表关系与约束
 
 ### 4.1 数据库外键（均指向 `users(id)`，均 NO ACTION）
@@ -444,6 +466,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | 运行设置 | `channel_copy_enabled` / `tg_reuse_enabled` | 布尔 | 频道副本同步 / 缓存频道复用总开关 |
 | 运行设置 | `dump_channel_id` / `dump_channel_title` | 数值 / 字符串 | 缓存频道（settings 优先于 `DUMP_CHANNEL_ID` 环境变量） |
 | 运行设置 | `last_backup_at` | 毫秒时间戳 | 最近备份时间 |
+| 运行设置 | `error_log_retention_days` | 数值 | 错误日志保留天数（1–365，缺省 30；即时生效） |
 | 系统 | `system_name` | 字符串 | 系统名称（缺省 `Spore`） |
 | 频道加入 | `join_enabled` / `join_auto_leave_external` / `join_require_approval` / `join_mute_enabled` / `join_archive_enabled` | 布尔 | `/join` 总开关与行为配置 |
 | 频道加入 | `join_max_channels` | 数值 | 活跃加入数量上限（0 = 不限） |
@@ -556,3 +579,6 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v20 | `requests.pin`、`requests.pin_ok`、`requests.pin_total`；`users.auto_pin`（自动置顶标记、结果回写与用户级偏好） |
 | v21 | `channel_bindings.bot_id`（绑定路由到 bot：仅该 bot 受理的任务投递；0 = 通配） |
 | v22 | `sent_messages` 表与坐标/请求两索引（引用回复锚点：/pin、/cancel 回复 bot 消息反查请求；含频道副本组首坐标供事后补置顶） |
+| v23 | `requests.error_detail`（失败根因原始错误串落库，管理端详情页展示；重试/重置随 error_code 清空） |
+| v24 | `dump_entries.dump_channel_id`（副本所在缓存频道，0 = 存量永不命中）；`channel_bindings` 软解绑状态机（status/unbind_reason/unbound_at，解绑不删行） |
+| v25 | `error_logs` 错误日志中心表与四索引（来源/错误码/请求/时间）；`cloud_uploads.error_detail`（单文件上传失败根因，对称 requests v23） |

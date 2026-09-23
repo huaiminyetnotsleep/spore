@@ -30,6 +30,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/media"
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
@@ -184,11 +185,22 @@ func main() {
 		logger.Error("初始化事件中心失败", "error", err.Error())
 		os.Exit(1)
 	}
+	// 错误日志中心：请求管线与 bot 相关环节错误逐条落 error_logs（v25），
+	// 供管理端筛选查询根因（events 事件中心按 key 聚合管通知，二者互补）。
+	// 保留天数经 syscfg error_log_retention_days 配置（缺省 30 天），启动
+	// 即清一次过期行，之后周期清理；写入与清理失败均只记日志。
+	errLogSvc := errlog.New(errlog.Options{Store: st, Log: logger})
+	errLogSvc.Cleanup(ctx)
+	go errLogSvc.Run(ctx)
 	if runtimeMediaErr != nil {
 		hub.Raise(ctx, notify.KeyMediaConfigInvalid, notify.SeverityError, "")
+		errLogSvc.Record(ctx, errlog.FromError(store.ErrorSourceRequest, "maintenance",
+			"运行时媒体配置无效（分段/限值校验失败）", runtimeMediaErr, nil))
 	}
 	if cloudCfgLoadErr != nil {
 		hub.CloudConfigInvalid(ctx)
+		errLogSvc.Record(ctx, errlog.FromError(store.ErrorSourceCloud, "maintenance",
+			"云盘配置加载失败（功能按关闭处理）", cloudCfgLoadErr, nil))
 	}
 
 	// rclone 启动探测 + 低频周期复查：开启云盘
@@ -200,6 +212,8 @@ func main() {
 				if cloudMgr.Enabled() {
 					logger.Warn("rclone 不可用，云盘下载功能按禁用处理", "error", err.Error())
 					hub.CloudDisabled(ctx)
+					errLogSvc.Record(ctx, errlog.FromError(store.ErrorSourceCloud, "maintenance",
+						"rclone 不可用，云盘下载功能按禁用处理", err, nil))
 				}
 				return
 			}
@@ -259,22 +273,29 @@ func main() {
 			// scene 汇总本轮失败场景（空串 = 本地快照与 R2 上传均成功
 			// 或 R2 未开启）：本地失败、R2 上传失败与空间不足跳过共用
 			// backup.failed 事件（按 key 合并 + 通知冷却，不会刷屏）。
+			// r2err 是产生该场景的原始错误（错误日志中心的根因来源）。
 			var scene string
+			var sceneErr error
 			if berr != nil {
 				scene = "定时备份执行失败"
 				if errors.Is(berr, backup.ErrInsufficientSpace) {
 					scene = "磁盘剩余空间不足，定时备份已跳过"
 				}
+				sceneErr = berr
 				logger.Error("定时备份失败", "error", berr.Error())
 			} else {
 				// 本地快照成功：R2 启用时把同一份快照打成全量 ZIP 直传
 				// 并远端轮转 keep 份（凭据文件不进包；失败仅告警不改
 				// last_backup_at 口径——下轮拍新快照重传即可）。
-				scene = runR2UploadStep(ctx, st, cfg.DataDir, res.Path, keep, time.Now(), logger)
+				scene, sceneErr = runR2UploadStep(ctx, st, cfg.DataDir, res.Path, keep, time.Now(), logger)
 			}
 			if scene != "" {
 				hub.Raise(ctx, notify.KeyBackupFailed, notify.SeverityError,
 					notify.BackupFailData{Scene: scene})
+				// 错误日志中心：备份失败明细逐次落库（事件按 key 合并只留
+				// 计数，根因文本在此不丢）；原始错误经 FromError 提取码
+				errLogSvc.Record(ctx, errlog.FromError(store.ErrorSourceBackup, "maintenance",
+					"定时备份失败："+scene, sceneErr, nil))
 			} else {
 				hub.Recover(ctx, notify.KeyBackupFailed)
 			}
@@ -294,6 +315,15 @@ func main() {
 		// Bot 通道就绪后由 SetSender 补发通知
 		hub.Raise(ctx, notify.KeyStartupRecovered, notify.SeverityWarn,
 			notify.InterruptedData{Count: n})
+		// 错误日志中心：批量中断留一行汇总（逐请求明细由 Discard/
+		// FailInterruptedRequests 的请求行承载，此处只记事实与数量）
+		errLogSvc.Record(ctx, errlog.Record{
+			Source:   store.ErrorSourceRequest,
+			Code:     string(apperr.CodeInterrupted),
+			Severity: store.ErrorSeverityWarn,
+			Message:  "进程退出遗留的未完成任务已标记失败（可重试）",
+			Context:  map[string]any{"count": n},
+		})
 	}
 
 	// 内存队列与访问控制服务在 MTProto 就绪前创建：Web 管理页面的
@@ -310,6 +340,7 @@ func main() {
 	accessSvc, err := access.New(access.Options{
 		Store: st, Queue: q, Events: hub,
 		Activity: activityHub{hub: hub}, // 新用户申请活动通知
+		ErrLog:   errLogSvc,             // 入队失败（队列满）等提交环节错误落库
 		Log:      logger,
 	})
 	if err != nil {
@@ -354,6 +385,8 @@ func main() {
 		// hub 尚未构建（云盘同款时序差异）：延迟到 hub 就绪后上报
 		defer func() {
 			hub.Raise(context.Background(), notify.KeyBotListInvalid, notify.SeverityWarn, nil)
+			errLogSvc.Record(context.Background(), errlog.FromError(store.ErrorSourceBotAPI,
+				"maintenance", "机器人列表文件加载失败（回退 env 列表）", err, nil))
 		}()
 	}
 	// 每 bot 独立的大文件直传会话（botID 即 token 数字前缀）：跨 MTProto
@@ -378,7 +411,17 @@ func main() {
 		switch state {
 		case mtproto.StateOffline:
 			hub.Raise(ctx, notify.KeySessionOffline, notify.SeverityError, nil)
-			if kind := m.Session().Status().ErrorKind; kind == mtproto.ErrorKindBanned || kind == mtproto.ErrorKindRevoked {
+			// 错误日志中心：离线根因落库（LastError 此前只在内存快照，重启
+			// 即失；封禁/网络异常的原始错误文本自此可追溯）
+			snap := m.Session().Status()
+			errLogSvc.Record(ctx, errlog.Record{
+				Source:  store.ErrorSourceMTProto,
+				Stage:   "maintenance",
+				Detail:  snap.LastError,
+				Message: "用户号会话离线（原因分类：" + snap.ErrorKind + "）",
+				Context: map[string]any{"error_kind": snap.ErrorKind},
+			})
+			if kind := snap.ErrorKind; kind == mtproto.ErrorKindBanned || kind == mtproto.ErrorKindRevoked {
 				hub.Raise(ctx, notify.KeyMTProtoBanned, notify.SeverityCritical,
 					notify.MTProtoBanData{ErrorKind: kind})
 			}
@@ -448,6 +491,7 @@ func main() {
 		Transfer:       transferRuntime,        // 四项传输并发的原子运行时配置
 		CloudCfg:       cloudMgr,               // 云盘下载页（配置视图/保存）与补存端点
 		CloudSink:      rcloneSink,             // 云盘目的地连通性测试通道
+		ErrLog:         errLogSvc,              // 连通性测试失败结果落错误日志
 		CloudBackupKey: cfg.OAuthEncryptionKey, // 云盘备份候选服务端加密根密钥
 		Version:        version,                // 构建期版本（总览页服务信息/备份元数据）
 		ReleaseCheck:   releaseCheck,           // 检查更新（上游最新 Release 查询）
@@ -485,6 +529,7 @@ func main() {
 		join:        joinSvc,
 		watch:       watchSvc,
 		hub:         hub,
+		errLog:      errLogSvc,
 		userClient:  m,
 		pool:        pool,
 		botClients:  botClients,

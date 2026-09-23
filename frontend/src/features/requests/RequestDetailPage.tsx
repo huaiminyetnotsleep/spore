@@ -233,6 +233,7 @@ export function RequestDetailPage() {
                         根因：{detail.error_detail}
                       </Paragraph>
                     ) : null}
+                    <Link to={`/error-logs?request_id=${detail.id}`}>查看相关日志</Link>
                   </Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="媒体类型">

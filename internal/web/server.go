@@ -19,6 +19,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
@@ -237,6 +238,9 @@ type Options struct {
 	// CloudSink 是云盘连通性测试通道（*cloudarchive.RcloneSink 天然满足）；
 	// 缺失时连通性测试端点返回受控不可用。
 	CloudSink cloudarchive.Sink
+	// ErrLog 是错误日志写入门面（可选，nil 安全）；管理端触发的连通性
+	// 测试失败等结果同步落 error_logs（此前只在 HTTP 响应里一闪而过）。
+	ErrLog *errlog.Service
 	// CloudBackupKey 是云盘备份候选的服务端根密钥。生产环境注入
 	// cfg.OAuthEncryptionKey，cloudarchive 再经 HKDF 域分离派生候选专用 key。
 	CloudBackupKey []byte
@@ -285,6 +289,7 @@ type Server struct {
 	cloudCfg         *cloudarchive.Manager
 	cloudSink        cloudarchive.Sink
 	cloudPending     *cloudarchive.PendingStore
+	errLog           *errlog.Service
 	dbPath           string
 	version          string
 	release          ReleaseChecker
@@ -356,6 +361,7 @@ func New(opt Options) (*Server, error) {
 		cloudCfg:     opt.CloudCfg,
 		cloudSink:    opt.CloudSink,
 		cloudPending: cloudPending,
+		errLog:       opt.ErrLog,
 		dbPath:       dbPath,
 		version:      version,
 		release:      opt.ReleaseCheck,

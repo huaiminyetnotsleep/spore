@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
  * 全路由响应式 smoke（实施计划 8.2）：
- * - 400px 覆盖 24 个受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
+ * - 400px 覆盖 25 个受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
  *   页面操作区 / 筛选 / 表单主按钮可见且落在视口宽度内；
  * - 宽表断言滚动发生在表格容器（.ant-table-content）内部；
  * - 1440 / 1024 / 768 覆盖代表性列表、详情、图表与设置页；
@@ -318,6 +318,38 @@ const joinedChannelsFixture = {
   ],
 };
 
+const errorLogsFixture = {
+  items: [
+    {
+      id: 2,
+      source: "request",
+      code: "BOT_SEND_FAILED",
+      stage: "send",
+      severity: "error",
+      message: "任务失败",
+      detail: "FLOOD_WAIT_9: 3000",
+      context: { job_id: "j2", bot_id: 42 },
+      request_id: 9001,
+      created_at: 1757000000000,
+    },
+    {
+      id: 1,
+      source: "cloud",
+      code: "CLOUD_NETWORK",
+      stage: "test",
+      severity: "warn",
+      message: "云盘连通性测试失败：mega-1",
+      detail: "couldn't login: Object not found",
+      context: { destination: "mega-1" },
+      request_id: 0,
+      created_at: 1756990000000,
+    },
+  ],
+  page: 1,
+  page_size: 20,
+  total: 2,
+};
+
 const eventsFixture = {
   items: [
     {
@@ -373,6 +405,7 @@ const settingsFixture = {
   timezone: "Asia/Shanghai",
   max_links_per_message: 30,
   max_request_attempts: 3,
+  error_log_retention_days: 30,
   dedup_window_min: 30,
   queue_capacity: 8,
   queue_runtime: 8,
@@ -557,6 +590,9 @@ async function mockAdminAPI(page: Page) {
       case "/api/v1/events":
         await fulfillJSON(route, 200, eventsFixture);
         return;
+      case "/api/v1/error-logs":
+        await fulfillJSON(route, 200, errorLogsFixture);
+        return;
       case "/api/v1/audit":
         await fulfillJSON(route, 200, auditFixture);
         return;
@@ -598,7 +634,7 @@ async function mockAdminAPI(page: Page) {
   });
 }
 
-/** 24 个受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
+/** 25 个受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
 const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin", heading: "总览" },
   { path: "/admin/stats", heading: "业务统计" },
@@ -616,6 +652,7 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/joined-channels", heading: "已加入频道" },
   { path: "/admin/join-settings", heading: "受邀设置" },
   { path: "/admin/events", heading: "事件中心" },
+  { path: "/admin/error-logs", heading: "错误日志" },
   { path: "/admin/audit", heading: "审计日志" },
   { path: "/admin/settings", heading: "运行设置" },
   { path: "/admin/settings/system", heading: "系统设置" },
@@ -679,7 +716,7 @@ async function expectActionsWithinViewport(page: Page, label: string) {
 }
 
 test.describe("全路由响应式 smoke", () => {
-  test("400px：24 个受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
+  test("400px：25 个受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
     await page.setViewportSize(PHONE_VIEWPORT);
     await mockAdminAPI(page);
 

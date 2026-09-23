@@ -12,6 +12,7 @@ import {
   ApiOutlined,
   EyeOutlined,
   AuditOutlined,
+  BugOutlined,
   CheckCircleOutlined,
   BarChartOutlined,
   BellOutlined,
@@ -106,6 +107,9 @@ const JoinSettingsPage = lazy(() =>
 );
 const EventsPage = lazy(() =>
   import("../features/events/EventsPage").then((m) => ({ default: m.EventsPage })),
+);
+const ErrorLogsPage = lazy(() =>
+  import("../features/error-logs/ErrorLogsPage").then((m) => ({ default: m.ErrorLogsPage })),
 );
 const SettingsPage = lazy(() =>
   import("../features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
@@ -325,6 +329,15 @@ export const routeMeta = [
     menuVisible: true,
   },
   {
+    key: "error-logs",
+    path: "/error-logs",
+    label: "错误日志",
+    title: "错误日志",
+    groupKey: "events-audit",
+    icon: <BugOutlined />,
+    menuVisible: true,
+  },
+  {
     key: "audit",
     path: "/audit",
     label: "审计日志",
@@ -433,7 +446,7 @@ export const navigationGroups = [
   {
     key: "events-audit",
     label: "事件与审计",
-    routeKeys: ["events", "audit"],
+    routeKeys: ["events", "error-logs", "audit"],
   },
   {
     key: "bot-management",
@@ -536,6 +549,7 @@ export function AppRoutes() {
         <Route path="/joined-channels" element={<JoinedChannelsPage />} />
         <Route path="/join-settings" element={<JoinSettingsPage />} />
         <Route path="/events" element={<EventsPage />} />
+        <Route path="/error-logs" element={<ErrorLogsPage />} />
         {/* 系统运维页面：写操作仍统一走 /api/v1 */}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/system" element={<SystemConfigPage />} />

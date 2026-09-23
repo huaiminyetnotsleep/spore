@@ -266,7 +266,7 @@ func seedPriorCloudUpload(t *testing.T, s *store.Store, j Job, remotePaths ...st
 		if err != nil {
 			t.Fatalf("种子历史上传行失败: %v", err)
 		}
-		if err := s.FinishCloudUpload(ctx, row.ID, store.CloudUploadSucceeded, "", 100, 0); err != nil {
+		if err := s.FinishCloudUpload(ctx, row.ID, store.CloudUploadSucceeded, "", "", 100, 0); err != nil {
 			t.Fatalf("种子历史上传终态失败: %v", err)
 		}
 	}

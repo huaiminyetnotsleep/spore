@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
@@ -159,6 +160,15 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 		s.log.Warn("缓存补写入队失败（队列已满）",
 			"request_id", createdID, "parent_request_id", requestID)
 		out.QueueFull = true
+		s.errLog.Record(ctx, errlog.Record{
+			Source:    store.ErrorSourceRequest,
+			Code:      string(apperr.CodeQueueFull),
+			Stage:     "enqueue",
+			Severity:  store.ErrorSeverityError,
+			Message:   "缓存补写入队失败（队列已满），请求标记失败",
+			Context:   map[string]any{"user_id": req.UserID, "parent_request_id": requestID, "channel_key": req.ChannelKey, "message_id": req.MessageID},
+			RequestID: createdID,
+		})
 		if ferr := s.store.FinishRequest(ctx, createdID, store.RequestResult{
 			Status:       store.RequestFailed,
 			ErrorCode:    string(apperr.CodeQueueFull),

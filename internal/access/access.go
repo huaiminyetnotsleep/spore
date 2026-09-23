@@ -12,6 +12,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/queue"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
@@ -70,8 +71,11 @@ type Options struct {
 	RequestCanceller RequestCanceller // 可选；缺省从 Queue 自动探测
 	Events           EventSink        // 可选：数据库不可用时上报事件
 	Activity         ActivityNotifier // 可选：新用户申请活动通知
-	Log              *slog.Logger
-	Now              func() time.Time // 可注入时钟（测试用）；缺省 time.Now
+	// ErrLog 错误日志写入门面（可选，nil 安全）：入队失败（队列满竞态）
+	// 等提交环节错误逐条落 error_logs。
+	ErrLog *errlog.Service
+	Log    *slog.Logger
+	Now    func() time.Time // 可注入时钟（测试用）；缺省 time.Now
 }
 
 // Service 是访问控制应用服务；零值不可用，经 New 构造。
@@ -81,6 +85,7 @@ type Service struct {
 	canceller RequestCanceller
 	events    EventSink
 	activity  ActivityNotifier
+	errLog    *errlog.Service
 	senderMu  sync.RWMutex
 	sender    delivery.Sender // 审批结果通知通道；Bot 就绪后经 SetSender 注入（见注释）
 	dumpLive  dumpLiveFunc    // 缓存副本有效性校验；Bot 就绪后经 SetDumpLive 注入
@@ -107,7 +112,8 @@ func New(opt Options) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: opt.Store, queue: opt.Queue, canceller: canceller, events: opt.Events, activity: opt.Activity, log: opt.Log, now: now}, nil
+	return &Service{store: opt.Store, queue: opt.Queue, canceller: canceller,
+		events: opt.Events, activity: opt.Activity, errLog: opt.ErrLog, log: opt.Log, now: now}, nil
 }
 
 // SetSender 注入审批结果通知通道。通知依赖 Bot 实例，而 Bot 装配又需要本服务
@@ -311,6 +317,15 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 	job.BotID = in.BotID
 	if err := s.queue.Enqueue(job); err != nil {
 		s.log.Warn("事务提交后入队失败（队列已满）", "user_id", in.UserID, "request_id", d.RequestID)
+		s.errLog.Record(ctx, errlog.Record{
+			Source:    store.ErrorSourceRequest,
+			Code:      string(apperr.CodeQueueFull),
+			Stage:     "enqueue",
+			Severity:  store.ErrorSeverityError,
+			Message:   "提交后入队失败（队列已满），请求标记失败",
+			Context:   map[string]any{"user_id": in.UserID, "bot_id": in.BotID, "channel_key": ChannelKey(in.Ref), "message_id": in.Ref.MessageID},
+			RequestID: d.RequestID,
+		})
 		finish := store.RequestResult{
 			Status:    store.RequestFailed,
 			ErrorCode: string(apperr.CodeQueueFull),

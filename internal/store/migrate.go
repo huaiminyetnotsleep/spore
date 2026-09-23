@@ -429,6 +429,39 @@ ALTER TABLE channel_bindings ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
 ALTER TABLE channel_bindings ADD COLUMN unbind_reason TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE channel_bindings ADD COLUMN unbound_at INTEGER NOT NULL DEFAULT 0;`,
+
+	// v25：错误日志中心——error_logs 逐条记录请求管线与 bot 相关环节的
+	// 错误明细（受控描述 + 原始根因串 + 参数快照），管理端可筛选查询，
+	// 与 events 事件中心（按 key 合并的聚合告警）互补：events 管"要不要
+	// 通知"，error_logs 管"到底发生了什么"。detail 为截断后的原始错误串
+	//（截断与脱敏规则同 requests.error_detail，v23），只存错误文本与纯
+	// ID 类参数，不存凭据/消息正文/媒体 URL；request_id 为一等列，管理端
+	// 从请求详情深链反查该请求全部环节错误。保留策略：syscfg
+	// error_log_retention_days（默认 30 天）周期自动清理 + 管理端手动
+	// 批量/按时间段删除。cloud_uploads 补 error_detail 列：与 requests
+	// v23 对称，单文件上传失败的 rclone 根因不再只进日志。
+	`CREATE TABLE error_logs (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	source TEXT NOT NULL,
+	code TEXT NOT NULL DEFAULT '',
+	stage TEXT NOT NULL DEFAULT '',
+	severity TEXT NOT NULL DEFAULT 'error',
+	message TEXT NOT NULL,
+	detail TEXT NOT NULL DEFAULT '',
+	context_json TEXT NOT NULL DEFAULT '{}',
+	request_id INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_error_logs_source ON error_logs(source, id);
+
+CREATE INDEX idx_error_logs_code ON error_logs(code, id);
+
+CREATE INDEX idx_error_logs_request ON error_logs(request_id) WHERE request_id != 0;
+
+CREATE INDEX idx_error_logs_created ON error_logs(created_at);
+
+ALTER TABLE cloud_uploads ADD COLUMN error_detail TEXT;`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

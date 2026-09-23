@@ -66,6 +66,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     max_request_attempts: 3,
     backup_interval_hours: 6,
     backup_keep_count: 8,
+    error_log_retention_days: 30,
     download_threads: 4,
     upload_threads: 4,
     download_connections: 4,

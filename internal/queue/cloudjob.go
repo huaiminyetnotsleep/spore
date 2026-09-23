@@ -18,6 +18,7 @@ import (
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
@@ -299,6 +300,24 @@ func uploadCloudFile(ctx context.Context, d Deps, j Job, dest cloudarchive.Desti
 	if rowID != 0 {
 		finishCloudUploadRow(ctx, d, j, rowID, err, spec.Size)
 	}
+	// 错误日志中心：单文件级失败留痕（含远端路径与目的地，比终态记录多
+	// "哪个文件"维度；取消/超时不算文件级失败，与终态行同口径）
+	if err != nil && !isContextErr(err) {
+		ae := apperr.From(err)
+		fileCtx := jobLogContext(j)
+		fileCtx["destination"] = dest.Name
+		fileCtx["remote_path"] = f.RemotePath
+		d.ErrLog.Record(ctx, errlog.Record{
+			Source:    store.ErrorSourceRequest,
+			Code:      string(ae.Code),
+			Stage:     errorStage(ae.Code),
+			Severity:  store.ErrorSeverityError,
+			Message:   "云盘文件上传失败：" + f.FileName,
+			Detail:    errorDetailText(ae),
+			Context:   fileCtx,
+			RequestID: j.RequestID,
+		})
+	}
 	return err
 }
 
@@ -336,13 +355,14 @@ func finishCloudUploadRow(ctx context.Context, d Deps, j Job, rowID int64, uploa
 		if isContextErr(uploadErr) {
 			return
 		}
-		code := string(apperr.From(uploadErr).Code)
-		if err := d.Store.FinishCloudUpload(wctx, rowID, store.CloudUploadFailed, code, 0, 0); err != nil {
+		ae := apperr.From(uploadErr)
+		if err := d.Store.FinishCloudUpload(wctx, rowID, store.CloudUploadFailed,
+			string(ae.Code), errorDetailText(ae), 0, 0); err != nil {
 			d.Log.Warn("落库云盘上传失败终态失败", "job_id", j.ID, "error", err.Error())
 		}
 		return
 	}
-	if err := d.Store.FinishCloudUpload(wctx, rowID, store.CloudUploadSucceeded, "", size, 0); err != nil {
+	if err := d.Store.FinishCloudUpload(wctx, rowID, store.CloudUploadSucceeded, "", "", size, 0); err != nil {
 		d.Log.Warn("落库云盘上传成功终态失败", "job_id", j.ID, "error", err.Error())
 	}
 }
@@ -439,6 +459,8 @@ func sendCloudConfirm(ctx context.Context, d Deps, j Job, paths []string, skippe
 	}
 	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, b.String()); err != nil {
 		d.Log.Warn("云盘确认文本发送失败", "job_id", j.ID, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+			"云盘确认文本发送失败", err))
 	}
 }
 

@@ -1027,6 +1027,38 @@ cloud-drive.json.enc
 
 ---
 
+## 6c. 错误日志中心
+
+### GET /api/v1/error-logs
+
+错误日志列表（认证，服务端分页，id 倒序）。逐条记录请求管线与 Bot 相关环节的错误明细，与事件中心互补（事件按 key 聚合管通知，本表管逐条根因）。查询参数：`source`（可选，`request` / `botapi` / `cloud` / `backup` / `watch` / `mtproto`）、`code`（可选，按 apperr 错误码精确匹配）、`severity`（可选，`error` / `warn`）、`request_id`（可选，非零整数——请求详情页「查看相关日志」深链）、`created_after` / `created_before`（可选，Unix 毫秒时间范围，before 为开区间上界）、`page`、`page_size`（上限 100）。
+
+响应行：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | int64 | 日志 ID |
+| `source` | string | 错误域：`request`（请求管线）/ `botapi`（Bot 收发）/ `cloud`（网盘）/ `backup`（备份）/ `watch`（监听源）/ `mtproto`（用户号会话） |
+| `code` | string | apperr 错误码；空串 = 未分类 |
+| `stage` | string | 环节名（`fetch` / `download` / `split` / `send` / `upload` / `pin` / `enqueue` / `test` / `maintenance` 等）；空串 = 未标注 |
+| `severity` | string | `error`（任务失败或进程级异常）/ `warn`（尽力而为操作失败） |
+| `message` | string | 受控中文描述（发生了什么） |
+| `detail` | string | 原始错误串（与 requests.error_detail 同规则截断）；空串 = 无根因文本 |
+| `context` | object | 参数快照（纯 ID/名称类值：job_id、bot_id、channel_key、destination 等） |
+| `request_id` | int64 | 关联请求行（0 = 无归属请求） |
+| `created_at` | int64 | Unix 毫秒 |
+
+### POST /api/v1/error-logs/delete
+
+删除错误日志（认证 + CSRF），两种模式二选一，响应均为 `{"ok":true,"deleted":<实际删除行数>}`：
+
+- 按-ID 批量删：`{"ids":[…]}`（1–100 个正整数）；
+- 按时间段删：`{"after":<ms>,"before":<ms>,"source":"","code":""}` —— 至少一个时间界（before 为开区间上界），可叠加 `source` / `code` 条件（清理「某时间之前的某类错误」场景）；前端先查条数再二次确认。
+
+删除只影响留痕；日常清理交给自动保留策略（settings 键 `error_log_retention_days`，缺省 30 天，errlog 清理循环每小时执行）。两种模式均写审计。
+
+---
+
 ## 7. 事件中心
 
 ### GET /api/v1/events
@@ -1123,6 +1155,7 @@ cloud-drive.json.enc
 | `max_request_attempts` | int | 单个请求累计尝试上限（1–10，含首次；即时生效；缺省 3） |
 | `backup_interval_hours` | int | 自动备份间隔小时（0–168，0 = 关闭；即时生效；缺省 6）。管理端编辑入口在备份页（见 `POST /api/v1/backup/r2`） |
 | `backup_keep_count` | int | 自动备份保留份数（1–50；即时生效；缺省 8，默认间隔下约 48 小时窗口）。管理端编辑入口在备份页 |
+| `error_log_retention_days` | int | 错误日志保留天数（1–365；即时生效；缺省 30），过期行由 errlog 清理循环每小时删除 |
 | `download_threads` / `upload_threads` / `download_connections` / `upload_connections` | int | 传输并发当前生效值（1–16） |
 | `download_threads_env` / `upload_threads_env` / `download_connections_env` / `upload_connections_env` | int | 对应环境变量默认值 |
 | `download_threads_overridden` / `upload_threads_overridden` / `download_connections_overridden` / `upload_connections_overridden` | bool | 该项是否存在数据库覆盖（缺省 `false` = 跟随环境默认） |
@@ -1148,6 +1181,7 @@ cloud-drive.json.enc
 | `max_request_attempts` | int | 1–10（累计含首次）；缺省保持不变，保存后即时影响重试校验 |
 | `backup_interval_hours` | int | 0–168（0 = 关闭自动备份）；缺省保持不变，保存后即时生效。管理端编辑入口已挪至备份页（`POST /api/v1/backup/r2` 同键），本端点保留兼容 |
 | `backup_keep_count` | int | 1–50；缺省保持不变，保存后即时生效（轮转保留最近 N 份）。管理端编辑入口已挪至备份页，本端点保留兼容 |
+| `error_log_retention_days` | int | 1–365；缺省保持不变，保存后即时生效（错误日志自动保留天数，清理循环每轮重读）。编辑入口在运行设置页 |
 | `queue_capacity` | int | 1–4096；缺省保持不变 |
 | `worker_count` | int | 1–16；缺省保持不变 |
 | `max_file_size` + `max_file_unit` | string | 数值 + 单位（`MB`/`GB`）；缺省保持不变，**两项必须成对填写** |

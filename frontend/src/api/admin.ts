@@ -685,6 +685,8 @@ export interface SettingsView {
   backup_interval_hours: number;
   /** 自动备份保留份数（缺省 8 ≈ 48 小时窗口）。 */
   backup_keep_count: number;
+  /** 错误日志保留天数（缺省 30；即时生效）。 */
+  error_log_retention_days: number;
 
   /** 文件分片传输运行时配置：当前生效值（1–16）。 */
   download_threads: number;
@@ -1216,6 +1218,67 @@ export interface WatchEventsDeleteResult {
   ok: boolean;
   /** 实际删除行数（不存在的不计入）。 */
   deleted: number;
+}
+
+// ---- 错误日志中心（GET /api/v1/error-logs） ----
+
+/** 错误日志行（error_logs 表）：逐条错误明细与参数快照。 */
+export interface ErrorLogRow {
+  id: number;
+  /** 错误域：request/botapi/cloud/backup/watch/mtproto。 */
+  source: ErrorLogSource;
+  /** apperr 错误码；空串=未分类。 */
+  code: string;
+  /** 环节名（fetch/send/upload/pin…）；空串=未标注。 */
+  stage: string;
+  severity: ErrorLogSeverity;
+  /** 受控中文描述（发生了什么）。 */
+  message: string;
+  /** 原始错误串（截断后）；空串=无根因文本。 */
+  detail: string;
+  /** 参数快照（纯 ID/名称类值）。 */
+  context: Record<string, unknown>;
+  /** 关联 requests 行；0=无归属请求。 */
+  request_id: number;
+  created_at: number;
+}
+
+export type ErrorLogSource = "request" | "botapi" | "cloud" | "backup" | "watch" | "mtproto";
+export type ErrorLogSeverity = "error" | "warn";
+
+/** 错误日志分页列表参数（全部筛选可空 = 不限）。 */
+export interface ErrorLogsParams {
+  source?: ErrorLogSource;
+  code?: string;
+  severity?: ErrorLogSeverity;
+  /** 非零请求 ID 深链筛选。 */
+  request_id?: number;
+  /** 时间范围（Unix 毫秒；before 为开区间上界）。 */
+  created_after?: number;
+  created_before?: number;
+  page?: number;
+  page_size?: number;
+}
+
+export interface ErrorLogsResult {
+  items: ErrorLogRow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export function fetchErrorLogs(params: ErrorLogsParams): Promise<ErrorLogsResult> {
+  const qs = new URLSearchParams();
+  if (params.source) qs.set("source", params.source);
+  if (params.code) qs.set("code", params.code);
+  if (params.severity) qs.set("severity", params.severity);
+  if (params.request_id) qs.set("request_id", String(params.request_id));
+  if (params.created_after) qs.set("created_after", String(params.created_after));
+  if (params.created_before) qs.set("created_before", String(params.created_before));
+  if (params.page) qs.set("page", String(params.page));
+  if (params.page_size) qs.set("page_size", String(params.page_size));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return apiRequest<ErrorLogsResult>(`/api/v1/error-logs${suffix}`);
 }
 
 /** 监听模块统计视图（GET /api/v1/watch-stats）。 */

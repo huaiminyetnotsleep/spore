@@ -20,8 +20,8 @@ describe("SPA 导航信息架构", () => {
       "机器人池",
       "系统运维",
     ]);
-    expect(navRoutes).toHaveLength(24);
-    expect(routeMeta).toHaveLength(27);
+    expect(navRoutes).toHaveLength(25);
+    expect(routeMeta).toHaveLength(28);
     expect(navigationGroups.flatMap((group) => group.routeKeys)).toEqual([
       "overview",
       "stats",
@@ -39,6 +39,7 @@ describe("SPA 导航信息架构", () => {
       "applications",
       "users",
       "events",
+      "error-logs",
       "audit",
       "bots",
       "settings",

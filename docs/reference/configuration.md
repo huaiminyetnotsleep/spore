@@ -140,7 +140,7 @@ openssl rand -hex 32
 | 修改 `.env` / 环境变量 | 重启进程（或重建容器） |
 | `queue_capacity`、`worker_count` | 重启生效 |
 | 媒体三项（`max_file_size` / `stream_limit` / `temp_dir_max_size`） | 重启生效；当前进程的媒体配置不会在线替换 |
-| `timezone`、`dedup_window_min`、`max_links_per_message`、`max_request_attempts`、`system_name`、`backup_interval_hours`、`backup_keep_count` | 即时（每次提交、查询或文案渲染时读取；备份项由定时循环每轮重读） |
+| `timezone`、`dedup_window_min`、`max_links_per_message`、`max_request_attempts`、`system_name`、`backup_interval_hours`、`backup_keep_count`、`error_log_retention_days` | 即时（每次提交、查询或文案渲染时读取；备份项由定时循环每轮重读；错误日志保留由 errlog 清理循环每轮重读） |
 | `channel_copy_enabled`、`tg_reuse_enabled`、缓存频道 ID | 即时（每次任务成功副本、复用前读取，影响新任务） |
 | 受邀频道 `join_*` 六项 | 即时 |
 | 传输四项 | 即时发布；细节见下 |
@@ -178,6 +178,7 @@ openssl rand -hex 32
 | 传输四项（数据库覆盖值） | 各自环境默认（通常 4） | 事务内整体发布；线程/连接语义见第 3.2 节 |
 | `backup_interval_hours` | 6；合法 0–168（0 = 关闭自动备份） | 即时生效；定时备份到 `data/backups/`（磁盘空间预检，不足则跳过并产生 `backup.failed` 事件）；CLI 同款逻辑 `spore admin backup`。管理端编辑入口在备份页 |
 | `backup_keep_count` | 8；合法 1–50 | 即时生效；按修改时间保留最近 N 份，超出自动删除最老（默认 6h×8 ≈ 48 小时窗口）；R2 上云开启时远端按同份数轮转。管理端编辑入口在备份页 |
+| `error_log_retention_days` | 30；合法 1–365 | 即时生效（清理循环每轮重读）；error_logs 表按该天数周期自动清理（每小时执行 + 启动即清一次），管理端错误日志页另有手动批量/按时间段删除 |
 | `last_backup_at` | 0 | 数据库备份导出（Web 手动 / CLI / 定时）成功后写入 Unix 毫秒时间；仅页面状态展示 |
 | `access_key_hash` | 首次启动自动生成 | 只存 SHA-256 哈希；明文仅在生成时输出一次；重置会使全部 Web 会话失效 |
 | `github_binding` | 未绑定 | 只保存 GitHub 数字 ID、登录名和时间；解绑会使全部 Web 会话失效 |

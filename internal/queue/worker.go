@@ -18,6 +18,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/media"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/mtproto"
@@ -185,7 +186,10 @@ type Deps struct {
 	CloudSink CloudSink
 	// CloudCfg 提供云盘任务运行时的目的地解析；nil 时云盘任务直接失败。
 	CloudCfg CloudCfg
-	Log      *slog.Logger
+	// ErrLog 是错误日志写入门面（nil 安全：未装配时全部 no-op）；
+	// 每次失败尝试与尽力而为操作的失败逐条落 error_logs 供管理端查询。
+	ErrLog *errlog.Service
+	Log    *slog.Logger
 }
 
 // copyWindow 是任务成功后频道副本投递的独立时间窗：使用剥离取消信号的
@@ -241,6 +245,8 @@ func Process(d Deps) Processor {
 			if id, serr := d.senderFor(j).SendMessage(ctx, j.ChatID, statusPromptHTML(j)); serr != nil {
 				d.Log.Warn("重试任务补发占位提示失败，本轮无进度展示",
 					"job_id", j.ID, "request_id", j.RequestID, "error", serr.Error())
+				d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+					"重试任务补发占位提示失败", serr))
 			} else {
 				j.StatusMsgID = id
 				d.recordAnchors(ctx, j, store.SentKindStatus, []int{id})
@@ -300,6 +306,9 @@ func Process(d Deps) Processor {
 				ae = apperr.New(apperr.CodeInterrupted, "进程退出中断任务")
 			}
 			d.Log.Error("任务失败", "job_id", j.ID, "ref", j.Ref.String(), "code", ae.Code, "error", err.Error())
+			// 错误日志中心：每次失败尝试逐条留痕（requests.error_detail 只保留
+			// 最终一次，重试期间的中间根因在此不丢）
+			d.ErrLog.Record(ctx, taskErrorLog(j, ae, meta))
 			if finishErr := finishRequest(d, ctx, j, store.RequestResult{
 				Status:           store.RequestFailed,
 				ErrorCode:        string(ae.Code),
@@ -326,6 +335,8 @@ func Process(d Deps) Processor {
 				} else {
 					if id, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
 						d.Log.Warn("错误提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+						d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+							"任务失败提示发送失败", sendErr))
 					} else {
 						d.recordAnchors(ctx, j, store.SentKindFailure, []int{id})
 					}
@@ -415,6 +426,8 @@ func (d Deps) recordAnchors(ctx context.Context, j Job, kind string, ids []int) 
 	if err := d.Store.InsertSentMessages(ctx, rows); err != nil {
 		d.Log.Warn("消息坐标落库失败",
 			"job_id", j.ID, "request_id", j.RequestID, "kind", kind, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceRequest, "store",
+			"消息坐标落库失败（kind="+kind+"）", err))
 	}
 }
 
@@ -448,6 +461,7 @@ func (d Deps) requestPin(ctx context.Context, j Job) bool {
 	r, err := d.Store.GetRequest(ctx, j.RequestID)
 	if err != nil {
 		d.Log.Warn("读取置顶标记失败，本任务不置顶", "request_id", j.RequestID, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceRequest, "pin", "读取置顶标记失败", err))
 		return false
 	}
 	return r.Pin
@@ -462,11 +476,29 @@ func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 	if d.Store != nil && j.RequestID != 0 {
 		if err := d.Store.SetRequestPinResult(ctx, j.RequestID, outcome.OK, outcome.Total); err != nil {
 			d.Log.Warn("置顶结果回写失败", "request_id", j.RequestID, "error", err.Error())
+			d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceRequest, "pin", "置顶结果回写失败", err))
 		}
+	}
+	// 错误日志中心：置顶逐目标失败留痕（任务整体成功，置顶为附属操作，
+	// warn 级）；ErrCode 已由 binding 分类，detail 留空由码定位。
+	for _, t := range outcome.Targets {
+		if t.Pinned || t.ErrCode == "" {
+			continue
+		}
+		d.ErrLog.Record(ctx, errlog.Record{
+			Source:    store.ErrorSourceRequest,
+			Code:      t.ErrCode,
+			Stage:     "pin",
+			Severity:  store.ErrorSeverityWarn,
+			Message:   "置顶失败：" + t.Label,
+			Context:   map[string]any{"job_id": j.ID, "bot_id": j.BotID, "target": t.Label},
+			RequestID: j.RequestID,
+		})
 	}
 	sourceURL, _ := j.Ref.URL()
 	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, pinResultText(sourceURL, outcome)); err != nil {
 		d.Log.Warn("置顶确认发送失败", "job_id", j.ID, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize", "置顶确认发送失败", err))
 	}
 }
 
@@ -549,6 +581,7 @@ func (d Deps) channelLinks(ctx context.Context, j Job) []message.ChannelLink {
 	links, err := d.Channels.PublicChannelLinks(ctx, j.UserID)
 	if err != nil {
 		d.Log.Warn("读取频道脚注链接失败，本任务不带脚注", "user_id", j.UserID, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceRequest, "copy", "读取频道脚注链接失败", err))
 		return nil
 	}
 	return links
@@ -777,6 +810,7 @@ func markStarted(ctx context.Context, d Deps, j Job) bool {
 			return false
 		}
 		d.Log.Warn("记录任务开始失败", "job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
+		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceRequest, "claim", "记录任务开始失败", err))
 		if d.Events != nil {
 			d.Events.StoreWriteFailed(ctx, "任务开始标记落库")
 		}
@@ -800,6 +834,10 @@ func finishRequest(d Deps, ctx context.Context, j Job, r store.RequestResult) er
 		}
 		d.Log.Error("落库任务终态失败", "job_id", j.ID, "request_id", j.RequestID,
 			"status", r.Status, "error", err.Error())
+		// 错误日志中心：终态落库失败意味着记录可能失真（供排障对照
+		// requests 行与日志的差异）；沿用上方剥离取消信号的 wctx 写入
+		d.ErrLog.Record(wctx, warnErrorLog(j, store.ErrorSourceRequest, "store",
+			"落库任务终态失败（status="+string(r.Status)+"）", err))
 		// 数据库写入失败的代表性事件源：终态丢失意味着记录失真，需要管理员关注
 		if d.Events != nil {
 			d.Events.StoreWriteFailed(wctx, "任务终态落库")
@@ -852,6 +890,16 @@ func failureNoticeHTML(code apperr.Code, ref tmeurl.SourceRef) string {
 func finishBotDisabled(d Deps, ctx context.Context, j Job) {
 	ae := apperr.New(apperr.CodeBotDisabled, "受理 Bot 已停用（Token 失效），请向其他机器人重新提交")
 	d.Log.Error("受理 Bot 已停用，任务标记失败", "job_id", j.ID, "request_id", j.RequestID, "bot_id", j.BotID)
+	d.ErrLog.Record(ctx, errlog.Record{
+		Source:    store.ErrorSourceRequest,
+		Code:      string(ae.Code),
+		Stage:     "claim",
+		Severity:  store.ErrorSeverityError,
+		Message:   "受理 Bot 已停用，任务标记失败",
+		Detail:    errorDetailText(ae),
+		Context:   jobLogContext(j),
+		RequestID: j.RequestID,
+	})
 	if finishErr := finishRequest(d, ctx, j, store.RequestResult{
 		Status:      store.RequestFailed,
 		ErrorCode:   string(ae.Code),
@@ -863,6 +911,8 @@ func finishBotDisabled(d Deps, ctx context.Context, j Job) {
 	if ctx.Err() == nil && !j.DumpOnly {
 		if id, sendErr := d.senderFor(j).SendMessage(ctx, j.ChatID, failureNoticeHTML(ae.Code, j.Ref)); sendErr != nil {
 			d.Log.Warn("停用提示发送失败", "job_id", j.ID, "error", sendErr.Error())
+			d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+				"停用提示发送失败", sendErr))
 		} else {
 			d.recordAnchors(ctx, j, store.SentKindFailure, []int{id})
 		}
@@ -904,6 +954,8 @@ func markStatusCancelled(d Deps, ctx context.Context, j Job) {
 	defer cancel()
 	if err := d.senderFor(j).EditMessageText(wctx, j.ChatID, j.StatusMsgID, CancelledStatusHTML(j.Ref)); err != nil {
 		d.Log.Debug("占位消息取消文案编辑失败", "job_id", j.ID, "request_id", j.RequestID, "error", err.Error())
+		d.ErrLog.Record(wctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+			"占位消息取消文案编辑失败", err))
 	}
 }
 
@@ -925,16 +977,26 @@ func Discard(d Deps) Processor {
 			}
 		}
 		d.Log.Warn("进程退出，丢弃排队任务", "job_id", j.ID, "user_id", j.UserID)
-		if !j.DumpOnly { // 仅缓存补写任务全程不打扰用户（含退出丢弃）
-			if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
-				d.Log.Warn("丢弃通知发送失败", "job_id", j.ID, "error", err.Error())
-			}
-		}
-		delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 		discard := store.RequestResult{
 			Status:    store.RequestFailed,
 			ErrorCode: string(apperr.CodeInterrupted),
 		}
+		d.ErrLog.Record(ctx, errlog.Record{
+			Source:    store.ErrorSourceRequest,
+			Code:      string(discard.ErrorCode),
+			Severity:  store.ErrorSeverityWarn,
+			Message:   "进程退出，丢弃排队任务",
+			Context:   jobLogContext(j),
+			RequestID: j.RequestID,
+		})
+		if !j.DumpOnly { // 仅缓存补写任务全程不打扰用户（含退出丢弃）
+			if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, "服务正在退出，任务未能完成，请稍后重新发送链接。"); err != nil {
+				d.Log.Warn("丢弃通知发送失败", "job_id", j.ID, "error", err.Error())
+				d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",
+					"退出丢弃通知发送失败", err))
+			}
+		}
+		delivery.TryDeleteStatus(ctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 		if j.CloudDest != "" {
 			// 云盘请求无论成败保持 cloud 投递标记（与 Process 收尾语义一致；
 			// 空串会把列回落 upload，丢失"网盘"筛选口径）

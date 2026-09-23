@@ -107,6 +107,7 @@ spore/
 │   ├── cloudarchive/            # 云盘下载：cloud-drive.json 配置、rclone 封装、远端布局
 │   ├── monitor/                 # 进程资源与传输速率采样（RSS/临时目录/CPU，48h 历史）
 │   ├── notify/                  # 系统事件：按 key 合并、冷却、模板化通知正文（templates/）与活动通知
+│   ├── errlog/                   # 错误日志中心写入门面：逐条落 error_logs（截断/节流/保留清理），与事件中心互补
 │   ├── notifycfg/               # 通知通道/策略配置、凭据加密与 Bot/Webhook 适配器
 │   └── web/                     # 管理端：SPA 壳、/api/v1 JSON、登录会话、CSV/QR 端点
 ├── data/                        # spore.db / session.json / bot-session.json / peers.json /
@@ -635,8 +636,11 @@ main()
  ├─ 12. cloud Manager               # 创建 cloud-drive.json 管理器（文件缺失 = 关闭态；
  │        #   损坏/校验失败保持关闭并产生 cloud.config_invalid，不阻断启动）
  ├─ 13. access.ImportLegacyWhitelist  # 首次启动（users 表为空）导入 ALLOWED_USER_IDS
- ├─ 14. notify Hub + rclone 探测    # 事件通知 Hub（冷却/阈值/配置通道与兼容 owner 私聊）；
- │        #   rclone 可用性探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）
+ ├─ 14. notify Hub + errlog + rclone 探测
+ │        # 事件通知 Hub（冷却/阈值/配置通道与兼容 owner 私聊）；
+ │        # 错误日志中心 internal/errlog（启动即清一次过期行 + 每小时保留清理；
+ │        #   请求管线与 Bot 相关环节错误逐条落 error_logs，管理端筛选查询）；
+ │        # rclone 可用性探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）
  ├─ 15. FailInterruptedRequests     # 上次遗留的 queued/processing 批量置 failed(INTERRUPTED)
  ├─ 16. queue.New(LoadQueueCapacity) # 内存队列与 access 服务在 MTProto 就绪前创建：
  │        # 容量经设置项 queue_capacity 配置（缺省 64，重启生效），

@@ -39,11 +39,11 @@ func TestCloudUploadLifecycle(t *testing.T) {
 		t.Fatalf("创建第二条上传记录失败: %v", err)
 	}
 
-	// 终态：一条成功、一条失败
-	if err := s.FinishCloudUpload(ctx, up1.ID, CloudUploadSucceeded, "", 1024, 2000); err != nil {
+	// 终态：一条成功、一条失败（v25 起失败行带根因串）
+	if err := s.FinishCloudUpload(ctx, up1.ID, CloudUploadSucceeded, "", "", 1024, 2000); err != nil {
 		t.Fatalf("落成功终态失败: %v", err)
 	}
-	if err := s.FinishCloudUpload(ctx, up2.ID, CloudUploadFailed, "CLOUD_QUOTA", 0, 2100); err != nil {
+	if err := s.FinishCloudUpload(ctx, up2.ID, CloudUploadFailed, "CLOUD_QUOTA", "couldn't login: Object not found", 0, 2100); err != nil {
 		t.Fatalf("落失败终态失败: %v", err)
 	}
 	ups, err := s.CloudUploadsByRequest(ctx, r.ID)
@@ -54,11 +54,11 @@ func TestCloudUploadLifecycle(t *testing.T) {
 		t.Fatalf("应有两条记录，得到 %d", len(ups))
 	}
 	if ups[0].ID != up1.ID || ups[0].Status != CloudUploadSucceeded ||
-		ups[0].Bytes != 1024 || ups[0].FinishedAt != 2000 || ups[0].ErrorCode != "" {
+		ups[0].Bytes != 1024 || ups[0].FinishedAt != 2000 || ups[0].ErrorCode != "" || ups[0].ErrorDetail != "" {
 		t.Fatalf("成功记录往返不符: %+v", ups[0])
 	}
 	if ups[1].ID != up2.ID || ups[1].Status != CloudUploadFailed ||
-		ups[1].ErrorCode != "CLOUD_QUOTA" || ups[1].Bytes != 0 {
+		ups[1].ErrorCode != "CLOUD_QUOTA" || ups[1].ErrorDetail != "couldn't login: Object not found" || ups[1].Bytes != 0 {
 		t.Fatalf("失败记录往返不符: %+v", ups[1])
 	}
 
@@ -66,10 +66,10 @@ func TestCloudUploadLifecycle(t *testing.T) {
 	if empty, err := s.CloudUploadsByRequest(ctx, 9999); err != nil || len(empty) != 0 {
 		t.Fatalf("无记录请求应返回空切片: %+v %v", empty, err)
 	}
-	if err := s.FinishCloudUpload(ctx, 9999, CloudUploadFailed, "X", 0, 0); err != ErrNotFound {
+	if err := s.FinishCloudUpload(ctx, 9999, CloudUploadFailed, "X", "", 0, 0); err != ErrNotFound {
 		t.Fatalf("不存在的上传记录应返回 ErrNotFound，得到 %v", err)
 	}
-	if err := s.FinishCloudUpload(ctx, up1.ID, "weird", "", 0, 0); err == nil {
+	if err := s.FinishCloudUpload(ctx, up1.ID, "weird", "", "", 0, 0); err == nil {
 		t.Fatal("非法终态应被拒绝")
 	}
 }

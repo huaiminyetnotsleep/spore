@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/r2backup"
+	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
@@ -237,6 +239,13 @@ func (s *Server) handleAPIBackupR2Test(w http.ResponseWriter, r *http.Request, _
 	if testErr != nil {
 		scene := r2backup.ClassifyError(testErr)
 		s.log.Warn("R2 连通性测试失败", "op", op, "scene", scene, "error", testErr.Error())
+		// 错误日志中心：测试失败落库（分类场景 + 原始错误串，管理员事后可查）
+		s.errLog.Record(r.Context(), errlog.Record{
+			Source:  store.ErrorSourceBackup,
+			Stage:   "test",
+			Detail:  testErr.Error(),
+			Message: "R2 备份连通性测试失败：" + scene,
+		})
 	} else {
 		s.log.Info("R2 连通性测试成功", "op", op)
 	}

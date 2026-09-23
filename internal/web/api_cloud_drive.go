@@ -25,6 +25,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
+	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
@@ -281,6 +282,16 @@ func (s *Server) handleAPICloudDriveTest(w http.ResponseWriter, r *http.Request,
 	if err := s.cloudSink.Ping(ctx, dest); err != nil {
 		s.log.Warn("云盘连通性测试失败", "op", op, "destination", dest.Name,
 			"code", apperr.From(err).Code)
+		// 错误日志中心：测试失败结果落库（管理员事后可查根因，此前只在
+		// HTTP 响应里一闪而过）；分类码 + 原始错误串都保留
+		s.errLog.Record(r.Context(), errlog.Record{
+			Source:  store.ErrorSourceCloud,
+			Code:    string(apperr.From(err).Code),
+			Stage:   "test",
+			Detail:  err.Error(),
+			Message: "云盘连通性测试失败：" + dest.Name,
+			Context: map[string]any{"destination": dest.Name, "type": dest.Type},
+		})
 		writeAPIJSON(w, http.StatusOK, struct {
 			OK      bool   `json:"ok"`
 			Message string `json:"message"`

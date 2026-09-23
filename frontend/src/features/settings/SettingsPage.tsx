@@ -41,6 +41,7 @@ interface SettingsFormValues {
   timezone?: string;
   max_links_per_message?: number;
   max_request_attempts?: number;
+  error_log_retention_days?: number;
   queue_capacity?: number;
   worker_count?: number;
   max_file_size?: string;
@@ -112,6 +113,7 @@ export function SettingsPage() {
       timezone: data.timezone,
       max_links_per_message: data.max_links_per_message,
       max_request_attempts: data.max_request_attempts,
+      error_log_retention_days: data.error_log_retention_days,
       queue_capacity: data.queue_capacity,
       worker_count: data.worker_count,
       download_threads: data.download_threads,
@@ -132,6 +134,9 @@ export function SettingsPage() {
       }
       if (dirtyFields.has("max_request_attempts") && values.max_request_attempts != null) {
         input.max_request_attempts = values.max_request_attempts;
+      }
+      if (dirtyFields.has("error_log_retention_days") && values.error_log_retention_days != null) {
+        input.error_log_retention_days = values.error_log_retention_days;
       }
       if (dirtyFields.has("queue_capacity") && values.queue_capacity != null) {
         input.queue_capacity = values.queue_capacity;
@@ -240,6 +245,7 @@ export function SettingsPage() {
               timezone: data?.timezone,
               max_links_per_message: data?.max_links_per_message,
               max_request_attempts: data?.max_request_attempts,
+              error_log_retention_days: data?.error_log_retention_days,
               queue_capacity: data?.queue_capacity,
               worker_count: data?.worker_count,
               download_threads: data?.download_threads,
@@ -289,6 +295,15 @@ export function SettingsPage() {
                   extra="单个请求可重试的总次数上限（首次执行计 1 次），仅约束管理端重试；保存后即时生效。已达上限的请求可在消息记录详情页重置尝试计数。"
                 >
                   <InputNumber min={1} max={10} precision={0} className="field-width-160" />
+                </Form.Item>
+
+                <Form.Item
+                  name="error_log_retention_days"
+                  label="错误日志保留天数（1–365）"
+                  rules={[{ type: "integer", min: 1, max: 365, message: "错误日志保留天数必须为 1–365 的整数。" }]}
+                  extra="错误日志（/error-logs）按该天数周期自动清理；保存后即时生效。手动批量/按时间段清理入口在错误日志页。"
+                >
+                  <InputNumber min={1} max={365} precision={0} className="field-width-160" />
                 </Form.Item>
 
                 <Form.Item
