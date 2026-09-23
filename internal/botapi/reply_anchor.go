@@ -157,11 +157,12 @@ func handlePinReply(ctx context.Context, opt Options, snd delivery.Sender, from 
 
 // pinExistingResultText 渲染事后补置顶结果文案（HTML：目标名可能含特殊
 // 字符，一律转义；与 queue.pinResultText 同风格，但被回复的消息本身就是
-// 上下文，不再附原消息链接）。失败目标按错误码给出具体处置指引。
+// 上下文，不再附原消息链接）。目标名带跳转链接（与脚注同源，已解绑退化
+// 数字 ID 时无链接），多个目标逐行展示。失败目标按错误码给出具体处置指引。
 func pinExistingResultText(o queue.PinOutcome) string {
 	var pinned, failed []string
 	for _, t := range o.Targets {
-		label := html.EscapeString(t.Label)
+		label := pinTargetHTML(t)
 		if t.Pinned {
 			pinned = append(pinned, label)
 		} else {
@@ -170,13 +171,23 @@ func pinExistingResultText(o queue.PinOutcome) string {
 	}
 	var b strings.Builder
 	if len(pinned) > 0 {
-		fmt.Fprintf(&b, "📌 已置顶到：%s", strings.Join(pinned, "、"))
+		fmt.Fprintf(&b, "📌 已置顶到：\n%s", strings.Join(pinned, "\n"))
 	}
 	if len(failed) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "置顶失败：%s", strings.Join(failed, "、"))
+		fmt.Fprintf(&b, "置顶失败：\n%s", strings.Join(failed, "\n"))
 	}
 	return b.String()
+}
+
+// pinTargetHTML 渲染单个置顶目标为 HTML：URL 非空时展示名即跳转链接
+// （与 queue 侧 pinTargetHTML 同语义，已解绑退化数字 ID 无链接时为纯文本）。
+func pinTargetHTML(t queue.PinTarget) string {
+	label := html.EscapeString(t.Label)
+	if t.URL == "" {
+		return label
+	}
+	return `<a href="` + html.EscapeString(t.URL) + `">` + label + `</a>`
 }

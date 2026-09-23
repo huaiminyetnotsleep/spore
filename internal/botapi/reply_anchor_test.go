@@ -167,7 +167,7 @@ func TestPinReplyMatrix(t *testing.T) {
 		if got := fc.pinCopyCalls(); len(got) != 1 || got[0] != 9 {
 			t.Fatalf("应对锚点请求补置顶: %v", got)
 		}
-		if txt := lastText(t, fs); !strings.Contains(txt, "📌 已置顶到：我的频道") {
+		if txt := lastText(t, fs); !strings.Contains(txt, "📌 已置顶到：\n我的频道") {
 			t.Fatalf("补置顶文案不符: %q", txt)
 		}
 	})
@@ -191,7 +191,7 @@ func TestPinReplyMatrix(t *testing.T) {
 		fc.pinCopiesFnd = true
 		runReply(opt, fs, "/pin", 501)
 		txt := lastText(t, fs)
-		if !strings.Contains(txt, "📌 已置顶到：我的频道") || !strings.Contains(txt, "置顶失败：-100999") {
+		if !strings.Contains(txt, "📌 已置顶到：\n我的频道") || !strings.Contains(txt, "置顶失败：\n-100999") {
 			t.Fatalf("部分失败应点名目标: %q", txt)
 		}
 	})

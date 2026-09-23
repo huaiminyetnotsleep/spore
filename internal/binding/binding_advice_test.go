@@ -216,8 +216,24 @@ func TestCopyToChannelsRouting(t *testing.T) {
 	if outcome.Total != 2 || outcome.OK != 2 {
 		t.Fatalf("应投递 2 个目标（本 bot + 通配），得到 %d/%d", outcome.OK, outcome.Total)
 	}
-	if len(outcome.Skipped) != 1 || !strings.Contains(outcome.Skipped[0], "他bot绑定") {
+	if len(outcome.Skipped) != 1 || !strings.Contains(outcome.Skipped[0].Label, "他bot绑定") {
 		t.Fatalf("Skipped 应含他 bot 绑定显示名: %+v", outcome.Skipped)
+	}
+	// 目标与 Skipped 均应携带跳转链接（与脚注同源，公开频道 t.me/<username>）
+	for _, target := range append(outcome.Targets, outcome.Skipped...) {
+		if target.URL == "" {
+			t.Fatalf("置顶目标应带跳转链接: %+v", target)
+		}
+	}
+	wantURL := "https://t.me/u-1001111111111"
+	found := false
+	for _, target := range outcome.Targets {
+		if target.URL == wantURL {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("目标链接应为 t.me/<username> 形态: %+v", outcome.Targets)
 	}
 	copies := 0
 	for _, m := range *methods {

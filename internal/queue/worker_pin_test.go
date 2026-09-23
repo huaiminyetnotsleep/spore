@@ -69,7 +69,7 @@ func TestProcessPinTaskPartialResultText(t *testing.T) {
 	job, _ := newPinJobWithRequest(t, s)
 	sender := &fakeSender{}
 	copier := &fakeCopier{outcome: PinOutcome{OK: 1, Total: 2, Targets: []PinTarget{
-		{Label: "我的频道", Pinned: true}, {Label: "我的群组", Pinned: false},
+		{Label: "我的频道", URL: "https://t.me/mychan", Pinned: true}, {Label: "我的群组", Pinned: false},
 	}}}
 	deps := Deps{
 		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
@@ -87,12 +87,12 @@ func TestProcessPinTaskPartialResultText(t *testing.T) {
 			confirm = text
 		}
 	}
-	// 原消息链接 + 成功目标 + 失败目标缺一不可（用户要知道置顶了什么、到了哪）
+	// 原消息链接 + 成功目标（带跳转链接、逐行）+ 失败目标缺一不可
 	if confirm == "" ||
 		!strings.Contains(confirm, `href="https://t.me/example/7"`) ||
 		!strings.Contains(confirm, "已置顶原消息") ||
-		!strings.Contains(confirm, "我的频道") ||
-		!strings.Contains(confirm, "置顶失败：我的群组") {
+		!strings.Contains(confirm, `<a href="https://t.me/mychan">我的频道</a>`) ||
+		!strings.Contains(confirm, "置顶失败：\n我的群组") {
 		t.Fatalf("确认文案应含原消息链接与逐目标明细，得到 %q", sender.texts())
 	}
 }
@@ -140,7 +140,7 @@ func TestProcessPinTaskSkippedBindingsHint(t *testing.T) {
 	sender := &fakeSender{}
 	copier := &fakeCopier{outcome: PinOutcome{OK: 1, Total: 1, Targets: []PinTarget{
 		{Label: "我的频道", Pinned: true},
-	}, Skipped: []string{"他bot的群"}}}
+	}, Skipped: []PinTarget{{Label: "他bot的群"}}}}
 	deps := Deps{
 		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
 		Sender:  sender,
@@ -171,7 +171,7 @@ func TestProcessPinTaskOnlySkippedHint(t *testing.T) {
 	s := openStore(t)
 	job, r := newPinJobWithRequest(t, s)
 	sender := &fakeSender{}
-	copier := &fakeCopier{outcome: PinOutcome{Skipped: []string{"他bot的群"}}}
+	copier := &fakeCopier{outcome: PinOutcome{Skipped: []PinTarget{{Label: "他bot的群"}}}}
 	deps := Deps{
 		Fetcher: &fakeFetcher{msgs: []*tg.Message{{ID: 7, Message: "hello"}}},
 		Sender:  sender,

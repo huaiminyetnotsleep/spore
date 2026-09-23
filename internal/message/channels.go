@@ -13,8 +13,9 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// footerSeparator 是脚注内多个频道链接之间的分隔符。
-const footerSeparator = " · "
+// footerSeparator 是脚注内多个频道链接之间的分隔符：每个频道独占一行
+// （含首项，紧跟"频道："标签换行展示）。
+const footerSeparator = "\n"
 
 // ChannelLink 是脚注中的一个频道跳转项：Label 为展示文本，URL 为点击目标。
 type ChannelLink struct {
@@ -33,28 +34,25 @@ func (c Caption) hasChannels() bool {
 	return len(c.Channels) > 0
 }
 
-// channelFooterText 渲染脚注纯文本（以 "\n\n" 起头，直接拼在正文之后）。
+// channelFooterText 渲染脚注纯文本（以 "\n\n" 起头，直接拼在正文之后；
+// 每个频道独占一行）。
 func channelFooterText(links []ChannelLink) string {
 	var sb strings.Builder
 	sb.WriteString("\n\n📢 频道：")
-	for i, l := range links {
-		if i > 0 {
-			sb.WriteString(footerSeparator)
-		}
+	for _, l := range links {
+		sb.WriteString(footerSeparator)
 		sb.WriteString(l.Label)
 	}
 	return sb.String()
 }
 
 // channelFooterHTML 渲染脚注为 Bot API HTML：标签加粗、每个频道一个
-// 可点击链接（Label 与 URL 均转义，防止频道标题/用户名注入 HTML）。
+// 可点击链接独占一行（Label 与 URL 均转义，防止频道标题/用户名注入 HTML）。
 func channelFooterHTML(links []ChannelLink) string {
 	var sb strings.Builder
 	sb.WriteString("\n\n📢 <b>频道</b>：")
-	for i, l := range links {
-		if i > 0 {
-			sb.WriteString(footerSeparator)
-		}
+	for _, l := range links {
+		sb.WriteString(footerSeparator)
 		sb.WriteString(`<a href="`)
 		sb.WriteString(html.EscapeString(l.URL))
 		sb.WriteString(`">`)
@@ -78,9 +76,9 @@ func channelFooterEntities(links []ChannelLink, baseUnits int) []tg.MessageEntit
 	}
 
 	cursor := labelEnd + newUnitMapper("：").units
-	for i, l := range links {
-		// 跳过分隔符
-		cursor += newUnitMapper(footerSeparator).units * boolInt(i > 0)
+	for _, l := range links {
+		// 每项前的换行分隔符
+		cursor += newUnitMapper(footerSeparator).units
 		labelUnits := newUnitMapper(l.Label).units
 		entities = append(entities, &tg.MessageEntityTextURL{
 			Offset: baseUnits + cursor,
@@ -90,13 +88,6 @@ func channelFooterEntities(links []ChannelLink, baseUnits int) []tg.MessageEntit
 		cursor += labelUnits
 	}
 	return entities
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // footerUnits 返回脚注占用的 UTF-16 unit 数（用于渲染前预留预算）。

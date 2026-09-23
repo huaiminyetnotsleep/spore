@@ -13,7 +13,7 @@ func TestChannelFooterHTML(t *testing.T) {
 		{Label: "我的私有频道", URL: "https://t.me/c/1234567890/1"},
 	}
 	got := channelFooterHTML(links)
-	want := "\n\n📢 <b>频道</b>：<a href=\"https://t.me/pub\">@pub</a> · " +
+	want := "\n\n📢 <b>频道</b>：\n<a href=\"https://t.me/pub\">@pub</a>\n" +
 		`<a href="https://t.me/c/1234567890/1">我的私有频道</a>`
 	if got != want {
 		t.Fatalf("脚注 HTML 不符:\nwant: %q\ngot:  %q", want, got)
@@ -85,7 +85,7 @@ func TestCaptionLimitedWithFooter(t *testing.T) {
 		if !ok || turl1.URL != "https://t.me/pub" {
 			t.Fatalf("第二个实体应为 @pub 的 TextURL: %#v", c.Entities[1])
 		}
-		wantOffset1 := base + newUnitMapper("\n\n📢 频道：").units
+		wantOffset1 := base + newUnitMapper("\n\n📢 频道：").units + newUnitMapper(footerSeparator).units
 		if turl1.Offset != wantOffset1 || turl1.Length != newUnitMapper("@pub").units {
 			t.Fatalf("@pub 偏移不符: offset=%d length=%d", turl1.Offset, turl1.Length)
 		}

@@ -72,6 +72,10 @@ type EventSink interface {
 // PinTarget 描述单个置顶目标（绑定频道/群组）的置顶结果。
 type PinTarget struct {
 	Label string // 目标显示名（标题优先，回退 @用户名 / 数字 ID）
+	// URL 是目标的跳转链接（公开频道 t.me/<username>、私有频道
+	// t.me/c/<内部ID>/1，与脚注同源）；空串表示无法构造（如已解绑退化为
+	// 数字 ID），确认文案退化为纯文本展示。
+	URL string
 	// Pinned 置顶是否成功（副本发送失败与置顶失败均为 false）。
 	Pinned bool
 	// ErrCode 失败时的 apperr 错误码（副本发送与置顶失败均已分类；
@@ -99,13 +103,12 @@ func PinFailureHint(code string) string {
 
 // PinOutcome 汇总一轮置顶结果：OK 为 Targets 中 Pinned 的计数，Total 为
 // 参与置顶的目标总数（含副本发送失败的）。Skipped 是因路由不匹配被跳过
-// 的绑定显示名（绑定属于其他受理 bot，不计入 Total，仅提示用）。
-// 非置顶调用返回零值。
+// 的绑定（属于其他受理 bot，不计入 Total，仅提示用）。非置顶调用返回零值。
 type PinOutcome struct {
 	OK      int
 	Total   int
 	Targets []PinTarget
-	Skipped []string
+	Skipped []PinTarget
 }
 
 // ChannelCopier 把已成功发送给用户的消息复制到该用户绑定的频道（频道副本）。
@@ -114,8 +117,8 @@ type PinOutcome struct {
 // 不向调用方传播错误，更不得影响任务结果。
 // requestID 非 0 时实现须顺手把副本组首坐标落库 sent_messages（供 /pin
 // 事后补置顶定位）。pin 为 true 时实现须对每个副本发送成功的目标执行
-// 静音置顶（组首消息），并返回逐目标置顶结果（Label 供确认文案展示）；
-// pin 为 false 时返回零值。
+// 静音置顶（组首消息），并返回逐目标置顶结果（Label/URL 供确认文案展示
+// 与跳转）；pin 为 false 时返回零值。
 type ChannelCopier interface {
 	CopyToChannels(ctx context.Context, requestID, botID, userID, userChatID int64, msgIDs []int, pin bool) PinOutcome
 }
@@ -504,7 +507,8 @@ func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 
 // pinResultText 渲染置顶结果确认文案（HTML：原消息链接与目标名逐个列出，
 // 频道/群组名可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。
-// Skipped（绑定属于其他受理 bot）单独成行提示，不计入失败。
+// 目标名带跳转链接（与脚注同源），多个目标逐行展示。
+// Skipped（绑定属于其他受理 bot）单独成组提示，不计入失败。
 func pinResultText(sourceURL string, o PinOutcome) string {
 	link := "原消息链接不可用"
 	if sourceURL != "" {
@@ -513,31 +517,30 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 	if o.Total == 0 && len(o.Skipped) == 0 {
 		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n原消息：" + link
 	}
-	var pinned, failed []string
+	var pinned, failed, skipped []string
 	for _, t := range o.Targets {
-		label := html.EscapeString(t.Label)
+		label := pinTargetHTML(t)
 		if t.Pinned {
 			pinned = append(pinned, label)
 		} else {
 			failed = append(failed, label+"（"+PinFailureHint(t.ErrCode)+"）")
 		}
 	}
-	skipped := make([]string, 0, len(o.Skipped))
 	for _, s := range o.Skipped {
-		skipped = append(skipped, html.EscapeString(s))
+		skipped = append(skipped, pinTargetHTML(s))
 	}
 	var b strings.Builder
 	if len(pinned) > 0 {
-		fmt.Fprintf(&b, "📌 已置顶原消息 %s 到：%s", link, strings.Join(pinned, "、"))
+		fmt.Fprintf(&b, "📌 已置顶原消息 %s 到：\n%s", link, strings.Join(pinned, "\n"))
 	}
 	if len(failed) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		if len(pinned) == 0 {
-			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：%s", link, strings.Join(failed, "、"))
+			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：\n%s", link, strings.Join(failed, "\n"))
 		} else {
-			fmt.Fprintf(&b, "置顶失败：%s", strings.Join(failed, "、"))
+			fmt.Fprintf(&b, "置顶失败：\n%s", strings.Join(failed, "\n"))
 		}
 	}
 	if len(skipped) > 0 {
@@ -545,13 +548,23 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 			b.WriteByte('\n')
 		}
 		if o.Total == 0 {
-			fmt.Fprintf(&b, "任务已完成，未执行置顶：本任务的受理机器人名下暂无绑定，%s 属于其他机器人（用对应机器人发链接即可投递）",
-				strings.Join(skipped, "、"))
+			fmt.Fprintf(&b, "任务已完成，未执行置顶：本任务的受理机器人名下暂无绑定，以下绑定属于其他机器人（用对应机器人发链接即可投递）：\n%s",
+				strings.Join(skipped, "\n"))
 		} else {
-			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：%s", len(skipped), strings.Join(skipped, "、"))
+			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：\n%s", len(skipped), strings.Join(skipped, "\n"))
 		}
 	}
 	return b.String()
+}
+
+// pinTargetHTML 渲染单个置顶目标为 HTML：URL 非空时展示名即跳转链接
+// （与脚注同源），空串退化为纯文本（已解绑退化数字 ID 等场景）。
+func pinTargetHTML(t PinTarget) string {
+	label := html.EscapeString(t.Label)
+	if t.URL == "" {
+		return label
+	}
+	return `<a href="` + html.EscapeString(t.URL) + `">` + label + `</a>`
 }
 
 // writeCleanDump 在任务成功后向缓存频道写无脚注干净副本（dumpcache）。

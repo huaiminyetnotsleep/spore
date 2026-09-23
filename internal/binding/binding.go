@@ -646,13 +646,13 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 				"user_id", userID, "channel_id", bnd.ChannelID,
 				"binding_bot", bnd.BotID, "accepting_bot", botID)
 			if pin {
-				outcome.Skipped = append(outcome.Skipped, bindingLabel(bnd))
+				outcome.Skipped = append(outcome.Skipped, queue.PinTarget{Label: bindingLabel(bnd), URL: ChannelURL(bnd)})
 			}
 			continue
 		}
 		if pin {
 			outcome.Total++
-			outcome.Targets = append(outcome.Targets, queue.PinTarget{Label: bindingLabel(bnd)})
+			outcome.Targets = append(outcome.Targets, queue.PinTarget{Label: bindingLabel(bnd), URL: ChannelURL(bnd)})
 		}
 		sent, err := b.CopyMessages(ctx, &tgbot.CopyMessagesParams{
 			ChatID:     bnd.ChannelID,
@@ -817,15 +817,20 @@ func (s *Service) PinExistingCopies(ctx context.Context, userID, requestID int64
 	}
 	cctx, cancel := context.WithTimeout(ctx, pinExistingWindow)
 	defer cancel()
-	labels := s.copyLabels(cctx, userID)
+	bindings := s.copyBindings(ctx, userID)
 	var outcome queue.PinOutcome
 	for _, c := range copies {
 		outcome.Total++
-		label := labels[c.ChatID]
+		label := ""
+		url := ""
+		if bnd, ok := bindings[c.ChatID]; ok {
+			label = bindingLabel(bnd)
+			url = ChannelURL(bnd)
+		}
 		if label == "" {
 			label = strconv.FormatInt(c.ChatID, 10)
 		}
-		target := queue.PinTarget{Label: label}
+		target := queue.PinTarget{Label: label, URL: url}
 		b := s.botFor(c.BotID)
 		if b == nil {
 			s.log.Warn("事后置顶：副本 bot 不在池中且无主 bot 可回退",
@@ -861,20 +866,20 @@ func (s *Service) PinExistingCopies(ctx context.Context, userID, requestID int64
 	return outcome, true, nil
 }
 
-// copyLabels 取副本目标频道的显示名映射（频道 ID → 标题/@用户名/数字 ID）：
-// 读取失败或无绑定按空映射处理，缺失目标在 PinExistingCopies 里退化为
-// 数字 ID 展示。
-func (s *Service) copyLabels(ctx context.Context, userID int64) map[int64]string {
-	labels := make(map[int64]string)
-	bindings, err := s.store.ListChannelBindingsByUser(ctx, userID)
+// copyBindings 取副本目标频道的绑定映射（频道 ID → 绑定行，供显示名与
+// 跳转链接构造）：读取失败或无绑定按空映射处理，缺失目标在
+// PinExistingCopies 里退化为数字 ID 展示（无链接）。
+func (s *Service) copyBindings(ctx context.Context, userID int64) map[int64]store.ChannelBinding {
+	bindings := make(map[int64]store.ChannelBinding)
+	rows, err := s.store.ListChannelBindingsByUser(ctx, userID)
 	if err != nil {
 		s.log.Warn("事后置顶：读取绑定失败", "user_id", userID, "error", err.Error())
-		return labels
+		return bindings
 	}
-	for _, bnd := range bindings {
-		labels[bnd.ChannelID] = bindingLabel(bnd)
+	for _, bnd := range rows {
+		bindings[bnd.ChannelID] = bnd
 	}
-	return labels
+	return bindings
 }
 
 // bindingLabel 渲染绑定目标的显示名：标题优先，回退 @用户名，
