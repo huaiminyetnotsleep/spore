@@ -456,6 +456,31 @@ func (s *Store) RetryRequest(ctx context.Context, id int64, queuedAt int64) erro
 	return requestUpdateConflict(ctx, s, id, "重试请求")
 }
 
+// ResubmitCloudRequest 把再次提交/补存的 failed 云盘请求原地重置为 queued：
+// attempt 清回 1，刷新受理 bot，并清空上一轮错误、阶段时间与置顶结果。
+// 条件更新只接受 failed cloud 行，防止与并发重试、取消或状态变化重复入队；
+// 是否扣额度及顶层/补存行归属由调用方事务校验。
+func (s *Store) ResubmitCloudRequest(ctx context.Context, id int64, queuedAt, botID int64, botUsername string) error {
+	if queuedAt == 0 {
+		queuedAt = nowMillis()
+	}
+	res, err := s.ex.ExecContext(ctx, `UPDATE requests SET
+		status = ?, attempt = 1, queued_at = ?, bot_id = ?, bot_username = ?,
+		started_at = NULL, finished_at = NULL, duration_ms = NULL, error_code = NULL, error_detail = NULL,
+		pin_ok = 0, pin_total = 0
+		WHERE id = ? AND status = ? AND delivery_mode = ?`,
+		RequestQueued, queuedAt, botID, botUsername, id, RequestFailed, DeliveryModeCloud)
+	if err != nil {
+		return wrapDB("重新提交云盘请求", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return wrapDB("重新提交云盘请求", err)
+	} else if n > 0 {
+		return nil
+	}
+	return requestUpdateConflict(ctx, s, id, "重新提交云盘请求")
+}
+
 // ResetRequestAttempts 把 failed 请求的累计尝试计数清回指定值（管理端
 // "重置尝试计数"动作的落库步骤）：只改 attempt，状态与时间戳、错误码
 // 均不动（请求保持 failed，等待管理员再次重试）。前置条件（状态 failed、
@@ -692,6 +717,40 @@ func (s *Store) LatestSucceededCloudRequest(ctx context.Context, userID int64, c
 	}
 	if err != nil {
 		return Request{}, wrapDB("查询最近成功云盘请求", err)
+	}
+	return r, nil
+}
+
+// LatestCloudRequest 查找该用户同链接同目的地最近一次顶层云盘请求（不含
+// parent_request_id 非空的管理端补存子行）。调用方只在最新状态为 failed 时
+// 原地复用，避免翻出更新成功/取消记录之前的历史失败行；无匹配返回 ErrNotFound。
+func (s *Store) LatestCloudRequest(ctx context.Context, userID int64, channelKey string, messageID int, cloudDestination string) (Request, error) {
+	r, err := scanRequest(s.ex.QueryRowContext(ctx, selectRequest+
+		" WHERE user_id = ? AND channel_key = ? AND message_id = ?"+
+		" AND delivery_mode = ? AND cloud_destination = ? AND parent_request_id IS NULL"+
+		" ORDER BY COALESCE(finished_at, started_at, queued_at, requested_at) DESC, id DESC LIMIT 1",
+		userID, channelKey, messageID, DeliveryModeCloud, cloudDestination))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Request{}, ErrNotFound
+	}
+	if err != nil {
+		return Request{}, wrapDB("查询最近云盘请求", err)
+	}
+	return r, nil
+}
+
+// LatestCloudBackfill 查找原请求在指定目的地的最近一次管理端云盘补存子行。
+// 调用方只在最新状态为 failed 时原地复用；无匹配返回 ErrNotFound。
+func (s *Store) LatestCloudBackfill(ctx context.Context, parentRequestID int64, cloudDestination string) (Request, error) {
+	r, err := scanRequest(s.ex.QueryRowContext(ctx, selectRequest+
+		" WHERE parent_request_id = ? AND delivery_mode = ? AND cloud_destination = ?"+
+		" ORDER BY COALESCE(finished_at, started_at, queued_at, requested_at) DESC, id DESC LIMIT 1",
+		parentRequestID, DeliveryModeCloud, cloudDestination))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Request{}, ErrNotFound
+	}
+	if err != nil {
+		return Request{}, wrapDB("查询最近云盘补存请求", err)
 	}
 	return r, nil
 }

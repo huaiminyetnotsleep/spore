@@ -82,6 +82,107 @@ func TestCloudBackfillSuccess(t *testing.T) {
 	}
 }
 
+func TestCloudBackfillResubmitsLatestFailedChild(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 8, clock.Now)
+	jobs := startWorkers(t, q)
+	mustEnabledUser(t, st, 1)
+	src := newTerminalRequest(t, svc, st, 8, store.DeliveryModeReference)
+	waitJob(t, jobs)
+
+	first, err := svc.CloudBackfill(context.Background(), "admin", src.ID, "mega-1")
+	if err != nil || first.CreatedRequestID == 0 {
+		t.Fatalf("首次补存应创建子行: %+v err=%v", first, err)
+	}
+	waitJob(t, jobs)
+	if err := st.FinishRequest(context.Background(), first.CreatedRequestID, store.RequestResult{
+		Status: store.RequestFailed, ErrorCode: "CLOUD_NETWORK", ErrorDetail: "network failed",
+		DeliveryMode: store.DeliveryModeCloud,
+	}); err != nil {
+		t.Fatalf("落库补存失败终态失败: %v", err)
+	}
+	if err := st.ResetRequestAttempts(context.Background(), first.CreatedRequestID, 3); err != nil {
+		t.Fatalf("设置测试尝试次数失败: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	second, err := svc.CloudBackfill(context.Background(), "admin", src.ID, "mega-1")
+	if err != nil {
+		t.Fatalf("再次补存不应失败: %v", err)
+	}
+	if second.CreatedRequestID != first.CreatedRequestID {
+		t.Fatalf("应复用失败补存行 %d，得到 %d", first.CreatedRequestID, second.CreatedRequestID)
+	}
+	job := waitJob(t, jobs)
+	if job.RequestID != first.CreatedRequestID || job.CloudDest != "mega-1" {
+		t.Fatalf("复用补存任务字段不符: %+v", job)
+	}
+	row, err := st.GetRequest(context.Background(), first.CreatedRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != store.RequestQueued || row.Attempt != 1 || row.ErrorCode != "" || row.ErrorDetail != "" || row.FinishedAt != 0 {
+		t.Errorf("失败补存行应原地重置: %+v", row)
+	}
+	rows, err := st.ListRequests(context.Background(), store.RequestFilter{UserID: src.UserID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	children := 0
+	for _, r := range rows {
+		if r.ParentRequestID == src.ID && r.CloudDestination == "mega-1" {
+			children++
+		}
+	}
+	if children != 1 {
+		t.Errorf("同目的地失败后再补存应只有一个子行，得到 %d", children)
+	}
+}
+
+func TestCloudBackfillDoesNotReuseOlderFailureAfterSuccess(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 8, clock.Now)
+	jobs := startWorkers(t, q)
+	mustEnabledUser(t, st, 1)
+	src := newTerminalRequest(t, svc, st, 9, store.DeliveryModeReference)
+	waitJob(t, jobs)
+
+	oldFailed, err := st.CreateRequest(context.Background(), store.Request{
+		UserID: src.UserID, SourceKind: src.SourceKind, ChannelKey: src.ChannelKey, MessageID: src.MessageID,
+		DeliveryMode: store.DeliveryModeCloud, ParentRequestID: src.ID, CloudDestination: "mega-1",
+		RequestedAt: baseTime.Add(-2 * time.Hour).UnixMilli(), QueuedAt: baseTime.Add(-2 * time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(context.Background(), oldFailed.ID, store.RequestResult{Status: store.RequestFailed, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+	latestSuccess, err := st.CreateRequest(context.Background(), store.Request{
+		UserID: src.UserID, SourceKind: src.SourceKind, ChannelKey: src.ChannelKey, MessageID: src.MessageID,
+		DeliveryMode: store.DeliveryModeCloud, ParentRequestID: src.ID, CloudDestination: "mega-1",
+		RequestedAt: baseTime.Add(-time.Hour).UnixMilli(), QueuedAt: baseTime.Add(-time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(context.Background(), latestSuccess.ID, store.RequestResult{Status: store.RequestSucceeded, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := svc.CloudBackfill(context.Background(), "admin", src.ID, "mega-1")
+	if err != nil || out.CreatedRequestID == 0 {
+		t.Fatalf("最新补存已成功时应新建本次子行: %+v err=%v", out, err)
+	}
+	waitJob(t, jobs)
+	if out.CreatedRequestID == oldFailed.ID || out.CreatedRequestID == latestSuccess.ID {
+		t.Fatalf("不应复用更老失败或成功行: %+v", out)
+	}
+	if got, _ := st.GetRequest(context.Background(), oldFailed.ID); got.Status != store.RequestFailed {
+		t.Errorf("更老失败行不应被改写: %+v", got)
+	}
+}
+
 func auditContains(t *testing.T, st *store.Store, action string) bool {
 	t.Helper()
 	entries, err := st.ListAudit(context.Background(), 10, 0)

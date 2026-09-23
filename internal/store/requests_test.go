@@ -408,6 +408,156 @@ func TestLatestSucceededCloudRequest(t *testing.T) {
 	}
 }
 
+func TestLatestCloudRequest(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u := mustUser(t, s, 1)
+
+	failed := seedCloudRequest(t, s, u.ID, 7, "mega-1", RequestFailed)
+	latest := seedCloudRequest(t, s, u.ID, 7, "mega-1", RequestSucceeded)
+	got, err := s.LatestCloudRequest(ctx, u.ID, "example", 7, "mega-1")
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if got.ID != latest.ID || got.Status != RequestSucceeded || got.ID == failed.ID {
+		t.Fatalf("应命中最新云盘请求 %d，得到 %+v", latest.ID, got)
+	}
+
+	// 管理端补存子行即使更新，也不应污染 Bot 顶层请求候选。
+	child, err := s.CreateRequest(ctx, Request{
+		UserID: u.ID, ChannelKey: "example", MessageID: 7,
+		DeliveryMode: DeliveryModeCloud, CloudDestination: "mega-1", ParentRequestID: 999,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishRequest(ctx, child.ID, RequestResult{Status: RequestFailed, DeliveryMode: DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.LatestCloudRequest(ctx, u.ID, "example", 7, "mega-1")
+	if err != nil || got.ID != latest.ID {
+		t.Fatalf("补存子行不应成为顶层候选，得到 %+v err=%v", got, err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		user  int64
+		key   string
+		msgID int
+		dest  string
+	}{
+		{"不同用户不命中", 999, "example", 7, "mega-1"},
+		{"不同频道不命中", u.ID, "other", 7, "mega-1"},
+		{"不同消息不命中", u.ID, "example", 10, "mega-1"},
+		{"不同目的地不命中", u.ID, "example", 7, "mega-2"},
+	} {
+		if _, err := s.LatestCloudRequest(ctx, tc.user, tc.key, tc.msgID, tc.dest); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: 应返回 ErrNotFound，得到 %v", tc.name, err)
+		}
+	}
+}
+
+func TestLatestCloudBackfill(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u := mustUser(t, s, 1)
+
+	create := func(parentID int64, dest, status string) Request {
+		t.Helper()
+		r, err := s.CreateRequest(ctx, Request{
+			UserID: u.ID, ChannelKey: "example", MessageID: 7,
+			DeliveryMode: DeliveryModeCloud, CloudDestination: dest, ParentRequestID: parentID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != "" {
+			if err := s.FinishRequest(ctx, r.ID, RequestResult{Status: status, DeliveryMode: DeliveryModeCloud}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return r
+	}
+	create(100, "mega-1", RequestFailed)
+	latest := create(100, "mega-1", RequestSucceeded)
+	got, err := s.LatestCloudBackfill(ctx, 100, "mega-1")
+	if err != nil || got.ID != latest.ID || got.Status != RequestSucceeded {
+		t.Fatalf("应命中最新补存子行 %d，得到 %+v err=%v", latest.ID, got, err)
+	}
+	for _, tc := range []struct {
+		parent int64
+		dest   string
+	}{
+		{999, "mega-1"},
+		{100, "mega-2"},
+	} {
+		if _, err := s.LatestCloudBackfill(ctx, tc.parent, tc.dest); !errors.Is(err, ErrNotFound) {
+			t.Errorf("parent=%d dest=%s 应无匹配，得到 %v", tc.parent, tc.dest, err)
+		}
+	}
+}
+
+func TestResubmitCloudRequest(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u := mustUser(t, s, 1)
+
+	r := seedCloudRequest(t, s, u.ID, 7, "mega-1", RequestFailed)
+	if err := s.RetryRequest(ctx, r.ID, 200); err != nil {
+		t.Fatalf("第一次累加尝试失败: %v", err)
+	}
+	if err := s.FinishRequest(ctx, r.ID, RequestResult{
+		Status: RequestFailed, ErrorCode: "CLOUD_NETWORK", ErrorDetail: "network failed",
+		MediaType: "video", MediaTypes: []string{"video"}, FileSize: 123,
+		FileName: "movie.mp4", DeliveryMode: DeliveryModeCloud,
+	}); err != nil {
+		t.Fatalf("重置前落终态失败: %v", err)
+	}
+	before, _ := s.GetRequest(ctx, r.ID)
+	if before.Attempt != 2 {
+		t.Fatalf("测试前置应为 attempt=2，得到 %d", before.Attempt)
+	}
+
+	const queuedAt = int64(9999)
+	if err := s.ResubmitCloudRequest(ctx, r.ID, queuedAt, 88, "new_bot"); err != nil {
+		t.Fatalf("原地重新提交失败: %v", err)
+	}
+	got, err := s.GetRequest(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("读取重置后请求失败: %v", err)
+	}
+	if got.Status != RequestQueued || got.Attempt != 1 || got.QueuedAt != queuedAt {
+		t.Errorf("应重置为 queued/attempt=1/新 queued_at: %+v", got)
+	}
+	if got.StartedAt != 0 || got.FinishedAt != 0 || got.DurationMs != 0 || got.ErrorCode != "" || got.ErrorDetail != "" {
+		t.Errorf("阶段时间与错误字段应清空: %+v", got)
+	}
+	if got.BotID != 88 || got.BotUsername != "new_bot" {
+		t.Errorf("应刷新受理 bot: %+v", got)
+	}
+	if got.RequestedAt != before.RequestedAt || got.DeliveryMode != DeliveryModeCloud || got.CloudDestination != "mega-1" {
+		t.Errorf("原始请求归属与云盘路由应保留: before=%+v after=%+v", before, got)
+	}
+	if got.MediaType != "video" || got.FileSize != 123 || got.FileName != "movie.mp4" {
+		t.Errorf("历史媒体诊断字段应保留到新一轮覆盖: %+v", got)
+	}
+
+	succeeded := seedCloudRequest(t, s, u.ID, 8, "mega-1", RequestSucceeded)
+	if err := s.ResubmitCloudRequest(ctx, succeeded.ID, 0, 0, ""); err == nil {
+		t.Error("非 failed 云盘请求不应允许原地重新提交")
+	}
+	ordinary, err := s.CreateRequest(ctx, Request{UserID: u.ID, ChannelKey: "example", MessageID: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishRequest(ctx, ordinary.ID, RequestResult{Status: RequestFailed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResubmitCloudRequest(ctx, ordinary.ID, 0, 0, ""); err == nil {
+		t.Error("普通 TG failed 行不应允许云盘原地重新提交")
+	}
+}
+
 func TestHasUnfinishedCloudRequest(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

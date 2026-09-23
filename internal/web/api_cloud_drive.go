@@ -329,9 +329,9 @@ const (
 	maxCloudArchiveBatch = 100
 )
 
-// cloudArchiveOutcome 是单条补存的公共执行结果：SkipReason 非空表示未建行
-// （单条端点转错误信封、批量端点转 skip_reason）；QueueFull 表示已建行但
-// 入队失败，行标记 failed(QUEUE_FULL)，可经现有重试入口重试。
+// cloudArchiveOutcome 是单条补存的公共执行结果：SkipReason 非空表示未建行/
+// 未复用（单条端点转错误信封、批量端点转 skip_reason）；QueueFull 表示目标
+// 行入队失败并标记 failed(QUEUE_FULL)，可再次补存或经现有重试入口重试。
 type cloudArchiveOutcome struct {
 	CreatedRequestID int64
 	SkipReason       string
@@ -458,7 +458,7 @@ func (s *Server) handleAPIRequestCloudArchive(w http.ResponseWriter, r *http.Req
 }
 
 // apiCloudArchiveBatchItem 是批量补存的逐条摘要：
-// 创建成功带 created_request_id；资格不满足带 skip_reason；
+// 创建或复用成功带 created_request_id；资格不满足带 skip_reason；
 // 入队失败（队列饱和）带 created_request_id 且 queue_full=true。
 type apiCloudArchiveBatchItem struct {
 	RequestID        int64  `json:"request_id"`
