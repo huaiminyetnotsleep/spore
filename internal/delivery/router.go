@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/go-telegram/bot/models"
+
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 )
@@ -55,10 +57,26 @@ func (s *routerSender) SendMessage(ctx context.Context, chatID int64, html strin
 	return s.api.SendMessage(ctx, chatID, html)
 }
 
+func (s *routerSender) SendMessageWithMarkup(ctx context.Context, chatID int64, html string, markup models.ReplyMarkup) (int, error) {
+	markupSender, ok := s.api.(MarkupSender)
+	if !ok {
+		return 0, apperr.New(apperr.CodeInternal, "Bot API sender 不支持 ReplyMarkup")
+	}
+	return markupSender.SendMessageWithMarkup(ctx, chatID, html, markup)
+}
+
 // EditMessageText 编辑既有文本消息（占位提示的实时进度更新）：
 // 占位消息只在 Bot API 侧，始终委托 Bot API 实现。
 func (s *routerSender) EditMessageText(ctx context.Context, chatID int64, messageID int, html string) error {
 	return s.api.EditMessageText(ctx, chatID, messageID, html)
+}
+
+func (s *routerSender) EditMessageTextWithMarkup(ctx context.Context, chatID int64, messageID int, html string, markup models.ReplyMarkup) error {
+	markupSender, ok := s.api.(MarkupSender)
+	if !ok {
+		return apperr.New(apperr.CodeInternal, "Bot API sender 不支持 ReplyMarkup")
+	}
+	return markupSender.EditMessageTextWithMarkup(ctx, chatID, messageID, html, markup)
 }
 
 func (s *routerSender) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {

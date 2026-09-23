@@ -164,17 +164,24 @@ func (f *fakeAccess) startsOf() []access.StartInput {
 
 // fakeSender 记录发送与删除。
 type fakeSender struct {
-	mu      sync.Mutex
-	sent    []string
-	deleted []int
-	nextID  int
+	mu          sync.Mutex
+	sent        []string
+	markups     []models.ReplyMarkup
+	deleted     []int
+	nextID      int
+	markupEdits []models.ReplyMarkup
 }
 
-func (f *fakeSender) SendMessage(_ context.Context, _ int64, html string) (int, error) {
+func (f *fakeSender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
+	return f.SendMessageWithMarkup(ctx, chatID, html, nil)
+}
+
+func (f *fakeSender) SendMessageWithMarkup(_ context.Context, _ int64, html string, markup models.ReplyMarkup) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextID++
 	f.sent = append(f.sent, html)
+	f.markups = append(f.markups, markup)
 	return f.nextID, nil
 }
 
@@ -194,7 +201,16 @@ func (f *fakeSender) CopyMessage(_ context.Context, _, _ int64, messageID int, _
 
 func (f *fakeSender) EditMessageCaption(context.Context, int64, int, string) error { return nil }
 
-func (f *fakeSender) EditMessageText(context.Context, int64, int, string) error { return nil }
+func (f *fakeSender) EditMessageText(ctx context.Context, chatID int64, messageID int, html string) error {
+	return f.EditMessageTextWithMarkup(ctx, chatID, messageID, html, nil)
+}
+
+func (f *fakeSender) EditMessageTextWithMarkup(_ context.Context, _ int64, _ int, _ string, markup models.ReplyMarkup) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.markupEdits = append(f.markupEdits, markup)
+	return nil
+}
 
 func (f *fakeSender) DeleteMessage(_ context.Context, _ int64, messageID int) error {
 	f.mu.Lock()
@@ -464,8 +480,8 @@ func TestHandleCancel(t *testing.T) {
 	// 无参数：用法提示，不触达 access
 	opt, fa, fs := newHarness(t, 4)
 	run(opt, fs, "/cancel")
-	if got := lastText(t, fs); got != cancelUsage {
-		t.Errorf("无参数应回用法提示，得到 %q", got)
+	if got := lastText(t, fs); !strings.Contains(got, "请回复本消息") || strings.Contains(got, "用法：") {
+		t.Errorf("无参数应回简短输入提示，得到 %q", got)
 	}
 	if n := len(fa.cancelFor); n != 0 {
 		t.Errorf("无参数不应触达 access，得到 %d 次", n)
@@ -736,18 +752,29 @@ func TestHandleDownloadUnauthorizedMatchesBareLink(t *testing.T) {
 	}
 }
 
-// 无参/只给名称不给链接：用法提示，不触达 access 与云盘状态。
+// 无参进入简短输入提示；只给目的地名称时才展示完整用法。
 func TestHandleDownloadUsage(t *testing.T) {
-	for _, text := range []string{"/download", "/download   ", "/download mega-1", "/download@bot"} {
+	for _, text := range []string{"/download", "/download   ", "/download@bot"} {
 		opt, fa, fs := newHarness(t, 4)
 		opt.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
 		run(opt, fs, text)
-		if got := lastText(t, fs); got != downloadUsage {
-			t.Errorf("%q 应回用法提示，得到 %q", text, got)
+		got := lastText(t, fs)
+		if !strings.Contains(got, "请回复本消息") || strings.Contains(got, "用法：") {
+			t.Errorf("%q 应回简短输入提示，得到 %q", text, got)
 		}
 		if n := len(fa.submitted()); n != 0 {
 			t.Errorf("%q 不应触达 access", text)
 		}
+	}
+
+	opt, fa, fs := newHarness(t, 4)
+	opt.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
+	run(opt, fs, "/download mega-1")
+	if got := lastText(t, fs); got != downloadUsage {
+		t.Fatalf("只给目的地时应回完整用法，得到 %q", got)
+	}
+	if n := len(fa.submitted()); n != 0 {
+		t.Fatalf("只给目的地时不应触达 access，得到 %d", n)
 	}
 }
 

@@ -43,8 +43,8 @@ func TestHandleJoinUsage(t *testing.T) {
 	opt.ChannelJoin = fake
 	handleUpdate(context.Background(), opt, snd, joinUser(100), 100, "/join", 0)
 	got := snd.texts()
-	if len(got) != 1 || !strings.Contains(got[0], "用法") || !strings.Contains(got[0], "t.me/+") {
-		t.Fatalf("无参数应回用法: %v", got)
+	if len(got) != 1 || !strings.Contains(got[0], "请回复本消息") || strings.Contains(got[0], "用法") {
+		t.Fatalf("无参数应回简短输入提示: %v", got)
 	}
 	if fake.gotText != "" {
 		t.Fatalf("无参数不应触达服务")

@@ -46,7 +46,7 @@ func TestHandlePinZeroBindingsStillSubmitsWithHint(t *testing.T) {
 	}
 }
 
-// TestHandlePinUsageOnEmptyArgs：空参回用法提示，不提交任务。
+// TestHandlePinUsageOnEmptyArgs：空参回简短输入提示，不提交任务。
 func TestHandlePinUsageOnEmptyArgs(t *testing.T) {
 	opt, fa, fs := newHarness(t, 4)
 	run(opt, fs, "/pin")
@@ -54,8 +54,8 @@ func TestHandlePinUsageOnEmptyArgs(t *testing.T) {
 	if subs := fa.submitted(); len(subs) != 0 {
 		t.Fatalf("空参不应提交任务: %+v", subs)
 	}
-	if got := lastText(t, fs); !strings.HasPrefix(got, "用法：/pin") {
-		t.Fatalf("应回 /pin 用法提示，得到: %q", got)
+	if got := lastText(t, fs); !strings.Contains(got, "请回复本消息") || strings.Contains(got, "用法：") {
+		t.Fatalf("应回 /pin 简短输入提示，得到: %q", got)
 	}
 }
 

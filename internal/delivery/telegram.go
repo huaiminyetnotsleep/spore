@@ -31,12 +31,17 @@ func New(b *tgbot.Bot, cfg Config) Sender {
 }
 
 func (s *telegramSender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
+	return s.SendMessageWithMarkup(ctx, chatID, html, nil)
+}
+
+func (s *telegramSender) SendMessageWithMarkup(ctx context.Context, chatID int64, html string, markup models.ReplyMarkup) (int, error) {
 	var sent *models.Message
 	err := s.withRateLimitRetry(ctx, func() error {
 		m, rerr := s.b.SendMessage(ctx, &tgbot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      html,
-			ParseMode: models.ParseModeHTML,
+			ChatID:      chatID,
+			Text:        html,
+			ParseMode:   models.ParseModeHTML,
+			ReplyMarkup: markup,
 		})
 		sent = m
 		return rerr
@@ -99,12 +104,17 @@ func (s *telegramSender) CopyMessages(ctx context.Context, fromChatID, chatID in
 }
 
 func (s *telegramSender) EditMessageText(ctx context.Context, chatID int64, messageID int, html string) error {
+	return s.EditMessageTextWithMarkup(ctx, chatID, messageID, html, nil)
+}
+
+func (s *telegramSender) EditMessageTextWithMarkup(ctx context.Context, chatID int64, messageID int, html string, markup models.ReplyMarkup) error {
 	err := s.withRateLimitRetry(ctx, func() error {
 		_, rerr := s.b.EditMessageText(ctx, &tgbot.EditMessageTextParams{
-			ChatID:    chatID,
-			MessageID: messageID,
-			Text:      html,
-			ParseMode: models.ParseModeHTML,
+			ChatID:      chatID,
+			MessageID:   messageID,
+			Text:        html,
+			ParseMode:   models.ParseModeHTML,
+			ReplyMarkup: markup,
 		})
 		return rerr
 	})

@@ -2,7 +2,10 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"io"
+
+	"github.com/go-telegram/bot/models"
 
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
@@ -30,6 +33,30 @@ func (s *CountSender) SendMessage(ctx context.Context, chatID int64, html string
 		s.hub.BotSendResult(ctx, err == nil)
 	}
 	return id, err
+}
+
+// SendMessageWithMarkup 透传带 ReplyMarkup 的文本，并沿用普通文本的发送
+// 成功/失败计数。底层 sender 不支持 markup 时返回明确错误。
+func (s *CountSender) SendMessageWithMarkup(ctx context.Context, chatID int64, html string, markup models.ReplyMarkup) (int, error) {
+	markupSender, ok := s.Sender.(delivery.MarkupSender)
+	if !ok {
+		return 0, errors.New("wrapped sender does not support ReplyMarkup")
+	}
+	id, err := markupSender.SendMessageWithMarkup(ctx, chatID, html, markup)
+	if s.hub != nil {
+		s.hub.BotSendResult(ctx, err == nil)
+	}
+	return id, err
+}
+
+// EditMessageTextWithMarkup 透传带 ReplyMarkup 的编辑；编辑失败不计入发送
+// 连续失败统计，与普通 EditMessageText 保持相同语义。
+func (s *CountSender) EditMessageTextWithMarkup(ctx context.Context, chatID int64, messageID int, html string, markup models.ReplyMarkup) error {
+	markupSender, ok := s.Sender.(delivery.MarkupSender)
+	if !ok {
+		return errors.New("wrapped sender does not support ReplyMarkup")
+	}
+	return markupSender.EditMessageTextWithMarkup(ctx, chatID, messageID, html, markup)
 }
 
 // SendMedia 发送媒体并计数成败。

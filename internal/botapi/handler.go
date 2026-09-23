@@ -64,7 +64,8 @@ func helpText(name string, cloud bool) string {
 /unbind 频道 — 解绑频道
 /channels — 查看我的绑定
 /join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
-/watch 频道 — 添加监听源（写法同 /bind；不带参数查看列表）
+/watch 频道 — 添加监听源（写法同 /bind）
+/watchlist — 查看我的监听源与申请状态
 /unwatch 频道 — 移除监听源
 
 💡 <b>说明</b>
@@ -73,6 +74,8 @@ func helpText(name string, cloud bool) string {
 <b>绑定后</b>，每次提取的内容除发给你外，还会同步一份到绑定目标；/pin 提交的任务会自动置顶。
 
 <b>监听源</b>生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
+
+💬 不带参数的操作命令会弹出输入提示；回复提示消息输入内容即可执行，也可以回复“取消”或点击取消按钮。
 
 ` + downloadNote + `<blockquote>要求：我的系统账号需要能访问来源频道；私有频道可先用 /join 加入。</blockquote>`
 }
@@ -95,7 +98,15 @@ const (
 // 发送/删除一律经 delivery.Sender（统一错误分类与限流重试）。
 func updateHandler(opt Options) tgbot.HandlerFunc {
 	cleaner := commandCleaner{states: make(map[commandScopeKey]bool)}
+	prompter := newInputPrompter()
 	return func(ctx context.Context, b *tgbot.Bot, update *models.Update) {
+		if update == nil {
+			return
+		}
+		if update.CallbackQuery != nil {
+			handlePromptCallback(ctx, opt, senderFor(opt, b), b, update.CallbackQuery, prompter)
+			return
+		}
 		// 监听源消息：频道帖（bot 为频道管理员）与超级群组消息（bot 为
 		// 群管理员，privacy 旁路可见全部）。回调内自行做源白名单过滤，
 		// 未配置监听时是廉价的缓存查询后丢弃。普通群组不支持监听（无法
@@ -143,6 +154,12 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 				cleaner.clean(ctx, b, opt.Log, chatID, code)
 			}
 		}
+		snd := senderFor(localOpt, b)
+		if localOpt.PromptInput == nil {
+			localOpt.PromptInput = func(ctx context.Context, snd delivery.Sender, chatID int64, command, html, placeholder, usage string) {
+				sendPromptInput(ctx, localOpt, snd, prompter, chatID, command, html, placeholder, usage)
+			}
+		}
 		// 引用回复交互：命令作为对 bot 消息的回复发送时（Telegram 原生
 		// 用法），把被回复消息 ID 传入分流层供 /pin、/cancel 反查锚点。
 		// 私聊中被回复消息必在同一 chat，无需另传 chat。
@@ -150,7 +167,29 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 		if rm := msg.ReplyToMessage; rm != nil {
 			replyMsgID = int64(rm.ID)
 		}
-		handleUpdate(ctx, localOpt, senderFor(localOpt, b), *from, msg.Chat.ID, strings.TrimSpace(msg.Text), replyMsgID)
+		text := strings.TrimSpace(msg.Text)
+		resolved, outcome, entry := prompter.resolve(text, replyMsgID, from.ID)
+		switch outcome {
+		case promptCancel:
+			finishPromptCancellation(ctx, localOpt, snd, msg.Chat.ID, entry)
+			return
+		case promptUsage:
+			// 回复“用法”查看说明：不消费 pending，输入等待继续有效。
+			sendText(ctx, localOpt, snd, msg.Chat.ID, "<blockquote>📖 "+entry.usage+"</blockquote>")
+			return
+		case promptExecute:
+			text = resolved
+		default:
+			// 连续命令到达：上一条仍在等待输入的提示自动取消并指明命令。
+			// 已被输入消费或已取消的 pending 不存在，天然不会误伤。
+			if strings.HasPrefix(text, "/") {
+				if previous, ok := prompter.takeForChat(msg.Chat.ID, from.ID); ok {
+					finishPromptCancellationWithNotice(ctx, localOpt, snd, msg.Chat.ID, previous,
+						fmt.Sprintf("已自动取消上一条 %s 操作。", previous.command))
+				}
+			}
+		}
+		handleUpdate(ctx, localOpt, snd, *from, msg.Chat.ID, text, replyMsgID)
 	}
 }
 
@@ -170,7 +209,8 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 			opt.CleanChatCommands(ctx, chatID, from.LanguageCode)
 		}
 	case "/help":
-		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
+		sendText(ctx, opt, snd, chatID,
+			helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
 	case "/whoami":
 		handleWhoami(ctx, opt, snd, chatID)
 	case "/usage":
@@ -195,6 +235,8 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 		handleJoin(ctx, opt, snd, from, chatID, text)
 	case "/watch":
 		handleWatch(ctx, opt, snd, from, chatID, text)
+	case "/watchlist":
+		handleWatchlist(ctx, opt, snd, from.ID, chatID)
 	case "/unwatch":
 		handleUnwatch(ctx, opt, snd, from, chatID, text)
 	default:
@@ -264,7 +306,8 @@ func handleStart(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	}
 	switch outcome {
 	case access.StartWelcome:
-		sendText(ctx, opt, snd, chatID, helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
+		sendText(ctx, opt, snd, chatID,
+			helpText(systemName(ctx, opt), helpCloudAllowed(ctx, opt, from.ID)))
 	case access.StartPending:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeUserPending))
 	default:
@@ -517,7 +560,9 @@ func handleCancel(ctx context.Context, opt Options, snd delivery.Sender, userID,
 			handleCancelReply(ctx, opt, snd, userID, chatID, replyMsgID)
 			return
 		}
-		sendText(ctx, opt, snd, chatID, cancelUsage)
+		promptForInput(ctx, opt, snd, chatID, "/cancel",
+			"请回复本消息粘贴要取消的消息链接（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴消息链接", cancelUsage)
 		return
 	}
 	refs := tmeurl.ParseAll(strings.Join(args[1:], " "))
@@ -568,7 +613,7 @@ func cloudDestNotFoundText(avail []string) string {
 
 // parseDownloadArgs 解析 /download 参数，返回（目的地名称, 链接文本）。
 // 第一段含 t.me 视为链接本身（默认目的地）；否则视为目的地名称、其余为
-// 链接文本。链接文本为空（无参/只给了名称）由调用方回用法提示。
+// 链接文本。无参时由调用方发送简短输入提示，只给目的地名称时返回完整用法。
 func parseDownloadArgs(text string) (dest, link string) {
 	fields := strings.Fields(text)
 	if len(fields) < 2 {
@@ -602,7 +647,13 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 	}
 	dest, linkText := parseDownloadArgs(text)
 	if linkText == "" {
-		sendText(ctx, opt, snd, chatID, downloadUsage)
+		if len(strings.Fields(text)) > 1 {
+			sendText(ctx, opt, snd, chatID, downloadUsage)
+			return
+		}
+		promptForInput(ctx, opt, snd, chatID, "/download",
+			"请回复本消息粘贴消息链接；如需指定网盘，请输入“目的地 链接”（5 分钟内有效）。",
+			"粘贴链接或“目的地 链接”", downloadUsage)
 		return
 	}
 
@@ -659,10 +710,10 @@ const pinUsage = "用法：/pin 消息链接（可一次多条）\n\n" +
 	"• 需要机器人在目标拥有置顶权限（频道「编辑消息」/群组「置顶消息」）\n" +
 	"• 也可以回复机器人发出的任务消息发送 /pin：在途任务补标记，已完成任务事后补置顶"
 
-// handlePin 处理 /pin <链接>：与裸链接完全同一提交链（requireEnabled 准入、
+	// handlePin 处理 /pin <链接>：与裸链接完全同一提交链（requireEnabled 准入、
 // 六步校验、批量语义），仅额外标记自动置顶——任务成功后副本到绑定频道/
 // 群组并静音置顶组首。零绑定时任务照常提交并附提示（完成后绑定的目标仍
-// 会收到副本与置顶）；空参回用法提示。命令作为对 bot 消息的回复发送时走
+// 会收到副本与置顶）；空参进入简短输入提示。命令作为对 bot 消息的回复发送时走
 // 引用路径（replyMsgID 非 0 且不带链接参数）：在途任务补置顶标记、已完
 // 成任务按频道副本坐标事后补置顶。
 func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string, replyMsgID int64) {
@@ -672,7 +723,9 @@ func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from model
 			handlePinReply(ctx, opt, snd, from, chatID, replyMsgID)
 			return
 		}
-		sendText(ctx, opt, snd, chatID, pinUsage)
+		promptForInput(ctx, opt, snd, chatID, "/pin",
+			"请回复本消息粘贴要置顶的消息链接（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴消息链接", pinUsage)
 		return
 	}
 	if !requireEnabled(ctx, opt, snd, from.ID, chatID) {
@@ -739,7 +792,9 @@ func handleJoin(ctx context.Context, opt Options, snd delivery.Sender, from mode
 	}
 	arg := commandArgument(text)
 	if arg == "" {
-		sendText(ctx, opt, snd, chatID, joinUsage)
+		promptForInput(ctx, opt, snd, chatID, "/join",
+			"请回复本消息粘贴频道邀请链接（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴 t.me/+ 邀请链接", joinUsage)
 		return
 	}
 
@@ -797,9 +852,10 @@ func handleJoin(ctx context.Context, opt Options, snd delivery.Sender, from mode
 const watchUsage = "用法：/watch 频道（@mychannel、t.me/频道 链接、-100 开头的 ID，或 t.me/+… 私有邀请链接）\n\n" +
 	"仅支持频道与超级群组，且需先把本机器人加为该频道/群的管理员" +
 	"（管理员身份保证我能收到全部消息）。私有邀请链接会先让系统读取账号加入，" +
-	"随后仍需把 Bot 人工设为管理员。不带参数发送 /watch 可查看我的监听源。"
+	"随后仍需把 Bot 人工设为管理员。查看已有监听源请发送 /watchlist。"
 
-// handleWatch 处理 /watch：无参数列出本人监听源；带参数提交申请
+// handleWatch 处理 /watch <频道>：提交监听源申请。
+
 // （准入/审批/上限校验在 watch.Service 内完成）。owner 判定失败按非
 // owner 处理（保守，与 /join 一致）。
 func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64, text string) {
@@ -809,61 +865,9 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	}
 	arg := commandArgument(text)
 	if arg == "" {
-		rows, err := opt.Watch.ListByUser(ctx, from.ID)
-		if err != nil {
-			ae := apperr.From(err)
-			opt.Log.Warn("/watch 列表查询失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
-			sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
-			return
-		}
-		invites, err := opt.Watch.ListInvitesByUser(ctx, from.ID)
-		if err != nil {
-			ae := apperr.From(err)
-			opt.Log.Warn("/watch 邀请列表查询失败", "user_id", from.ID, "code", ae.Code, "error", err.Error())
-			sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
-			return
-		}
-		if len(rows) == 0 && len(invites) == 0 {
-			sendText(ctx, opt, snd, chatID, "你还没有监听源。发送 /watch 频道 添加。")
-			return
-		}
-		var b strings.Builder
-		if len(rows) > 0 {
-			b.WriteString("我的监听源：\n")
-			for _, r := range rows {
-				name := r.Title
-				if name == "" {
-					name = r.Username
-				}
-				if name == "" {
-					name = fmt.Sprintf("频道 %d", r.ChannelID)
-				}
-				switch r.Status {
-				case store.WatchPending:
-					fmt.Fprintf(&b, "• %s（待审批）\n", name)
-				case store.WatchApproved:
-					state := "监听中"
-					if !r.Enabled {
-						state = "已暂停"
-					}
-					fmt.Fprintf(&b, "• %s（%s）\n", name, state)
-				}
-			}
-		}
-		if len(invites) > 0 {
-			if b.Len() > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString("邀请链接申请：\n")
-			for _, r := range invites {
-				name := r.Title
-				if name == "" {
-					name = "邀请 " + r.MaskedHash
-				}
-				fmt.Fprintf(&b, "• %s（%s）\n", name, watchInviteStatusText(r.Status))
-			}
-		}
-		sendText(ctx, opt, snd, chatID, b.String())
+		promptForInput(ctx, opt, snd, chatID, "/watch",
+			"请回复本消息粘贴要监听的频道或群组链接（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴频道或群组链接", watchUsage)
 		return
 	}
 
@@ -934,7 +938,74 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	}
 }
 
-// watchInviteStatusText 是 /watch 列表中邀请申请状态的短文案。
+// handleWatchlist 列出本人监听源与私有邀请申请。
+func handleWatchlist(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64) {
+	if opt.Watch == nil {
+		sendText(ctx, opt, snd, chatID, "该功能当前未启用，请联系管理员开通。")
+		return
+	}
+	rows, err := opt.Watch.ListByUser(ctx, userID)
+	if err != nil {
+		ae := apperr.From(err)
+		if opt.Log != nil {
+			opt.Log.Warn("/watchlist 列表查询失败", "user_id", userID, "code", ae.Code, "error", err.Error())
+		}
+		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+		return
+	}
+	invites, err := opt.Watch.ListInvitesByUser(ctx, userID)
+	if err != nil {
+		ae := apperr.From(err)
+		if opt.Log != nil {
+			opt.Log.Warn("/watchlist 邀请列表查询失败", "user_id", userID, "code", ae.Code, "error", err.Error())
+		}
+		sendText(ctx, opt, snd, chatID, apperr.UserText(ae.Code))
+		return
+	}
+	if len(rows) == 0 && len(invites) == 0 {
+		sendText(ctx, opt, snd, chatID, "你还没有监听源。发送 /watch 频道链接添加。")
+		return
+	}
+	var b strings.Builder
+	if len(rows) > 0 {
+		b.WriteString("我的监听源：\n")
+		for _, r := range rows {
+			name := r.Title
+			if name == "" {
+				name = r.Username
+			}
+			if name == "" {
+				name = fmt.Sprintf("频道 %d", r.ChannelID)
+			}
+			switch r.Status {
+			case store.WatchPending:
+				fmt.Fprintf(&b, "• %s（待审批）\n", name)
+			case store.WatchApproved:
+				state := "监听中"
+				if !r.Enabled {
+					state = "已暂停"
+				}
+				fmt.Fprintf(&b, "• %s（%s）\n", name, state)
+			}
+		}
+	}
+	if len(invites) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("邀请链接申请：\n")
+		for _, r := range invites {
+			name := r.Title
+			if name == "" {
+				name = "邀请 " + r.MaskedHash
+			}
+			fmt.Fprintf(&b, "• %s（%s）\n", name, watchInviteStatusText(r.Status))
+		}
+	}
+	sendText(ctx, opt, snd, chatID, b.String())
+}
+
+// watchInviteStatusText 是 /watchlist 列表中邀请申请状态的短文案。
 func watchInviteStatusText(status string) string {
 	switch status {
 	case store.WatchInvitePending:
@@ -962,7 +1033,9 @@ func handleUnwatch(ctx context.Context, opt Options, snd delivery.Sender, from m
 	}
 	arg := commandArgument(text)
 	if arg == "" {
-		sendText(ctx, opt, snd, chatID, watchUsage)
+		promptForInput(ctx, opt, snd, chatID, "/unwatch",
+			"请回复本消息粘贴要移除的频道或群组（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴频道或群组链接", watchUsage)
 		return
 	}
 	isOwner := false
@@ -1000,6 +1073,8 @@ const bindUsage = "用法：/bind 频道/群组用户名（@mychannel）、t.me/
 	"请先把本机器人拉进频道/群组并设置为管理员，再发送绑定命令：" +
 	"频道需发言权限（置顶还需「编辑消息」），超级群组需置顶权限；话题群暂不支持。"
 
+const unbindUsage = "用法：/unbind 频道用户名、t.me/频道 链接或 -100 开头的频道 ID"
+
 // requireEnabled 复用 /usage 的状态查询做频道指令准入：
 // 未授权/待审批/停用用户返回 false 并已回复对应文案。
 func requireEnabled(ctx context.Context, opt Options, snd delivery.Sender, userID, chatID int64) bool {
@@ -1026,7 +1101,9 @@ func handleBind(ctx context.Context, opt Options, snd delivery.Sender, userID, c
 	}
 	args := strings.Fields(text)
 	if len(args) < 2 {
-		sendText(ctx, opt, snd, chatID, bindUsage)
+		promptForInput(ctx, opt, snd, chatID, "/bind",
+			"请回复本消息粘贴要绑定的频道或群组（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴频道、群组或邀请链接", bindUsage)
 		return
 	}
 	if !requireEnabled(ctx, opt, snd, userID, chatID) {
@@ -1085,7 +1162,9 @@ func handleUnbind(ctx context.Context, opt Options, snd delivery.Sender, userID,
 	}
 	args := strings.Fields(text)
 	if len(args) < 2 {
-		sendText(ctx, opt, snd, chatID, "用法：/unbind 频道用户名、t.me/频道 链接或 -100 开头的频道 ID")
+		promptForInput(ctx, opt, snd, chatID, "/unbind",
+			"请回复本消息粘贴要解绑的频道或群组（5 分钟内有效）；如需放弃，请发送“取消”。",
+			"粘贴频道或群组标识", unbindUsage)
 		return
 	}
 	if !requireEnabled(ctx, opt, snd, userID, chatID) {
@@ -1146,9 +1225,38 @@ func handleMyChannels(ctx context.Context, opt Options, snd delivery.Sender, use
 	sendText(ctx, opt, snd, chatID, sb.String())
 }
 
-// sendText 发送文本回复；失败仅记日志。
+// sendText 发送文本回复；失败仅记日志。sender 支持 ReplyMarkup 时附带常驻
+// 命令键盘：Telegram 的 reply keyboard 由"最近一条带 markup 的消息"决定，
+// 每次回复都重新声明才能在被 ForceReply 覆盖或被用户收起后尽快恢复显示
+// （用户手动收起后 Bot API 无法强制阻止，只能持续重申）。
 func sendText(ctx context.Context, opt Options, snd delivery.Sender, chatID int64, text string) {
-	if _, err := snd.SendMessage(ctx, chatID, text); err != nil {
+	if markupSender, ok := snd.(delivery.MarkupSender); ok {
+		if _, err := markupSender.SendMessageWithMarkup(ctx, chatID, text, persistentCommandKeyboard()); err != nil && opt.Log != nil {
+			opt.Log.Error("发送回复失败", "chat_id", chatID, "error", err.Error())
+		}
+		return
+	}
+	if _, err := snd.SendMessage(ctx, chatID, text); err != nil && opt.Log != nil {
 		opt.Log.Error("发送回复失败", "chat_id", chatID, "error", err.Error())
 	}
+}
+
+func persistentCommandKeyboard() models.ReplyMarkup {
+	return &models.ReplyKeyboardMarkup{
+		Keyboard: [][]models.KeyboardButton{{
+			{Text: "/pin"},
+			{Text: "/download"},
+			{Text: "/cancel"},
+		}},
+		IsPersistent:   true,
+		ResizeKeyboard: true,
+	}
+}
+
+func promptForInput(ctx context.Context, opt Options, snd delivery.Sender, chatID int64, command, text, placeholder, usage string) {
+	if opt.PromptInput != nil {
+		opt.PromptInput(ctx, snd, chatID, command, text, placeholder, usage)
+		return
+	}
+	sendText(ctx, opt, snd, chatID, text)
 }

@@ -112,11 +112,11 @@ func TestCancelReplyMatrix(t *testing.T) {
 			t.Fatalf("带参应走链接路径: refs=%v byID=%v", fa.cancelRefs, fa.cancelledByIDs())
 		}
 	})
-	t.Run("裸命令无回复回用法", func(t *testing.T) {
+	t.Run("裸命令无回复回输入提示", func(t *testing.T) {
 		opt, _, _, fs := replyHarness(t)
 		runReply(opt, fs, "/cancel", 0)
-		if txt := lastText(t, fs); !strings.Contains(txt, "用法：/cancel") {
-			t.Fatalf("应回用法提示: %q", txt)
+		if txt := lastText(t, fs); !strings.Contains(txt, "请回复本消息") || strings.Contains(txt, "用法：") {
+			t.Fatalf("应回简短输入提示: %q", txt)
 		}
 	})
 }
@@ -249,11 +249,11 @@ func TestPinReplyMatrix(t *testing.T) {
 			t.Fatalf("未启用不应补标: %v", calls)
 		}
 	})
-	t.Run("裸命令无回复回用法", func(t *testing.T) {
+	t.Run("裸命令无回复回输入提示", func(t *testing.T) {
 		opt, _, _, fs := replyHarness(t)
 		runReply(opt, fs, "/pin", 0)
-		if txt := lastText(t, fs); !strings.Contains(txt, "用法：/pin") {
-			t.Fatalf("应回用法提示: %q", txt)
+		if txt := lastText(t, fs); !strings.Contains(txt, "请回复本消息") || strings.Contains(txt, "用法：") {
+			t.Fatalf("应回简短输入提示: %q", txt)
 		}
 	})
 	t.Run("反查存储故障回受控文案", func(t *testing.T) {

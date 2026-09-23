@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-telegram/bot/models"
 	"github.com/gotd/td/tg"
 
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
@@ -90,7 +91,11 @@ type captionEditCall struct {
 	caption   string
 }
 
-func (f *fakeAPISender) SendMessage(context.Context, int64, string) (int, error) {
+func (f *fakeAPISender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
+	return f.SendMessageWithMarkup(ctx, chatID, html, nil)
+}
+
+func (f *fakeAPISender) SendMessageWithMarkup(context.Context, int64, string, models.ReplyMarkup) (int, error) {
 	f.messageCalls++
 	return 1, nil
 }
@@ -137,7 +142,11 @@ func (f *fakeAPISender) DeleteMessage(context.Context, int64, int) error {
 	return nil
 }
 
-func (f *fakeAPISender) EditMessageText(_ context.Context, _ int64, _ int, html string) error {
+func (f *fakeAPISender) EditMessageText(ctx context.Context, chatID int64, messageID int, html string) error {
+	return f.EditMessageTextWithMarkup(ctx, chatID, messageID, html, nil)
+}
+
+func (f *fakeAPISender) EditMessageTextWithMarkup(_ context.Context, _ int64, _ int, html string, _ models.ReplyMarkup) error {
 	f.editCalls = append(f.editCalls, html)
 	return nil
 }

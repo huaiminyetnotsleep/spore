@@ -106,8 +106,8 @@ func TestHandleBindUsageAndUnavailable(t *testing.T) {
 	t.Run("缺参数回复用法", func(t *testing.T) {
 		opt, _, fc, fs := channelsHarness(t)
 		run(opt, fs, "/bind")
-		if got := lastText(t, fs); !strings.Contains(got, "用法：/bind") {
-			t.Fatalf("应回复用法: %q", got)
+		if got := lastText(t, fs); !strings.Contains(got, "请回复本消息") || strings.Contains(got, "用法：") {
+			t.Fatalf("应回复简短输入提示: %q", got)
 		}
 		if len(fc.bindUser) != 0 {
 			t.Fatal("缺参数不应调用绑定服务")

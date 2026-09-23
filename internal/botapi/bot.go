@@ -218,6 +218,9 @@ type Options struct {
 	// WrapSender 可选地包装每次 update 使用的发送器（如事件统计包装）。
 	// 包装器不得改变 Sender 的错误与资源语义。
 	WrapSender func(delivery.Sender) delivery.Sender
+	// PromptInput 发送无参命令的 ForceReply 输入提示、用法按钮与取消控制消息。
+	// updateHandler 会注入默认实现；测试或其他入口可覆盖。
+	PromptInput func(ctx context.Context, snd delivery.Sender, chatID int64, command, html, placeholder, usage string)
 	// SystemName 提供可配置的系统名称（internal/syscfg，settings 即时生效）；
 	// nil 或返回空串时回退 syscfg.DefaultName（帮助与欢迎文案用）。
 	SystemName         func(ctx context.Context) string
@@ -242,10 +245,12 @@ func New(opt Options) (*tgbot.Bot, error) {
 		return nil, errors.New("botapi: Access 为必填项")
 	}
 
-	// 只订阅 message 与 channel_post：message 覆盖私聊与（超级群组内的）
-	// 监听源消息，channel_post 覆盖 bot 为管理员的频道帖——listener 据此
-	// 预热缓存频道；edited_* 与其余类型按需再开。
-	allowed := tgbot.AllowedUpdates{"message", models.AllowedUpdateChannelPost}
+	// 订阅私聊/监听源消息，以及输入提示取消按钮所需的 callback_query。
+	allowed := tgbot.AllowedUpdates{
+		"message",
+		models.AllowedUpdateChannelPost,
+		models.AllowedUpdateCallbackQuery,
+	}
 	opts := []tgbot.Option{
 		tgbot.WithDefaultHandler(updateHandler(opt)),
 		tgbot.WithAllowedUpdates(allowed),
@@ -297,7 +302,8 @@ func RegisterCommands(ctx context.Context, b *tgbot.Bot) error {
 			{Command: "unbind", Description: "解绑我的频道"},
 			{Command: "channels", Description: "查看我绑定的频道"},
 			{Command: "join", Description: "请系统账号加入私有频道（t.me/+ 邀请链接）"},
-			{Command: "watch", Description: "监听源频道/群组，新消息自动预热缓存"},
+			{Command: "watch", Description: "添加监听源频道/群组"},
+			{Command: "watchlist", Description: "查看我的监听源"},
 			{Command: "unwatch", Description: "移除我的监听源"},
 		},
 	})

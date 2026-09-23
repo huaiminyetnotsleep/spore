@@ -15,7 +15,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
-// fakeWatch 记录调用并按配置返回（/watch、/unwatch 命令路径）。
+// fakeWatch 记录调用并按配置返回（/watch、/watchlist、/unwatch 命令路径）。
 type fakeWatch struct {
 	gotUser    int64
 	gotOwner   bool
@@ -58,10 +58,10 @@ func TestHandleWatchNoService(t *testing.T) {
 	}
 }
 
-func TestHandleWatchUsageWhenNoArgButEmptyList(t *testing.T) {
+func TestHandleWatchlistWhenEmpty(t *testing.T) {
 	opt, _, snd := newHarness(t, 2)
 	opt.Watch = &fakeWatch{}
-	run(opt, snd, "/watch")
+	run(opt, snd, "/watchlist")
 	got := snd.texts()
 	if len(got) != 1 || !strings.Contains(got[0], "还没有监听源") {
 		t.Fatalf("空列表应提示添加: %v", got)
@@ -75,7 +75,7 @@ func TestHandleWatchListRendersStatus(t *testing.T) {
 		{ChannelID: -1002, Title: "频道B", Status: store.WatchApproved, Enabled: true},
 		{ChannelID: -1003, Username: "c3", Status: store.WatchApproved, Enabled: false},
 	}}
-	run(opt, snd, "/watch")
+	run(opt, snd, "/watchlist")
 	got := snd.texts()
 	if len(got) != 1 {
 		t.Fatalf("应回复一条列表: %v", got)
@@ -95,7 +95,7 @@ func TestHandleWatchListRendersInvites(t *testing.T) {
 		{ID: 1, Title: "私有频道", MaskedHash: "AbCd…5678", Status: store.WatchInviteWaitingBot},
 		{ID: 2, MaskedHash: "zzzz…yyyy", Status: store.WatchInvitePending},
 	}}
-	run(opt, snd, "/watch")
+	run(opt, snd, "/watchlist")
 	got := snd.texts()
 	if len(got) != 1 {
 		t.Fatalf("应回复一条列表: %v", got)
@@ -112,7 +112,7 @@ func TestHandleWatchInviteListOnlyNoSources(t *testing.T) {
 	opt.Watch = &fakeWatch{invites: []store.WatchInviteRequest{
 		{ID: 1, Title: "私有频道", Status: store.WatchInviteWaitingTelegram},
 	}}
-	run(opt, snd, "/watch")
+	run(opt, snd, "/watchlist")
 	got := snd.texts()
 	if len(got) != 1 || !strings.Contains(got[0], "等待加入频道") {
 		t.Fatalf("仅有邀请申请也应渲染列表: %v", got)

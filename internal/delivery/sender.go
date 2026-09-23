@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/go-telegram/bot/models"
+
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 )
 
@@ -75,6 +77,13 @@ type Sender interface {
 	// DeleteMessage 删除一条 Bot 自己发出的消息；错误已按错误码分类，
 	// "哪些删除失败可忽略"（如消息已被用户手动删除）由调用方决定。
 	DeleteMessage(ctx context.Context, chatID int64, messageID int) error
+}
+
+// MarkupSender 是支持 Telegram ReplyMarkup 的可选扩展接口。普通 Sender
+// 不需要实现它，调用方应在类型断言失败时降级为纯文本发送。
+type MarkupSender interface {
+	SendMessageWithMarkup(ctx context.Context, chatID int64, html string, markup models.ReplyMarkup) (int, error)
+	EditMessageTextWithMarkup(ctx context.Context, chatID int64, messageID int, html string, markup models.ReplyMarkup) error
 }
 
 // AlbumEntry 相册单成员：媒体描述、数据源与该成员自己的语义 caption。
