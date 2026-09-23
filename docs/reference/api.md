@@ -567,22 +567,51 @@
 
 ### POST /api/v1/cloud-drive/test
 
-测试目的地连通性（认证 + CSRF）：对指定目的地执行 rclone 只读探测（`lsd --max-depth 1`）。
+测试目的地连通性（认证 + CSRF）：对指定目的地执行 rclone 只读探测（`lsd --max-depth 1`）。支持**测试已保存的目的地**与在弹窗保存前**测试草稿目的地参数**两种方式。
 
 | 请求字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `name` | string | 是 | 目的地名称（须已存在于当前配置） |
+| `name` | string | 条件必填 | 目的地名称（未提供 `destination` 时必填，须已存在于当前配置中） |
+| `destination` | object | 条件必填 | 草稿目的地参数对象（用于在新增或修改保存前自测连通性）。提供时优先按草稿参数测试 |
+| └ `name` | string | 是 | 目的地名称（需符合 `^[a-z][a-z0-9-]{0,31}$` 规则） |
+| └ `type` | string | 是 | 后端类型（例如 `mega`、`s3`、`webdav` 等） |
+| └ `path_prefix` | string | 否 | 远端路径前缀（可为空或根目录） |
+| └ `options` | map[string]string | 是 | 参数键值对。若编辑既有目的地，掩码值（如 `••••••••`、`********`）会自动复用原已保存的敏感凭据；MEGA 原始密码在测试前会自动混淆 |
+
+请求体示例 1（测试已保存目的地）：
+
+```json
+{
+  "name": "mega-backup"
+}
+```
+
+请求体示例 2（保存前自测草稿目的地参数）：
+
+```json
+{
+  "destination": {
+    "name": "mega-draft",
+    "type": "mega",
+    "path_prefix": "spore",
+    "options": {
+      "user": "alice@example.com",
+      "pass": "my_raw_password"
+    }
+  }
+}
+```
 
 响应：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `ok` | bool | 连通是否成功 |
-| `message` | string | 成功确认或失败的分类中文原因（如凭据错误、网络异常） |
+| `message` | string | 成功确认或失败的分类中文原因（如凭据错误、网络异常、限流等） |
 
-错误：`400`（请求体非法/目的地不存在）；`503 SERVICE_UNAVAILABLE`（云盘管理器或 Sink 未接入）。
+错误：`400`（请求体非法、既有目的地不存在或草稿目的地参数不合法）；`503 SERVICE_UNAVAILABLE`（云盘管理器未接入或 rclone 不可用）。
 
-> 网盘管理类接口有限流风险（MEGA 连续快速调用可能触发封禁），测试按钮按需点击，不要高频或自动化轮询。
+> 网盘管理类接口有限流风险（MEGA 连续快速调用可能触发封禁），测试按钮按需点击，不要高频或自动化轮询。测试过程均为只读探测，不会修改任何持久化配置。
 
 ### POST /api/v1/requests/{id}/cloud-archive
 

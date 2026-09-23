@@ -835,9 +835,22 @@ export interface CloudDriveTestResult {
   message: string;
 }
 
-/** 对指定目的地执行 rclone 只读探测（名称须已存在于当前已保存配置）。 */
-export const testCloudDrive = (name: string): Promise<CloudDriveTestResult> =>
-  postJSON<CloudDriveTestResult>("/api/v1/cloud-drive/test", { name });
+export interface CloudDriveTestInput {
+  name?: string;
+  destination?: {
+    name: string;
+    type: string;
+    path_prefix?: string;
+    enabled?: boolean;
+    options?: Record<string, string>;
+  };
+}
+
+/** 对指定目的地执行 rclone 只读探测（支持已保存目的地名称，或直接传入待测目的地对象）。 */
+export const testCloudDrive = (input: string | CloudDriveTestInput): Promise<CloudDriveTestResult> => {
+  const body = typeof input === "string" ? { name: input } : input;
+  return postJSON<CloudDriveTestResult>("/api/v1/cloud-drive/test", body);
+};
 
 // ---- 云盘配置加密备份与恢复 ----
 

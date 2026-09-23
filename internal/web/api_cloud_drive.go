@@ -255,27 +255,65 @@ func (s *Server) handleAPICloudDriveTest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var in struct {
-		Name string `json:"name"`
+		Name        string                   `json:"name"`
+		Destination *apiCloudDestinationView `json:"destination"`
 	}
 	if !s.apiReadJSON(w, r, op, &in) {
 		return
 	}
-	if in.Name == "" {
-		s.apiBadRequest(w, r, op, "目的地名称不能为空。")
-		return
-	}
 	cfg := s.cloudCfg.Snapshot()
 	var dest cloudarchive.Destination
-	found := false
-	for _, d := range cfg.Destinations {
-		if d.Name == in.Name { // 草稿目的地（未启用）也允许测试
-			dest, found = d, true
-			break
+	if in.Destination != nil {
+		d := in.Destination
+		if strings.TrimSpace(d.Name) == "" {
+			s.apiBadRequest(w, r, op, "目的地名称不能为空。")
+			return
 		}
-	}
-	if !found {
-		s.apiBadRequest(w, r, op, "目的地不存在："+in.Name)
-		return
+		if strings.TrimSpace(d.Type) == "" {
+			s.apiBadRequest(w, r, op, "目的地类型不能为空。")
+			return
+		}
+		dest = cloudarchive.Destination{
+			Name:       strings.TrimSpace(d.Name),
+			Type:       strings.TrimSpace(d.Type),
+			PathPrefix: strings.TrimSpace(d.PathPrefix),
+			Enabled:    d.Enabled,
+			Options:    make(map[string]string, len(d.Options)),
+		}
+		for k, v := range d.Options {
+			dest.Options[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+		dummyCfg := cloudarchive.Config{
+			Destinations: []cloudarchive.Destination{dest},
+		}
+		if err := preserveCloudSecrets(cfg, &dummyCfg); err != nil {
+			s.apiBadRequest(w, r, op, err.Error())
+			return
+		}
+		if err := obscureCloudSecrets(r.Context(), &dummyCfg); err != nil {
+			writeAPIJSON(w, http.StatusOK, struct {
+				OK      bool   `json:"ok"`
+				Message string `json:"message"`
+			}{false, "密码处理失败，请检查密码或确认 rclone 可用。"})
+			return
+		}
+		dest = dummyCfg.Destinations[0]
+	} else {
+		if in.Name == "" {
+			s.apiBadRequest(w, r, op, "目的地名称不能为空。")
+			return
+		}
+		found := false
+		for _, d := range cfg.Destinations {
+			if d.Name == in.Name { // 草稿目的地（未启用）也允许测试
+				dest, found = d, true
+				break
+			}
+		}
+		if !found {
+			s.apiBadRequest(w, r, op, "目的地不存在："+in.Name)
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), cloudPingTimeout)
 	defer cancel()

@@ -748,45 +748,199 @@ body {
   width: 100%;
 }
 
-/* 单个目的地卡片：浅底描边，内部纵向排布 */
-.cloud-dest-card {
+/* 云盘下载页：目的地表格容器与工具栏 */
+.cloud-dest-table-wrap {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
+  width: 100%;
+}
+
+.cloud-dest-table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.cloud-dest-table .ant-table {
+  border-radius: var(--control-radius);
+  border: 1px solid var(--color-border-secondary);
+  overflow: hidden;
+}
+
+/* 高亮/默认目的地整行背景 */
+.cloud-dest-table .ant-table-tbody > tr.cloud-dest-row--highlight > td {
+  background-color: rgba(22, 119, 255, 0.05);
+}
+
+.cloud-dest-table .ant-table-tbody > tr.cloud-dest-row--highlight:hover > td {
+  background-color: rgba(22, 119, 255, 0.1) !important;
+}
+
+.cloud-dest-table .ant-table-tbody > tr.cloud-dest-row--highlight > td:first-child {
+  border-inline-start: 3px solid var(--color-primary);
+}
+
+.cloud-dest-expanded {
+  padding: 8px 4px;
+}
+
+/* 目的地展开详情面板（不用 Descriptions 组件） */
+.cloud-dest-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px;
   background: var(--color-bg-subtle);
   border: 1px solid var(--color-border-secondary);
   border-radius: var(--control-radius);
 }
 
-/* 卡片头：默认 Radio + 名称输入 + 操作按钮一行排布 */
-.cloud-dest-card__head {
+.cloud-dest-detail__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cloud-dest-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 24px;
+}
+
+.cloud-dest-detail__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cloud-dest-detail__label {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+
+.cloud-dest-detail__value {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  word-break: break-all;
+}
+
+.cloud-dest-card__title {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-dest-card__type-tag {
+  margin-inline-start: 4px;
+}
+
+/* 连通性测试的行内结果条 */
+.cloud-dest-test-result {
+  margin-block-start: 0;
+}
+
+/* 自定义展开箭头图标 */
+.cloud-dest-expand-btn {
+  color: var(--color-text-tertiary);
+  transition: transform var(--transition-base), color var(--transition-base);
+}
+
+.cloud-dest-expand-btn:hover {
+  color: var(--color-primary);
+}
+
+/* 展开行只读预览与参数勋章 */
+.cloud-options-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cloud-options-preview__title {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.cloud-options-preview__tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 8px;
+}
+
+.cloud-option-badge {
+  display: inline-flex;
   align-items: center;
-}
-
-.cloud-dest-card__head .ant-form-item {
-  flex: 1 1 220px;
-  min-width: 0;
-  margin: 0;
-}
-
-.cloud-dest-card__head .ant-radio-wrapper {
-  flex: 0 0 auto;
-}
-
-.cloud-dest-card__actions {
-  flex: 0 0 auto;
-}
-
-/* options 键值对编辑器 */
-.cloud-options__label {
-  display: block;
-  margin-bottom: 8px;
   font-size: 12px;
-  line-height: 1.6;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--control-radius);
+  overflow: hidden;
+}
+
+.cloud-option-badge__key {
+  padding: 2px 8px;
+  font-weight: 500;
+  background: var(--color-bg-container);
+  border-inline-end: 1px solid var(--color-border-secondary);
+  color: var(--color-text-primary);
+}
+
+.cloud-option-badge__val {
+  padding: 2px 8px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* 弹窗底部两端对齐（左侧测试按钮，右侧取消/保存） */
+.modal-footer-split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+/* options 键值对编辑器面板：清新简洁的内嵌卡片 */
+.cloud-options-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--control-radius);
+}
+
+.cloud-options-panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cloud-options-panel__title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cloud-options-panel__title {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.cloud-options-panel__desc {
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .cloud-options-list {
@@ -796,10 +950,32 @@ body {
   width: 100%;
 }
 
+.cloud-options-header {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding: 0 4px;
+}
+
+.cloud-options-header__key {
+  flex: 0 0 240px;
+}
+
+.cloud-options-header__value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cloud-options-header__action {
+  flex: 0 0 48px;
+  text-align: center;
+}
+
 .cloud-option-row {
   display: flex;
   gap: 8px;
-  align-items: flex-start;
+  align-items: center;
   width: 100%;
 }
 
@@ -816,9 +992,17 @@ body {
   min-width: 0;
 }
 
-/* 连通性测试的行内结果条 */
-.cloud-dest-test-result {
-  margin-block-start: 0;
+.cloud-option-row__action {
+  flex: 0 0 48px;
+  display: flex;
+  justify-content: center;
+}
+
+.cloud-options-empty {
+  padding: 12px;
+  text-align: center;
+  background: var(--color-bg-subtle);
+  border-radius: var(--control-radius);
 }
 
 /* 空状态引导：说明 + 添加按钮纵向排布 */
@@ -1552,9 +1736,21 @@ body {
     justify-content: flex-end;
   }
 
+  .cloud-options-header {
+    display: none;
+  }
+
   .cloud-option-row {
     flex-direction: column;
     align-items: stretch;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed var(--color-border-secondary);
+  }
+
+  .cloud-option-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
   }
 
   .cloud-option-row__key {
@@ -1566,8 +1762,10 @@ body {
     width: 100%;
   }
 
-  .cloud-option-row .ant-btn {
-    align-self: flex-end;
+  .cloud-option-row__action {
+    flex: none;
+    width: 100%;
+    justify-content: flex-end;
   }
 
   /* FormModal 与抽屉移动端自适应 */

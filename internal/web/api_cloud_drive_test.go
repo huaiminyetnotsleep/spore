@@ -299,6 +299,11 @@ func TestAPICloudDrivePutFlow(t *testing.T) {
 
 func TestAPICloudDriveTestEndpoint(t *testing.T) {
 	e := newCloudTestEnv(t, enabledCloudCfg(), &fakeCloudSink{})
+	bin := filepath.Join(t.TempDir(), "rclone-obscure")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nif [ \"$1\" = \"obscure\" ]; then cat >/dev/null; printf 'obscured-from-api\\n'; exit 0; fi\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("创建假 rclone 失败: %v", err)
+	}
+	t.Setenv("RCLONE_BIN", bin)
 	j := e.login(t)
 	csrf := e.sessionCSRF(t, j)
 
@@ -347,6 +352,17 @@ func TestAPICloudDriveTestEndpoint(t *testing.T) {
 		if strings.Contains(body, secret) {
 			t.Errorf("测试失败响应不得透出底层细节 %q：%s", secret, body)
 		}
+	}
+
+	// 支持直接测试草稿目的地（用于弹窗表单保存前连通性自测）
+	e.srv.cloudSink = &fakeCloudSink{}
+	resp = post(`{"destination":{"name":"draft-mega","type":"mega","options":{"user":"u","pass":"p"}}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("草稿目的地测试应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	decodeAPIJSON(t, bodyOf(t, resp), &out)
+	if !out.OK {
+		t.Errorf("草稿目的地测试应成功: %+v", out)
 	}
 }
 
