@@ -304,127 +304,130 @@ export function ErrorLogsPage() {
       description="请求管线与 Bot 相关环节错误的逐条明细：来源、环节、错误码与原始根因串（含参数快照）。自动按保留天数清理；也可在此批量删除或按时间段清理。"
     >
       <PageSection title="日志明细">
-        <FilterBar<FilterValues>
-          mode="submit"
-          onFinish={(values) => applyFilters(values)}
-          onReset={() => {
-            setPage(1);
-            setSelectedKeys([]);
-            setApplied({});
-            const next = new URLSearchParams(searchParams);
-            next.delete("request_id");
-            setSearchParams(next, { replace: true });
-          }}
-          initialValues={
-            initialRequestId ? { request_id: initialRequestId } : undefined
-          }
-          actions={
-            <Button danger onClick={() => setCleanupOpen(true)}>
-              按时间段清理
-            </Button>
-          }
-        >
-          <Form.Item name="source">
-            <Select
-              allowClear
-              placeholder="全部来源"
-              className="field-width-140"
-              options={SOURCE_OPTIONS}
-              aria-label="按来源筛选"
-            />
-          </Form.Item>
-          <Form.Item name="severity">
-            <Select
-              allowClear
-              placeholder="全部级别"
-              className="field-width-120"
-              options={SEVERITY_OPTIONS}
-              aria-label="按级别筛选"
-            />
-          </Form.Item>
-          <Form.Item name="code">
-            <Input
-              allowClear
-              placeholder="错误码（如 BOT_SEND_FAILED）"
-              className="field-width-200"
-              aria-label="按错误码筛选"
-            />
-          </Form.Item>
-          <Form.Item name="request_id">
-            <InputNumber
-              placeholder="请求 ID"
-              min={1}
-              precision={0}
-              className="field-width-120"
-              aria-label="按请求 ID 筛选"
-            />
-          </Form.Item>
-          <Form.Item name="range">
-            <DatePicker.RangePicker
-              showTime={{ format: "HH:mm" }}
-              format="YYYY-MM-DD HH:mm"
-              aria-label="按时间范围筛选"
-            />
-          </Form.Item>
-        </FilterBar>
-        {selectedKeys.length > 0 ? (
-          <Space wrap className="batch-action-bar">
-            <Text>已选 {selectedKeys.length} 条</Text>
-            <Button danger onClick={deleteBatch}>
-              批量删除
-            </Button>
-            <Button onClick={() => setSelectedKeys([])}>取消选择</Button>
-          </Space>
-        ) : null}
-        <PageQueryState
-          initialLoading={logs.isPending && !logs.data}
-          error={logs.isError && !logs.data}
-          hasData={!!logs.data}
-          onRetry={() => void logs.refetch()}
-        >
-          <DataTable
-            rowKey="id"
-            columns={columns}
-            dataSource={logs.data?.items ?? []}
-            loading={logs.isPending}
-            emptyText="暂无错误日志（一切正常，或条件过滤后无匹配）"
-            expandable={{
-              rowExpandable: (row) => !!row.detail || Object.keys(row.context ?? {}).length > 0,
-              expandedRowRender: (row) => (
-                <Space direction="vertical" size={4} className="error-log-expand">
-                  {row.detail ? (
-                    <div>
-                      <Text type="secondary">根因：</Text>
-                      <Text code>{row.detail}</Text>
-                    </div>
-                  ) : null}
-                  {Object.keys(row.context ?? {}).length > 0 ? (
-                    <div>
-                      <Text type="secondary">参数：</Text>
-                      <pre className="audit-json">
-                        {JSON.stringify(row.context, null, 2)}
-                      </pre>
-                    </div>
-                  ) : null}
-                </Space>
-              ),
+        {/* 筛选区/批量操作条/表格经垂直 Space 分隔（列表页统一布局） */}
+        <Space direction="vertical" size="middle" className="field-width-full">
+          <FilterBar<FilterValues>
+            mode="submit"
+            onFinish={(values) => applyFilters(values)}
+            onReset={() => {
+              setPage(1);
+              setSelectedKeys([]);
+              setApplied({});
+              const next = new URLSearchParams(searchParams);
+              next.delete("request_id");
+              setSearchParams(next, { replace: true });
             }}
-            rowSelection={{
-              selectedRowKeys: selectedKeys,
-              onChange: (keys) => setSelectedKeys(keys),
-            }}
-            pagination={{
-              current: logs.data?.page ?? page,
-              pageSize: logs.data?.page_size ?? pageSize,
-              total: logs.data?.total ?? 0,
-              showSizeChanger: true,
-              onChange: (nextPage, nextSize) => {
-                setPage(nextPage);
-                setPageSize(nextSize);
-              },
-            }}
-          />
-        </PageQueryState>
+            initialValues={
+              initialRequestId ? { request_id: initialRequestId } : undefined
+            }
+            actions={
+              <Button danger onClick={() => setCleanupOpen(true)}>
+                按时间段清理
+              </Button>
+            }
+          >
+            <Form.Item name="source">
+              <Select
+                allowClear
+                placeholder="全部来源"
+                className="field-width-140"
+                options={SOURCE_OPTIONS}
+                aria-label="按来源筛选"
+              />
+            </Form.Item>
+            <Form.Item name="severity">
+              <Select
+                allowClear
+                placeholder="全部级别"
+                className="field-width-120"
+                options={SEVERITY_OPTIONS}
+                aria-label="按级别筛选"
+              />
+            </Form.Item>
+            <Form.Item name="code">
+              <Input
+                allowClear
+                placeholder="错误码（如 BOT_SEND_FAILED）"
+                className="field-width-200"
+                aria-label="按错误码筛选"
+              />
+            </Form.Item>
+            <Form.Item name="request_id">
+              <InputNumber
+                placeholder="请求 ID"
+                min={1}
+                precision={0}
+                className="field-width-120"
+                aria-label="按请求 ID 筛选"
+              />
+            </Form.Item>
+            <Form.Item name="range">
+              <DatePicker.RangePicker
+                showTime={{ format: "HH:mm" }}
+                format="YYYY-MM-DD HH:mm"
+                aria-label="按时间范围筛选"
+              />
+            </Form.Item>
+          </FilterBar>
+          {selectedKeys.length > 0 ? (
+            <Space wrap className="batch-action-bar">
+              <Text>已选 {selectedKeys.length} 条</Text>
+              <Button danger onClick={deleteBatch}>
+                批量删除
+              </Button>
+              <Button onClick={() => setSelectedKeys([])}>取消选择</Button>
+            </Space>
+          ) : null}
+          <PageQueryState
+            initialLoading={logs.isPending && !logs.data}
+            error={logs.isError && !logs.data}
+            hasData={!!logs.data}
+            onRetry={() => void logs.refetch()}
+          >
+            <DataTable
+              rowKey="id"
+              columns={columns}
+              dataSource={logs.data?.items ?? []}
+              loading={logs.isPending}
+              emptyText="暂无错误日志（一切正常，或条件过滤后无匹配）"
+              expandable={{
+                rowExpandable: (row) => !!row.detail || Object.keys(row.context ?? {}).length > 0,
+                expandedRowRender: (row) => (
+                  <Space direction="vertical" size={4} className="error-log-expand">
+                    {row.detail ? (
+                      <div>
+                        <Text type="secondary">根因：</Text>
+                        <Text code>{row.detail}</Text>
+                      </div>
+                    ) : null}
+                    {Object.keys(row.context ?? {}).length > 0 ? (
+                      <div>
+                        <Text type="secondary">参数：</Text>
+                        <pre className="audit-json">
+                          {JSON.stringify(row.context, null, 2)}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </Space>
+                ),
+              }}
+              rowSelection={{
+                selectedRowKeys: selectedKeys,
+                onChange: (keys) => setSelectedKeys(keys),
+              }}
+              pagination={{
+                current: logs.data?.page ?? page,
+                pageSize: logs.data?.page_size ?? pageSize,
+                total: logs.data?.total ?? 0,
+                showSizeChanger: true,
+                onChange: (nextPage, nextSize) => {
+                  setPage(nextPage);
+                  setPageSize(nextSize);
+                },
+              }}
+            />
+          </PageQueryState>
+        </Space>
       </PageSection>
       <Modal
         title="按时间段清理错误日志"
