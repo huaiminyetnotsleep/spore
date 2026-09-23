@@ -2,6 +2,20 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.31.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.30.0...v1.31.0) (2026-09-23)
+
+
+### Features
+
+* **frontend:** 数据备份与运行设置页左侧锚点目录导航 ([62e812c](https://github.com/huaiminyetnotsleep/spore/commit/62e812c19e2f3046f70c7b87ca703d35cb748b08))
+* **observability:** 错误日志中心全链路落库（v25） ([ceb4dd7](https://github.com/huaiminyetnotsleep/spore/commit/ceb4dd766649bdb1e158006a5e755bf550c48b8a))
+
+
+### Bug Fixes
+
+* **cloud:** 网盘错误分类与连通性测试超时观测修正 ([c23a0ca](https://github.com/huaiminyetnotsleep/spore/commit/c23a0cada17d44781b65eed30a5db3688776dd3c))
+* **frontend:** 错误日志页筛选区与表格间距 ([61cf015](https://github.com/huaiminyetnotsleep/spore/commit/61cf0156482acff0ea15e3424c1322891facfa1c))
+
 ## [1.30.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.29.0...v1.30.0) (2026-09-22)
 
 
