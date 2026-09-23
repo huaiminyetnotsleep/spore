@@ -40,11 +40,11 @@ func TestProcessRequestCancellationSkipsExecution(t *testing.T) {
 }
 
 func TestCancelledStatusHTML(t *testing.T) {
-	// 正常链接：文案 + 删除线样式的来源消息链接
+	// 正常链接：文案 + 原消息来源卡片（链接保留删除线样式）
 	ref := tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "example", MessageID: 7}
-	want := "任务已取消。\n<s><a href=\"https://t.me/example/7\">https://t.me/example/7</a></s>"
+	want := "任务已取消。\n" + sourceLinkCardHTML(`<s><a href="https://t.me/example/7">https://t.me/example/7</a></s>`)
 	if got := CancelledStatusHTML(ref); got != want {
-		t.Fatalf("取消文案应带删除线链接:\n want %q\n got  %q", want, got)
+		t.Fatalf("取消文案应带删除线来源卡片:\n want %q\n got  %q", want, got)
 	}
 
 	// 链接不可重建（如私有频道键数据异常）：退化为纯取消文案

@@ -431,31 +431,38 @@ func cloudDisplayPaths(plan cloudarchive.Plan) []string {
 	return out
 }
 
-// sendCloudConfirm 发送云盘成功确认文本：目的地、远端路径列表、原始消息
-// 链接与网盘官网（已知后端类型才有官网行）；skipped 时附"未重复下载"说明。
-// 路径与链接中的用户内容经 HTML 转义后拼接；发送失败只记日志。
+// sendCloudConfirm 发送云盘成功确认文本：目的地加粗、远端路径列表以引用块
+// 分组（相册合并为一行目录）、原消息以来源卡片样式附后（与其他任务终态文案
+// 同款）、网盘官网行可点击（已知后端类型才有）；skipped 时附"未重复下载"
+// 说明。路径与链接中的用户内容经 HTML 转义后拼接；发送失败只记日志。
 func sendCloudConfirm(ctx context.Context, d Deps, j Job, paths []string, skipped bool) {
 	if len(paths) == 0 {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("已上传到网盘 ")
+	b.WriteString("☁️ 已上传到网盘 <b>")
 	b.WriteString(html.EscapeString(j.CloudDest))
-	b.WriteString("：")
-	for _, p := range paths {
-		b.WriteString("\n")
+	b.WriteString("</b>：\n<blockquote>")
+	for i, p := range paths {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(html.EscapeString(p))
 	}
+	b.WriteString("</blockquote>")
 	if skipped {
 		b.WriteString("\n\n该链接此前已上传，本次未重复下载。")
 	}
 	if link, ok := j.Ref.URL(); ok {
-		b.WriteString("\n\n原链接：")
-		b.WriteString(html.EscapeString(link))
+		b.WriteString("\n\n")
+		b.WriteString(sourceLinkCardHTML(sourceLinkAnchorHTML(link)))
 	}
 	if site := cloudProviderSite(d, j); site != "" {
-		b.WriteString("\n网盘官网：")
+		b.WriteString("\n\n🌐 网盘官网：<a href=\"")
 		b.WriteString(html.EscapeString(site))
+		b.WriteString("\">")
+		b.WriteString(html.EscapeString(site))
+		b.WriteString("</a>")
 	}
 	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, b.String()); err != nil {
 		d.Log.Warn("云盘确认文本发送失败", "job_id", j.ID, "error", err.Error())

@@ -77,7 +77,7 @@ func renderPinModeSelection(entry pendingPrompt) (string, models.ReplyMarkup, bo
 			{Text: "❌ 取消", CallbackData: promptCancelCallbackPrefix + promptID},
 		},
 	}
-	text := "<blockquote>📌 <b>请选择提交方式</b>\n" +
+	text := "<blockquote>👇 <b>请选择提交方式</b>\n" +
 		"置顶+转存会把媒体同时上传到网盘（默认目的地）；网盘任务将在无其他任务排队时执行。</blockquote>"
 	return text, &models.InlineKeyboardMarkup{InlineKeyboard: rows}, true
 }

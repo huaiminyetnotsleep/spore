@@ -505,17 +505,14 @@ func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 	}
 }
 
-// pinResultText 渲染置顶结果确认文案（HTML：原消息链接与目标名逐个列出，
-// 频道/群组名可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。
-// 目标名带跳转链接（与脚注同源），多个目标逐行展示。
+// pinResultText 渲染置顶结果确认文案（HTML：目标名逐行列出，频道/群组名
+// 可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。目标名带
+// 跳转链接（与脚注同源），多个目标逐行展示；原消息以来源卡片样式附在末尾。
 // Skipped（绑定属于其他受理 bot）单独成组提示，不计入失败。
 func pinResultText(sourceURL string, o PinOutcome) string {
-	link := "原消息链接不可用"
-	if sourceURL != "" {
-		link = fmt.Sprintf(`<a href="%s">%s</a>`, sourceURL, sourceURL)
-	}
 	if o.Total == 0 && len(o.Skipped) == 0 {
-		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n原消息：" + link
+		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n" +
+			sourceLinkCardHTML(sourceLinkAnchorHTML(sourceURL))
 	}
 	var pinned, failed, skipped []string
 	for _, t := range o.Targets {
@@ -531,17 +528,13 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 	}
 	var b strings.Builder
 	if len(pinned) > 0 {
-		fmt.Fprintf(&b, "📌 已置顶原消息 %s 到：\n%s", link, strings.Join(pinned, "\n"))
+		fmt.Fprintf(&b, "📌 已置顶到：\n%s", strings.Join(pinned, "\n"))
 	}
 	if len(failed) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		if len(pinned) == 0 {
-			fmt.Fprintf(&b, "📌 原消息 %s 置顶失败：\n%s", link, strings.Join(failed, "\n"))
-		} else {
-			fmt.Fprintf(&b, "置顶失败：\n%s", strings.Join(failed, "\n"))
-		}
+		fmt.Fprintf(&b, "📌 置顶失败：\n%s", strings.Join(failed, "\n"))
 	}
 	if len(skipped) > 0 {
 		if b.Len() > 0 {
@@ -553,6 +546,12 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 		} else {
 			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：\n%s", len(skipped), strings.Join(skipped, "\n"))
 		}
+	}
+	if sourceURL != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(sourceLinkCardHTML(sourceLinkAnchorHTML(sourceURL)))
 	}
 	return b.String()
 }
@@ -874,27 +873,44 @@ func deleteStatusBestEffort(d Deps, ctx context.Context, j Job) {
 	delivery.TryDeleteStatus(wctx, d.senderFor(j), d.Log, j.ChatID, j.StatusMsgID)
 }
 
-// CancelledStatusHTML 渲染取消终态的占位消息：取消文案 + 来源消息链接，
-// 链接以删除线样式标记"该链接的任务已取消"状态。URL 由服务端受控生成
+// CancelledStatusHTML 渲染取消终态的占位消息：取消文案 + 原消息来源卡片
+// （链接保留删除线样式标记"该链接的任务已取消"）。URL 由服务端受控生成
 // （频道键为用户名或 -100 数字 ID），无 HTML 注入面；链接不可重建时
 // （如私有频道键数据异常）退化为纯取消文案。
 func CancelledStatusHTML(ref tmeurl.SourceRef) string {
 	if url, ok := ref.URL(); ok {
-		return fmt.Sprintf("%s\n<s><a href=\"%s\">%s</a></s>", StatusCancelledHTML, url, url)
+		return StatusCancelledHTML + "\n" + sourceLinkCardHTML("<s>"+sourceLinkAnchorHTML(url)+"</s>")
 	}
 	return StatusCancelledHTML
 }
 
-// failureNoticeHTML 渲染任务失败的用户提示：错误码文案 + 来源消息链接，
-// 多条链接并发处理时用户可据此区分是哪条任务失败。URL 由服务端受控生成
-// （频道键为用户名或 -100 数字 ID），无 HTML 注入面；链接不可重建时
+// failureNoticeHTML 渲染任务失败的用户提示：错误码文案 + 原消息来源卡片
+// （多条链接并发处理时用户可据此区分是哪条任务失败）。URL 由服务端受控
+// 生成（频道键为用户名或 -100 数字 ID），无 HTML 注入面；链接不可重建时
 // （如私有频道键数据异常）退化为纯错误文案。
 func failureNoticeHTML(code apperr.Code, ref tmeurl.SourceRef) string {
 	text := apperr.UserText(code)
 	if url, ok := ref.URL(); ok {
-		return fmt.Sprintf("%s\n<a href=\"%s\">%s</a>", text, url, url)
+		return text + "\n" + sourceLinkCardHTML(sourceLinkAnchorHTML(url))
 	}
 	return text
+}
+
+// sourceLinkAnchorHTML 渲染原消息链接为可点击锚点（URL 与展示文本均转义，
+// 与脚注卡片同姿态）。
+func sourceLinkAnchorHTML(url string) string {
+	return `<a href="` + html.EscapeString(url) + `">` + html.EscapeString(url) + `</a>`
+}
+
+// sourceLinkCardHTML 渲染与投递消息末尾来源卡片同款样式的原消息入口：
+// 引用块包裹加粗"🔗 原消息"标签 + 换行 + 可点击链接。linkHTML 是链接的
+// 完整 HTML（调用方控制附加样式，如取消终态的删除线）；空串退化为纯文本
+// 占位（链接不可重建时）。
+func sourceLinkCardHTML(linkHTML string) string {
+	if linkHTML == "" {
+		return "原消息链接不可用"
+	}
+	return "<blockquote><b>🔗 原消息</b>\n" + linkHTML + "</blockquote>"
 }
 
 // finishBotDisabled 把停用 bot 名下的任务标记为 failed(BOT_DISABLED)，

@@ -178,7 +178,7 @@ func TestCloudJobSingleMedia(t *testing.T) {
 	}
 	sender := d.Sender.(*fakeSender)
 	texts := sender.texts()
-	if len(texts) != 1 || !strings.Contains(texts[0], "已上传到网盘 mega-1") ||
+	if len(texts) != 1 || !strings.Contains(texts[0], "已上传到网盘 <b>mega-1</b>") ||
 		!strings.Contains(texts[0], "spore/example/2026-09-09/f-7.bin") {
 		t.Fatalf("确认文本不符: %v", texts)
 	}
@@ -221,7 +221,7 @@ func TestCloudJobAlbumWithCaption(t *testing.T) {
 	// 确认文本：目录一行，不逐文件罗列
 	sender := d.Sender.(*fakeSender)
 	texts := sender.texts()
-	if len(texts) != 1 || !strings.Contains(texts[0], "已上传到网盘 mega-1") || !strings.Contains(texts[0], dir) {
+	if len(texts) != 1 || !strings.Contains(texts[0], "已上传到网盘 <b>mega-1</b>") || !strings.Contains(texts[0], dir) {
 		t.Fatalf("确认文本应含目录一行: %v", texts)
 	}
 	if strings.Contains(texts[0], "01_f-7.bin") {
@@ -318,11 +318,11 @@ func TestCloudJobSkipAlreadyUploaded(t *testing.T) {
 	}
 	text := texts[0]
 	for _, want := range []string{
-		"已上传到网盘 mega-1",
+		"已上传到网盘 <b>mega-1</b>",
 		dir,
 		"该链接此前已上传，本次未重复下载",
-		"原链接：https://t.me/example/7",
-		"网盘官网：https://mega.nz/",
+		"<blockquote><b>🔗 原消息</b>\n<a href=\"https://t.me/example/7\">https://t.me/example/7</a></blockquote>",
+		"🌐 网盘官网：<a href=\"https://mega.nz/\">https://mega.nz/</a>",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("确认文本应包含 %q:\n%s", want, text)

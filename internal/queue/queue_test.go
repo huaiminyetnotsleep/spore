@@ -467,9 +467,9 @@ func TestProcessEarlyFailLifecycle(t *testing.T) {
 func TestFailureNoticeHTML(t *testing.T) {
 	text := apperr.UserText(apperr.CodeFileTooLarge)
 	ref := tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "example", MessageID: 7}
-	want := text + "\n" + `<a href="https://t.me/example/7">https://t.me/example/7</a>`
+	want := text + "\n" + sourceLinkCardHTML(`<a href="https://t.me/example/7">https://t.me/example/7</a>`)
 	if got := failureNoticeHTML(apperr.CodeFileTooLarge, ref); got != want {
-		t.Fatalf("失败提示应为文案+可点击链接\nwant: %q\ngot:  %q", want, got)
+		t.Fatalf("失败提示应为文案+来源卡片\nwant: %q\ngot:  %q", want, got)
 	}
 	// 链接不可重建（如私有频道键数据异常）：退化为纯错误文案
 	if got := failureNoticeHTML(apperr.CodeFileTooLarge, tmeurl.SourceRef{}); got != text {
