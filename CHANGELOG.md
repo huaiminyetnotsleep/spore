@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.32.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.31.0...v1.32.0) (2026-09-23)
+
+
+### Features
+
+* **observability:** 错误日志根因完整展示（2000 字符上限与折行代码块） ([0db86bb](https://github.com/huaiminyetnotsleep/spore/commit/0db86bb9395ff1ff77ae77b6e89a36503298989e))
+
 ## [1.31.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.30.0...v1.31.0) (2026-09-23)
 
 
