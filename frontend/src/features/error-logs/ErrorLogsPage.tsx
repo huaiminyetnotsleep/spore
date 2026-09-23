@@ -163,24 +163,50 @@ export function ErrorLogsPage() {
     },
   });
 
+  // 条件未变化时 queryKey 不变、react-query 不会自动重新请求；点「筛选」
+  // 是明确的刷新意图，条件相同也强制 refetch（「重置」同理）。
+  const sameFilters = (a: AppliedFilters, b: AppliedFilters) =>
+    a.source === b.source &&
+    a.code === b.code &&
+    a.severity === b.severity &&
+    a.requestId === b.requestId &&
+    a.after === b.after &&
+    a.before === b.before;
+
   const applyFilters = (values: FilterValues) => {
-    setPage(1);
-    setSelectedKeys([]);
-    setApplied({
+    const next: AppliedFilters = {
       source: values.source,
       code: values.code?.trim() || undefined,
       severity: values.severity,
       requestId: values.request_id && values.request_id > 0 ? values.request_id : undefined,
       after: values.range?.[0] ? values.range[0].valueOf() : undefined,
       before: values.range?.[1] ? values.range[1].valueOf() + 1 : undefined,
-    });
-    const next = new URLSearchParams(searchParams);
-    if (values.request_id && values.request_id > 0) {
-      next.set("request_id", String(values.request_id));
-    } else {
-      next.delete("request_id");
+    };
+    setPage(1);
+    setSelectedKeys([]);
+    if (sameFilters(next, applied)) {
+      void logs.refetch();
     }
-    setSearchParams(next, { replace: true });
+    setApplied(next);
+    const nextParams = new URLSearchParams(searchParams);
+    if (next.requestId) {
+      nextParams.set("request_id", String(next.requestId));
+    } else {
+      nextParams.delete("request_id");
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const resetFilters = () => {
+    setPage(1);
+    setSelectedKeys([]);
+    if (sameFilters({}, applied)) {
+      void logs.refetch();
+    }
+    setApplied({});
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("request_id");
+    setSearchParams(nextParams, { replace: true });
   };
 
   const cleanupBody = () =>
@@ -326,14 +352,7 @@ export function ErrorLogsPage() {
           <FilterBar<FilterValues>
             mode="submit"
             onFinish={(values) => applyFilters(values)}
-            onReset={() => {
-              setPage(1);
-              setSelectedKeys([]);
-              setApplied({});
-              const next = new URLSearchParams(searchParams);
-              next.delete("request_id");
-              setSearchParams(next, { replace: true });
-            }}
+            onReset={resetFilters}
             initialValues={
               initialRequestId ? { request_id: initialRequestId } : undefined
             }

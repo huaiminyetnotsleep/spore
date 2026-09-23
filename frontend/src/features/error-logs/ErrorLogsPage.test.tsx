@@ -158,6 +158,18 @@ describe("错误日志页", () => {
     });
   });
 
+  it("条件不变时点筛选仍触发重新请求（刷新意图）", async () => {
+    renderPage();
+    await screen.findByText("任务失败");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // 条件未变：点「筛选」强制 refetch 而不是命中相同的 queryKey
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "筛 选" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+  });
+
   it("行展开显示根因代码块（完整内容折行展示）", async () => {
     fetchMock.mockResolvedValue(
       envelope([logRow({ detail: "rclone: line1\nline2: " + "x".repeat(400) })]),

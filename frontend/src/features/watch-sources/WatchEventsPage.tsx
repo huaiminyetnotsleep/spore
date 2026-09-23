@@ -71,10 +71,14 @@ export function WatchEventsPage() {
     onDone: () => setSelectedKeys([]),
   });
 
+  // 条件未变化时 queryKey 不变、不会自动重新请求；点「查询/重置」是明确的
+  // 刷新意图，条件相同也强制 refetch（不在第一页时重置页码本身即触发新查询）。
   const applyFilters = () => {
+    const unchanged = draftChannel === channelFilter && draftPath === pathFilter;
     setChannelFilter(draftChannel);
     setPathFilter(draftPath);
     setPage(1);
+    if (unchanged && page === 1) void events.refetch();
     const next = new URLSearchParams(searchParams);
     if (draftChannel) next.set("channel_id", String(draftChannel));
     else next.delete("channel_id");
@@ -82,11 +86,13 @@ export function WatchEventsPage() {
   };
 
   const resetFilters = () => {
+    const unchanged = channelFilter === undefined && pathFilter === undefined;
     setDraftChannel(undefined);
     setDraftPath(undefined);
     setChannelFilter(undefined);
     setPathFilter(undefined);
     setPage(1);
+    if (unchanged && page === 1) void events.refetch();
     const next = new URLSearchParams(searchParams);
     next.delete("channel_id");
     setSearchParams(next, { replace: true });

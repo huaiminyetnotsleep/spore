@@ -126,10 +126,16 @@ export function ChannelDetailPage() {
                     mode="submit"
                     form={form}
                     onFinish={(values) => {
-                      setRange({
+                      const next = {
                         since: values.since ? values.since.format("YYYY-MM-DD") : undefined,
                         until: values.until ? values.until.format("YYYY-MM-DD") : undefined,
-                      });
+                      };
+                      // 条件未变化时 query key 不变，显式刷新（刷新意图）
+                      if (next.since === range.since && next.until === range.until) {
+                        void query.refetch();
+                        return;
+                      }
+                      setRange(next);
                     }}
                     onReset={() => {
                       // 条件未变化时显式刷新；变化时由新 query key 触发查询

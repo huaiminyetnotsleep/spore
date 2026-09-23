@@ -142,6 +142,18 @@ describe("监听记录页", () => {
     );
   });
 
+  it("条件不变时点查询仍触发重新请求（刷新意图）", async () => {
+    renderPage();
+    await screen.findByText("私有频道");
+    expect(fetchEventsMock).toHaveBeenCalledTimes(1);
+
+    // 条件未变：点「查询」强制 refetch 而不是命中相同的 queryKey
+    fireEvent.click(screen.getByRole("button", { name: "查 询" }));
+    await waitFor(() => expect(fetchEventsMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "查 询" }));
+    await waitFor(() => expect(fetchEventsMock).toHaveBeenCalledTimes(3));
+  });
+
   it("支持单条删除（确认后调用删除端点）", async () => {
     deleteEventsMock.mockResolvedValueOnce({ ok: true, deleted: 1 });
     renderPage();

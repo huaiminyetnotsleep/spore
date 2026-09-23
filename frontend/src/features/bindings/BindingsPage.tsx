@@ -259,15 +259,24 @@ export function BindingsPage() {
         }
       >
         <Space direction="vertical" size="middle" className="field-width-full">
-          {/* 用户筛选为 URL 驱动（?user_id=）：提交写入 URL，URL 变化驱动查询 */}
+          {/* 用户筛选为 URL 驱动（?user_id=）：提交写入 URL，URL 变化驱动查询；
+              条件未变化时 URL 不变不会重新请求，显式 refetch（刷新意图） */}
           <FilterBar<OwnerFilterValues>
             mode="submit"
             form={filterForm}
             onFinish={(values) => {
               const next = values.owner_id?.trim() || "";
+              if (next === userID) {
+                void refetch();
+                return;
+              }
               setSearchParams(next ? { user_id: next } : {});
             }}
             onReset={() => {
+              if (userID === "") {
+                void refetch();
+                return;
+              }
               setSearchParams({});
             }}
           >
