@@ -313,7 +313,7 @@ func uploadCloudFile(ctx context.Context, d Deps, j Job, dest cloudarchive.Desti
 			Stage:     errorStage(ae.Code),
 			Severity:  store.ErrorSeverityError,
 			Message:   "云盘文件上传失败：" + f.FileName,
-			Detail:    errorDetailText(ae),
+			Detail:    errorDetailRaw(ae),
 			Context:   fileCtx,
 			RequestID: j.RequestID,
 		})

@@ -60,8 +60,9 @@ func jobLogContext(j Job) map[string]any {
 }
 
 // taskErrorLog 构造一次失败尝试的错误日志（请求管线终态记录：每次失败
-// 尝试一行，中间尝试的根因不再被 requests 终态覆盖丢失）。媒体诊断元数据
-// （转换阶段之后）一并进上下文。
+// 尝试一行，中间尝试的根因不再被 requests 终态覆盖丢失）。detail 传
+// 未截断原文（error_logs 的 2000 字符上限由 errlog 门面统一执行）；
+// 媒体诊断元数据（转换阶段之后）一并进上下文。
 func taskErrorLog(j Job, ae *apperr.AppError, meta mediaMeta) errlog.Record {
 	rec := errlog.Record{
 		Source:    store.ErrorSourceRequest,
@@ -69,7 +70,7 @@ func taskErrorLog(j Job, ae *apperr.AppError, meta mediaMeta) errlog.Record {
 		Stage:     errorStage(ae.Code),
 		Severity:  store.ErrorSeverityError,
 		Message:   "任务失败",
-		Detail:    errorDetailText(ae),
+		Detail:    errorDetailRaw(ae),
 		Context:   jobLogContext(j),
 		RequestID: j.RequestID,
 	}

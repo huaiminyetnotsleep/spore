@@ -896,7 +896,7 @@ func finishBotDisabled(d Deps, ctx context.Context, j Job) {
 		Stage:     "claim",
 		Severity:  store.ErrorSeverityError,
 		Message:   "受理 Bot 已停用，任务标记失败",
-		Detail:    errorDetailText(ae),
+		Detail:    errorDetailRaw(ae),
 		Context:   jobLogContext(j),
 		RequestID: j.RequestID,
 	})
@@ -920,24 +920,36 @@ func finishBotDisabled(d Deps, ctx context.Context, j Job) {
 	}
 }
 
-// errorDetailLimit 是 error_detail 落库列的截断上限（字符数）。
+// errorDetailLimit 是 requests.error_detail 落库列的截断上限（字符数）。
+// error_logs.detail 不走该上限：错误日志是诊断表，由 errlog 门面按自己的
+// 2000 字符上限截断（见 errorDetailRaw 的调用方）。
 const errorDetailLimit = 300
 
-// errorDetailText 提取失败根因文本（仅落库与 Web 管理端展示，不发给
-// Telegram 用户）：优先取 AppError 的 cause（保留错误链上下文，如
-// "FLOOD_WAIT_X: 3000"、Bot API 响应描述），无 cause 时用内部描述；
-// 超长按字符截断，避免异常错误串撑爆列。
-func errorDetailText(ae *apperr.AppError) string {
-	text := ""
+// errorDetailRaw 提取失败根因文本（不截断）：优先取 AppError 的 cause
+//（保留错误链上下文，如 "FLOOD_WAIT_X: 3000"、Bot API 响应描述），无
+// cause 时用内部描述，最后回落码字符串。requests.error_detail 经
+// errorDetailText 按 300 截断后使用；错误日志记录传原文交给 errlog 截断。
+func errorDetailRaw(ae *apperr.AppError) string {
 	if ae.Cause != nil {
-		text = ae.Cause.Error()
-	} else if ae.Message != "" {
-		text = ae.Message
-	} else {
-		text = string(ae.Code)
+		return ae.Cause.Error()
 	}
-	if runes := []rune(text); len(runes) > errorDetailLimit {
-		return string(runes[:errorDetailLimit]) + "…"
+	if ae.Message != "" {
+		return ae.Message
+	}
+	return string(ae.Code)
+}
+
+// errorDetailText 提取失败根因文本（仅落库 requests.error_detail 与 Web
+// 管理端详情页展示，不发给 Telegram 用户）：超长按字符截断，避免异常
+// 错误串撑爆列（详情页为内联一行展示）。
+func errorDetailText(ae *apperr.AppError) string {
+	return truncateRunes(errorDetailRaw(ae), errorDetailLimit)
+}
+
+// truncateRunes 按字符数截断，超长加省略号。
+func truncateRunes(text string, limit int) string {
+	if runes := []rune(text); len(runes) > limit {
+		return string(runes[:limit]) + "…"
 	}
 	return text
 }

@@ -60,6 +60,23 @@ const SEVERITY_OPTIONS: { value: ErrorLogSeverity; label: string }[] = [
   { value: "warn", label: "警告" },
 ];
 
+/**
+ * 根因展示格式化：内容本身是完整 JSON（Telegram/rclone 偶尔内嵌 JSON 响应体）
+ * 时缩进美化，否则原样展示。换行保留与长行折行交给 .error-log-detail 的
+ * pre-wrap 样式；解析失败回原文，不吞内容。
+ */
+function formatDetail(detail: string): string {
+  const trimmed = detail.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return detail;
+    }
+  }
+  return detail;
+}
+
 interface FilterValues {
   source?: ErrorLogSource;
   code?: string;
@@ -397,7 +414,7 @@ export function ErrorLogsPage() {
                     {row.detail ? (
                       <div>
                         <Text type="secondary">根因：</Text>
-                        <Text code>{row.detail}</Text>
+                        <pre className="error-log-detail">{formatDetail(row.detail)}</pre>
                       </div>
                     ) : null}
                     {Object.keys(row.context ?? {}).length > 0 ? (

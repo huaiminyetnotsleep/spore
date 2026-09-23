@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -82,5 +83,41 @@ func TestProcessBotDisabledRecordsErrorLog(t *testing.T) {
 	}
 	if rows[0].RequestID != r.ID {
 		t.Fatalf("应归属该请求: %+v", rows[0])
+	}
+}
+
+// TestProcessFailureErrorLogPreservesLongDetail 超长根因（rclone/Telegram
+// 的原始报错可能远超一行）在错误日志中不被 requests.error_detail 的 300
+// 字符上限截断：error_logs.detail 按 errlog 自己的 2000 上限保留。
+func TestProcessFailureErrorLogPreservesLongDetail(t *testing.T) {
+	s := openStore(t)
+	job, _ := newJobWithRequest(t, s, 55)
+	longMsg := strings.Repeat("rclone: failed to upload: ", 30) // ~780 字符
+	deps := Deps{
+		Fetcher: &fakeFetcher{err: apperr.New(apperr.CodeCloudUploadFailed, longMsg)},
+		Sender:  &fakeSender{},
+		Store:   s,
+		ErrLog:  errlog.New(errlog.Options{Store: s, Log: testLog()}),
+		Log:     testLog(),
+	}
+
+	done := make(chan struct{})
+	go func() { Process(deps)(context.Background(), job); close(done) }()
+	waitDone(t, done)
+
+	rows, total, err := s.ListErrorLogs(context.Background(), store.ErrorLogsQuery{})
+	if err != nil || total != 1 {
+		t.Fatalf("应落一条: %v %d", err, total)
+	}
+	if runes := len([]rune(rows[0].Detail)); runes <= 300 {
+		t.Fatalf("超长根因不应被 300 截断，得到 %d 字符", runes)
+	}
+	if !strings.HasSuffix(rows[0].Detail, longMsg[len(longMsg)-20:]) {
+		t.Fatalf("根因尾部应保留: %q", rows[0].Detail[len(rows[0].Detail)-40:])
+	}
+	// requests.error_detail 维持 300 上限（详情页内联展示），与本列不同
+	req, _ := s.GetRequest(context.Background(), job.RequestID)
+	if runes := len([]rune(req.ErrorDetail)); runes > 301 {
+		t.Fatalf("requests.error_detail 应仍按 300 截断，得到 %d 字符", runes)
 	}
 }

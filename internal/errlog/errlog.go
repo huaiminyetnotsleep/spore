@@ -24,9 +24,11 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
-// detailLimit 是 detail 字段的截断上限（字符数），与 queue 包
-// errorDetailLimit（requests.error_detail，v23）保持同一规则。
-const detailLimit = 300
+// detailLimit 是 error_logs.detail 字段的截断上限（字符数）。错误日志是
+// 诊断表，rclone/Telegram 的原始报错可能远超一行，给到 2000 保证根因
+// 基本完整（截断加省略号兜底防异常错误串撑爆行）；requests.error_detail
+//（队列自己的 300 字符上限）不受影响，仍是管理端详情页的内联一行展示。
+const detailLimit = 2000
 
 // throttleWindow 是无归属请求同键错误的去重窗口。
 const throttleWindow = time.Minute

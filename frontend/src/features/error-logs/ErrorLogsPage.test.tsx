@@ -157,4 +157,49 @@ describe("错误日志页", () => {
       expect(screen.queryByRole("button", { name: "查条数并清理" })).not.toBeInTheDocument();
     });
   });
+
+  it("行展开显示根因代码块（完整内容折行展示）", async () => {
+    fetchMock.mockResolvedValue(
+      envelope([logRow({ detail: "rclone: line1\nline2: " + "x".repeat(400) })]),
+    );
+    renderPage();
+    await screen.findByText("任务失败");
+
+    // 展开行：点开第一行的展开图标
+    const expandIcons = document.querySelectorAll<HTMLElement>(
+      ".ant-table-row-expand-icon",
+    );
+    expect(expandIcons.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(expandIcons[0]);
+
+    // 根因在 pre 代码块中完整可见（折行而非单行截断）
+    const detailBlock = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".error-log-detail");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(detailBlock.textContent).toContain("rclone: line1\nline2:");
+    expect(detailBlock.textContent).toContain("xxxx");
+  });
+
+  it("根因为 JSON 时自动缩进美化展示", async () => {
+    fetchMock.mockResolvedValue(
+      envelope([logRow({ detail: '{"error":{"code":420,"desc":"FLOOD_WAIT"}}' })]),
+    );
+    renderPage();
+    await screen.findByText("任务失败");
+
+    const expandIcons = document.querySelectorAll<HTMLElement>(
+      ".ant-table-row-expand-icon",
+    );
+    fireEvent.click(expandIcons[0]);
+
+    const detailBlock = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".error-log-detail");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    // 缩进美化后带换行与两空格缩进
+    expect(detailBlock.textContent).toContain('\n  "error"');
+  });
 });

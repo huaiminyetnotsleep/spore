@@ -546,6 +546,22 @@ body {
   border-radius: 6px;
 }
 
+/* 错误日志根因块：长报错完整可读——保留原始换行、长行折行（不横向滚动），
+ * 限高内滚动避免超长根因撑爆表格行。 */
+.error-log-detail {
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+}
+
 .page-loading {
   display: block;
   margin-top: 20vh;
