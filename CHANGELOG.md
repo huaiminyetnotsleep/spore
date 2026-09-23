@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.33.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.33.0...v1.33.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **cloud:** 修复掩码回传被二次 obscure 导致网盘凭据静默损坏 ([b5f11af](https://github.com/huaiminyetnotsleep/spore/commit/b5f11afb249560bce59e5077014d77dad98ad96c))
+
 ## [1.33.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.32.1...v1.33.0) (2026-09-23)
 
 
