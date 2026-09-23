@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.32.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.32.0...v1.32.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **cloud:** 失败转存复用原请求记录 ([cbaa08c](https://github.com/huaiminyetnotsleep/spore/commit/cbaa08c22be1b6f062103005e4eb546125d47ed3))
+* **cloud:** 失败转存复用原请求记录 ([b99e79b](https://github.com/huaiminyetnotsleep/spore/commit/b99e79b9e181b98c05d93546905ae183c3e6abfa))
+* **frontend:** 统一筛选刷新与根因换行展示 ([601e862](https://github.com/huaiminyetnotsleep/spore/commit/601e862fe094486eb97c56678d1a4872c679a0b4))
+
 ## [1.32.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.31.0...v1.32.0) (2026-09-23)
 
 
