@@ -30,9 +30,9 @@ const (
 // CloudBackfillOutcome 是单条补存的执行结果。
 type CloudBackfillOutcome struct {
 	RequestID        int64  // 原请求 ID
-	CreatedRequestID int64  // 新建 cloud 请求行 ID；跳过时为 0（队列满时也已建行）
-	SkipReason       string // 空串 = 建行并入队成功；否则为跳过原因枚举
-	QueueFull        bool   // 建行后入队失败（队列饱和），行已标记 failed(QUEUE_FULL)
+	CreatedRequestID int64  // 新建或复用的 cloud 请求行 ID；跳过时为 0
+	SkipReason       string // 空串 = 建行/复用并入队成功；否则为跳过原因枚举
+	QueueFull        bool   // 入队失败（队列饱和），目标行已标记 failed(QUEUE_FULL)
 }
 
 // CloudBackfillEligibility 只读预检请求级资格（不含云盘全局状态），返回
@@ -42,10 +42,11 @@ func (s *Service) CloudBackfillEligibility(ctx context.Context, requestID int64)
 }
 
 // CloudBackfill 对终态请求执行云盘补存：事务内复核资格（单连接下事务即
-// 互斥，防并发重复建行）→ 新建 delivery_mode=cloud 的请求行（沿用原
-// user/ref/chat，parent_request_id 指向原行）→ 写审计；提交后特权入队
-// （绕过配额/频率/去重，复用 Retry 的提交后入队模式）。入队失败把新行
-// 标记 failed(QUEUE_FULL)（可经现有重试入口重试），不作为 error 返回。
+// 互斥，防并发重复入队）→ 同原请求同目的地最近补存子行若为 failed 则原地
+// 重置，否则新建 delivery_mode=cloud 子行（沿用原 user/ref/chat，
+// parent_request_id 指向原行）→ 写审计；提交后特权入队（绕过配额/频率/
+// 去重，复用 Retry 的提交后入队模式）。入队失败把目标行标记
+// failed(QUEUE_FULL)（可再次补存或经现有重试入口重试），不作为 error 返回。
 // error 仅表示存储故障；资格不满足经 Outcome.SkipReason 表达。
 func (s *Service) CloudBackfill(ctx context.Context, actor string, requestID int64, cloudDest string) (CloudBackfillOutcome, error) {
 	// 先在事务外读取并重建来源链接（行数据异常时不动库、只报内部错误，
@@ -66,6 +67,7 @@ func (s *Service) CloudBackfill(ctx context.Context, actor string, requestID int
 	now := s.now().UnixMilli()
 	out := CloudBackfillOutcome{RequestID: requestID}
 	var createdID int64
+	var resubmitted store.Request
 	err = s.store.Tx(ctx, func(tx *store.Store) error {
 		skip, err := cloudBackfillSkip(ctx, tx, requestID)
 		if err != nil {
@@ -75,6 +77,34 @@ func (s *Service) CloudBackfill(ctx context.Context, actor string, requestID int
 			out.SkipReason = skip
 			return nil
 		}
+
+		prior, err := tx.LatestCloudBackfill(ctx, requestID, cloudDest)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err == nil && prior.Status == store.RequestFailed {
+			if err := tx.ResubmitCloudRequest(ctx, prior.ID, now, 0, ""); err != nil {
+				return err
+			}
+			resubmitted = prior
+			createdID = prior.ID
+			out.CreatedRequestID = prior.ID
+			return tx.AppendAudit(ctx, store.AuditEntry{
+				Actor:  actor,
+				Action: "request.cloud_archive",
+				Target: fmt.Sprintf("request:%d", requestID),
+				BeforeJSON: mustJSON(map[string]any{
+					"status": prior.Status, "attempt": prior.Attempt, "error_code": prior.ErrorCode,
+				}),
+				AfterJSON: mustJSON(map[string]any{
+					"created_request_id": prior.ID,
+					"destination":        cloudDest,
+					"delivery_mode":      store.DeliveryModeCloud,
+					"reused":             true,
+				}),
+			})
+		}
+
 		created, err := tx.CreateRequest(ctx, store.Request{
 			UserID:           req.UserID,
 			SourceKind:       req.SourceKind,
@@ -117,8 +147,8 @@ func (s *Service) CloudBackfill(ctx context.Context, actor string, requestID int
 	job := queue.NewJob(req.UserID, req.UserID, ref, 0, createdID)
 	job.CloudDest = cloudDest
 	if err := s.queue.Enqueue(job); err != nil {
-		// 队列满竞态：新行标记 failed(QUEUE_FULL)，可经现有重试入口重试；
-		// 云盘请求无论成败保持 cloud 投递标记（列表筛选"网盘"口径完整）
+		// 队列满竞态：目标行标记 failed(QUEUE_FULL)，可再次补存或经现有
+		// 重试入口重试；云盘请求无论成败保持 cloud 投递标记。
 		s.log.Warn("云盘补存入队失败（队列已满）",
 			"request_id", createdID, "parent_request_id", requestID)
 		out.QueueFull = true
@@ -141,9 +171,15 @@ func (s *Service) CloudBackfill(ctx context.Context, actor string, requestID int
 		}
 		return out, nil
 	}
-	s.log.Info("云盘补存已入队",
-		"request_id", createdID, "parent_request_id", requestID,
-		"user_id", req.UserID, "job_id", job.ID)
+	if resubmitted.ID != 0 {
+		s.log.Info("失败云盘补存请求已原地重新入队",
+			"request_id", createdID, "parent_request_id", requestID,
+			"user_id", req.UserID, "job_id", job.ID, "prior_error_code", resubmitted.ErrorCode)
+	} else {
+		s.log.Info("云盘补存已入队",
+			"request_id", createdID, "parent_request_id", requestID,
+			"user_id", req.UserID, "job_id", job.ID)
+	}
 	return out, nil
 }
 

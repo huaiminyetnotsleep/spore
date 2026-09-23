@@ -175,14 +175,15 @@ type Decision struct {
 //  1. 用户存在且 status == enabled（不存在引导 /start，pending 等待，禁用/归档已停用）；
 //     云盘提交（CloudDest 非空）追加用户级下载权限复核（EffectiveCloudDownload，
 //     显式允许/拒绝优先，默认 owner 允许、普通用户拒绝）；
-//  2. 去重窗口内无同用户同链接的成功记录（owner 同样适用）；
+//  2. 普通提交在去重窗口内无同用户同链接成功记录；云盘提交无同链接同目的地在途任务，
+//     并在其余校验通过后优先原地复用最近一次 failed 云盘行（owner 同样适用）；
 //  3. 距上次通过提交 >= submit_interval_sec（owner 跳过；同一 Bot 输入的批量续项跳过）；
 //  4. 运营时区当日用量 < daily_limit（owner 跳过）；
 //  5. 未完成请求数 < concurrent_limit（owner 跳过）；
 //  6. 内存队列未满（owner 同样受限的系统性保护）。
 //
-// 第 1–5 步检查与"扣减 usage_daily + 记录 users 使用时间 + 写 requests(queued)"
-// 在同一个数据库事务内完成；拒绝只更新 users.last_denied_*。
+// 第 1–5 步检查与"扣减 usage_daily + 记录 users 使用时间 + 新建或原地重置
+// requests(queued)"在同一个数据库事务内完成；拒绝只更新 users.last_denied_*。
 // 返回的 error 仅表示存储故障（调用方回复 STORE_UNAVAILABLE 文案），业务拒绝走 Decision。
 func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 	rt := s.loadRuntime(ctx)
@@ -190,6 +191,7 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 	day := now.In(rt.loc).Format(dayFormat)
 
 	var d Decision
+	var resubmitted store.Request
 	err := s.store.Tx(ctx, func(tx *store.Store) error {
 		u, err := tx.GetUser(ctx, in.UserID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -236,6 +238,19 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		if dup {
 			return s.deny(ctx, tx, u, now, apperr.CodeDuplicateLink, &d)
 		}
+		// 同链接同目的地没有在途任务时，优先复用最近一次 failed 云盘行。
+		// 查询只锁定候选；额度、并发与队列检查仍完整执行，全部通过后才在
+		// 同一事务内重置，保持“重新提交会扣额度”的既有语义。
+		if in.CloudDest != "" {
+			prior, err := tx.LatestCloudRequest(ctx, in.UserID, ChannelKey(in.Ref),
+				in.Ref.MessageID, in.CloudDest)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return err
+			}
+			if err == nil && prior.Status == store.RequestFailed {
+				resubmitted = prior
+			}
+		}
 
 		// 3–5 仅约束普通用户；owner 跳过但仍走状态、重复与队列满检查
 		if !u.IsOwner {
@@ -272,6 +287,25 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		if err := tx.TouchUserUsage(ctx, in.UserID, now.UnixMilli()); err != nil {
 			return err
 		}
+		// 云盘失败行命中时原地重置，不再新建重复 requests 行；本次仍是一次
+		// 扣额度的新提交，因此 attempt 清回 1，并刷新当前受理 bot。
+		if resubmitted.ID != 0 {
+			if err := tx.ResubmitCloudRequest(ctx, resubmitted.ID, now.UnixMilli(), in.BotID, in.BotUsername); err != nil {
+				return err
+			}
+			if err := tx.AppendAudit(ctx, store.AuditEntry{
+				Actor:      "bot",
+				Action:     "request.resubmit",
+				Target:     fmt.Sprintf("request:%d", resubmitted.ID),
+				BeforeJSON: mustJSON(map[string]any{"status": resubmitted.Status, "attempt": resubmitted.Attempt, "error_code": resubmitted.ErrorCode}),
+				AfterJSON:  mustJSON(map[string]any{"status": store.RequestQueued, "attempt": 1}),
+			}); err != nil {
+				return err
+			}
+			d = Decision{Allowed: true, RequestID: resubmitted.ID}
+			return nil
+		}
+
 		// 云盘提交（CloudDest 非空）与裸链接共用同一事务与扣减语义，仅落列
 		// 差异：delivery_mode 提前占位 cloud 并保存目的地名称（重试重新入队
 		// 时据此恢复任务路由），终态由 worker 按 cloud 路径覆盖。
@@ -344,6 +378,11 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		return Decision{Reason: apperr.CodeQueueFull, RequestID: d.RequestID}, nil
 	}
 	d.JobID = job.ID
+	if resubmitted.ID != 0 {
+		s.log.Info("失败云盘请求已原地重新入队",
+			"request_id", resubmitted.ID, "job_id", job.ID, "user_id", in.UserID,
+			"prior_error_code", resubmitted.ErrorCode, "cloud_destination", in.CloudDest)
+	}
 	return d, nil
 }
 

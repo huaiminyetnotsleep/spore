@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -392,6 +393,188 @@ func TestSubmitDedupWindowConfigurable(t *testing.T) {
 	}
 	if d, _ := svc.Submit(ctx, Submission{UserID: 1, ChatID: 1, Ref: pubRef(42)}); !d.Allowed {
 		t.Errorf("调小窗口后应通过，得到 %+v", d)
+	}
+}
+
+func TestSubmitCloudResubmitsLatestFailedRequest(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 4, clock.Now)
+	jobs := startWorkers(t, q)
+	ctx := context.Background()
+	if _, err := st.CreateUser(ctx, store.User{
+		ID: 1, Status: store.UserEnabled, DailyLimit: 10, ConcurrentLimit: 4,
+	}); err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+	if err := st.UpdateUserCloudDownload(ctx, 1, store.CloudDownloadAllow); err != nil {
+		t.Fatalf("授予云盘下载权限失败: %v", err)
+	}
+	failed, err := st.CreateRequest(ctx, store.Request{
+		UserID: 1, SourceKind: store.SourcePublic, ChannelKey: "example_channel", MessageID: 42,
+		Attempt: 3, DeliveryMode: store.DeliveryModeCloud, CloudDestination: "mega-1",
+		BotID: 11, BotUsername: "old_bot", RequestedAt: baseTime.Add(-time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("创建失败云盘请求失败: %v", err)
+	}
+	if err := st.FinishRequest(ctx, failed.ID, store.RequestResult{
+		Status: store.RequestFailed, ErrorCode: "CLOUD_NETWORK", ErrorDetail: "network failed",
+		DeliveryMode: store.DeliveryModeCloud,
+	}); err != nil {
+		t.Fatalf("落库失败终态失败: %v", err)
+	}
+
+	d := mustSubmit(t, svc, Submission{
+		UserID: 1, ChatID: 1, Ref: pubRef(42), StatusMsgID: 77,
+		CloudDest: "mega-1", BotID: 22, BotUsername: "new_bot",
+	})
+	if d.RequestID != failed.ID {
+		t.Fatalf("应复用失败请求 %d，得到新 ID %d", failed.ID, d.RequestID)
+	}
+	if got := countRequests(t, st, 1); got != 1 {
+		t.Fatalf("重新提交不应新增 requests 行，得到 %d", got)
+	}
+	job := waitJob(t, jobs)
+	if job.RequestID != failed.ID || job.CloudDest != "mega-1" || job.BotID != 22 || job.StatusMsgID != 77 {
+		t.Fatalf("复用行入队任务字段不符: %+v", job)
+	}
+
+	got, err := st.GetRequest(ctx, failed.ID)
+	if err != nil {
+		t.Fatalf("读取复用请求失败: %v", err)
+	}
+	if got.Status != store.RequestQueued || got.Attempt != 1 || got.QueuedAt != baseTime.UnixMilli() {
+		t.Errorf("请求应原地重置为 queued/attempt=1: %+v", got)
+	}
+	if got.ErrorCode != "" || got.ErrorDetail != "" || got.FinishedAt != 0 || got.DurationMs != 0 {
+		t.Errorf("上一轮错误与终态时间应清空: %+v", got)
+	}
+	if got.BotID != 22 || got.BotUsername != "new_bot" {
+		t.Errorf("应刷新受理 bot: %+v", got)
+	}
+	if got.RequestedAt != failed.RequestedAt || got.CloudDestination != "mega-1" {
+		t.Errorf("原请求身份与目的地应保留: %+v", got)
+	}
+	day := baseTime.In(defaultLoc).Format(dayFormat)
+	usage, _ := st.GetUsage(ctx, 1, day)
+	if usage.Used != 1 {
+		t.Errorf("重新提交仍应扣减一次额度，得到 %d", usage.Used)
+	}
+	audits, err := st.ListAudit(ctx, 10, 0)
+	if err != nil || len(audits) == 0 {
+		t.Fatalf("读取重新提交审计失败: %+v err=%v", audits, err)
+	}
+	if audits[0].Action != "request.resubmit" || audits[0].Actor != "bot" || audits[0].Target != fmt.Sprintf("request:%d", failed.ID) {
+		t.Errorf("重新提交审计不符: %+v", audits[0])
+	}
+}
+
+func TestSubmitCloudResubmitKeepsOwnershipBoundaries(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 8, clock.Now)
+	jobs := startWorkers(t, q)
+	ctx := context.Background()
+	for _, id := range []int64{1, 2} {
+		if _, err := st.CreateUser(ctx, store.User{ID: id, Status: store.UserEnabled, IsOwner: true}); err != nil {
+			t.Fatalf("创建用户 %d 失败: %v", id, err)
+		}
+		if err := st.UpdateUserCloudDownload(ctx, id, store.CloudDownloadAllow); err != nil {
+			t.Fatalf("授予用户 %d 云盘下载权限失败: %v", id, err)
+		}
+	}
+	failed, err := st.CreateRequest(ctx, store.Request{
+		UserID: 1, ChannelKey: "example_channel", MessageID: 50,
+		DeliveryMode: store.DeliveryModeCloud, CloudDestination: "mega-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(ctx, failed.ID, store.RequestResult{Status: store.RequestFailed, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同用户但不同目的地：新建，不复用 mega-1 的失败行。
+	d1 := mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(50), CloudDest: "mega-2"})
+	waitJob(t, jobs)
+	if d1.RequestID == failed.ID {
+		t.Error("不同目的地不应复用失败行")
+	}
+	if err := st.FinishRequest(ctx, d1.RequestID, store.RequestResult{
+		Status: store.RequestFailed, DeliveryMode: store.DeliveryModeCloud,
+	}); err != nil {
+		t.Fatalf("收尾不同目的地请求失败: %v", err)
+	}
+	// 不同用户：即使链接与目的地相同也新建，保持请求归属隔离。
+	d2 := mustSubmit(t, svc, Submission{UserID: 2, ChatID: 2, Ref: pubRef(50), CloudDest: "mega-1"})
+	waitJob(t, jobs)
+	if d2.RequestID == failed.ID {
+		t.Error("不同用户不应复用失败行")
+	}
+	// 裸链接提交不进入云盘失败行复用分支。
+	clock.Advance(15 * time.Second)
+	d3 := mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(50)})
+	waitJob(t, jobs)
+	if d3.RequestID == failed.ID {
+		t.Error("普通 TG 提交不应复用云盘失败行")
+	}
+}
+
+func TestSubmitCloudResubmitRequiresLatestTopLevelFailure(t *testing.T) {
+	clock := newClock(baseTime)
+	svc, st, q := newTestService(t, 8, clock.Now)
+	jobs := startWorkers(t, q)
+	ctx := context.Background()
+	if _, err := st.CreateUser(ctx, store.User{ID: 1, Status: store.UserEnabled, IsOwner: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateUserCloudDownload(ctx, 1, store.CloudDownloadAllow); err != nil {
+		t.Fatal(err)
+	}
+	oldFailed, err := st.CreateRequest(ctx, store.Request{
+		UserID: 1, ChannelKey: "example_channel", MessageID: 60,
+		DeliveryMode: store.DeliveryModeCloud, CloudDestination: "mega-1",
+		RequestedAt: baseTime.Add(-2 * time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(ctx, oldFailed.ID, store.RequestResult{Status: store.RequestFailed, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+	latestSuccess, err := st.CreateRequest(ctx, store.Request{
+		UserID: 1, ChannelKey: "example_channel", MessageID: 60,
+		DeliveryMode: store.DeliveryModeCloud, CloudDestination: "mega-1",
+		RequestedAt: baseTime.Add(-time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(ctx, latestSuccess.ID, store.RequestResult{Status: store.RequestSucceeded, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+	// 更新的失败补存子行也不能成为 Bot /download 的顶层复用候选。
+	child, err := st.CreateRequest(ctx, store.Request{
+		UserID: 1, ChannelKey: "example_channel", MessageID: 60,
+		DeliveryMode: store.DeliveryModeCloud, CloudDestination: "mega-1",
+		ParentRequestID: latestSuccess.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRequest(ctx, child.ID, store.RequestResult{Status: store.RequestFailed, DeliveryMode: store.DeliveryModeCloud}); err != nil {
+		t.Fatal(err)
+	}
+
+	d := mustSubmit(t, svc, Submission{UserID: 1, ChatID: 1, Ref: pubRef(60), CloudDest: "mega-1"})
+	waitJob(t, jobs)
+	if d.RequestID == oldFailed.ID || d.RequestID == child.ID {
+		t.Fatalf("最近顶层请求已成功时应新建行，不能复用历史失败：decision=%+v", d)
+	}
+	if got, _ := st.GetRequest(ctx, oldFailed.ID); got.Status != store.RequestFailed {
+		t.Errorf("历史失败行不应被改写: %+v", got)
+	}
+	if got, _ := st.GetRequest(ctx, child.ID); got.Status != store.RequestFailed {
+		t.Errorf("补存失败子行不应被 Bot 提交改写: %+v", got)
 	}
 }
 
@@ -1273,6 +1456,17 @@ func TestSubmitCloudDenialsSameAsBareLink(t *testing.T) {
 	}
 	if r.DeliveryMode != store.DeliveryModeCloud || r.CloudDestination != "mega-1" {
 		t.Fatalf("竞态收尾也应保持 cloud 标记与目的地: %+v", r)
+	}
+
+	// 同一链接再次提交：复用刚才的 failed 行；即使再次遭遇入队竞态，仍不新增行。
+	clock.Advance(15 * time.Second)
+	d3, err := raceSvc.Submit(ctx, Submission{UserID: 1, ChatID: 1, Ref: pubRef(9), CloudDest: "mega-1"})
+	if err != nil || d3.Allowed || d3.Reason != apperr.CodeQueueFull {
+		t.Fatalf("复用行再次入队失败仍应返回 QUEUE_FULL: %+v err=%v", d3, err)
+	}
+	if d3.RequestID != d2.RequestID || countRequests(t, raceSt, 1) != 1 {
+		t.Fatalf("队列竞态后的重提交应复用同行：first=%d second=%d rows=%d",
+			d2.RequestID, d3.RequestID, countRequests(t, raceSt, 1))
 	}
 }
 
