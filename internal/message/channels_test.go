@@ -13,8 +13,8 @@ func TestChannelFooterHTML(t *testing.T) {
 		{Label: "我的私有频道", URL: "https://t.me/c/1234567890/1"},
 	}
 	got := channelFooterHTML(links)
-	want := "\n\n📢 <b>频道</b>：\n<a href=\"https://t.me/pub\">@pub</a>\n" +
-		`<a href="https://t.me/c/1234567890/1">我的私有频道</a>`
+	want := "\n\n<blockquote>📢 <b>频道</b>：\n<a href=\"https://t.me/pub\">@pub</a>\n" +
+		`<a href="https://t.me/c/1234567890/1">我的私有频道</a></blockquote>`
 	if got != want {
 		t.Fatalf("脚注 HTML 不符:\nwant: %q\ngot:  %q", want, got)
 	}
@@ -112,9 +112,9 @@ func TestCaptionLimitedWithFooter(t *testing.T) {
 		if u := newUnitMapper(c.Text).units; u > maxCaptionUnits {
 			t.Fatalf("Limited 总 unit 数超限: %d > %d", u, maxCaptionUnits)
 		}
-		// 原实体（0..5）仍在保留区间内应保留 + 脚注的 3 个实体
-		if len(c.Entities) != 4 {
-			t.Fatalf("应有原实体 1 个 + 脚注 3 个，得到 %d", len(c.Entities))
+		// 原实体（0..5）仍在保留区间内应保留 + 脚注的 4 个实体
+		if len(c.Entities) != 5 {
+			t.Fatalf("应有原实体 1 个 + 脚注 4 个（含引用块），得到 %d", len(c.Entities))
 		}
 		if bold, ok := c.Entities[0].(*tg.MessageEntityBold); !ok || bold.Offset != 0 || bold.Length != 5 {
 			t.Fatalf("原实体应保留: %#v", c.Entities[0])

@@ -87,13 +87,16 @@ func TestProcessPinTaskPartialResultText(t *testing.T) {
 			confirm = text
 		}
 	}
-	// 置顶目标（带跳转链接、逐行）+ 失败目标 + 原消息来源卡片缺一不可
-	if confirm == "" ||
-		!strings.Contains(confirm, "已置顶到：") ||
+	// 原消息来源卡片开头，置顶目标（带跳转链接、逐行）与失败目标随后
+	cardPos := strings.Index(confirm, `<blockquote><b>🔗 原消息</b>`)
+	pinPos := strings.Index(confirm, "已置顶到：")
+	if confirm == "" || cardPos != 0 || pinPos < 0 ||
 		!strings.Contains(confirm, `<a href="https://t.me/mychan">我的频道</a>`) ||
-		!strings.Contains(confirm, "置顶失败：\n我的群组") ||
-		!strings.Contains(confirm, `<blockquote><b>🔗 原消息</b>`+"\n"+`<a href="https://t.me/example/7">`) {
-		t.Fatalf("确认文案应含置顶明细与原消息来源卡片，得到 %q", sender.texts())
+		!strings.Contains(confirm, "置顶失败：\n<blockquote>我的群组") {
+		t.Fatalf("确认文案应以原消息来源卡片开头并含置顶明细，得到 %q", sender.texts())
+	}
+	if cardPos > pinPos {
+		t.Fatalf("原消息卡片应在置顶结果之前: %q", confirm)
 	}
 }
 

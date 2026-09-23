@@ -321,7 +321,7 @@ func TestCloudJobSkipAlreadyUploaded(t *testing.T) {
 		"已上传到网盘 <b>mega-1</b>",
 		dir,
 		"该链接此前已上传，本次未重复下载",
-		"<blockquote><b>🔗 原消息</b>\n<a href=\"https://t.me/example/7\">https://t.me/example/7</a></blockquote>",
+		"<b>🔗 原消息</b>\n<a href=\"https://t.me/example/7\">https://t.me/example/7</a>",
 		"🌐 网盘官网：<a href=\"https://mega.nz/\">https://mega.nz/</a>",
 	} {
 		if !strings.Contains(text, want) {

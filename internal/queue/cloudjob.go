@@ -431,31 +431,29 @@ func cloudDisplayPaths(plan cloudarchive.Plan) []string {
 	return out
 }
 
-// sendCloudConfirm 发送云盘成功确认文本：目的地加粗、远端路径列表以引用块
-// 分组（相册合并为一行目录）、原消息以来源卡片样式附后（与其他任务终态文案
-// 同款）、网盘官网行可点击（已知后端类型才有）；skipped 时附"未重复下载"
-// 说明。路径与链接中的用户内容经 HTML 转义后拼接；发送失败只记日志。
+// sendCloudConfirm 发送云盘成功确认文本：整条以引用块包裹——目的地加粗、
+// 远端路径逐行（相册合并为一行目录）、原消息标签加粗 + 可点击链接（引用块
+// 不支持嵌套，卡片标签直接落在块内）、网盘官网可点击（已知后端类型才有）；
+// skipped 时附"未重复下载"说明。路径与链接中的用户内容经 HTML 转义后拼接；
+// 发送失败只记日志。
 func sendCloudConfirm(ctx context.Context, d Deps, j Job, paths []string, skipped bool) {
 	if len(paths) == 0 {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("☁️ 已上传到网盘 <b>")
+	b.WriteString("<blockquote>☁️ 已上传到网盘 <b>")
 	b.WriteString(html.EscapeString(j.CloudDest))
-	b.WriteString("</b>：\n<blockquote>")
-	for i, p := range paths {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
+	b.WriteString("</b>：")
+	for _, p := range paths {
+		b.WriteByte('\n')
 		b.WriteString(html.EscapeString(p))
 	}
-	b.WriteString("</blockquote>")
 	if skipped {
 		b.WriteString("\n\n该链接此前已上传，本次未重复下载。")
 	}
 	if link, ok := j.Ref.URL(); ok {
-		b.WriteString("\n\n")
-		b.WriteString(sourceLinkCardHTML(sourceLinkAnchorHTML(link)))
+		b.WriteString("\n\n<b>🔗 原消息</b>\n")
+		b.WriteString(sourceLinkAnchorHTML(link))
 	}
 	if site := cloudProviderSite(d, j); site != "" {
 		b.WriteString("\n\n🌐 网盘官网：<a href=\"")
@@ -464,6 +462,7 @@ func sendCloudConfirm(ctx context.Context, d Deps, j Job, paths []string, skippe
 		b.WriteString(html.EscapeString(site))
 		b.WriteString("</a>")
 	}
+	b.WriteString("</blockquote>")
 	if _, err := d.senderFor(j).SendMessage(ctx, j.ChatID, b.String()); err != nil {
 		d.Log.Warn("云盘确认文本发送失败", "job_id", j.ID, "error", err.Error())
 		d.ErrLog.Record(ctx, warnErrorLog(j, store.ErrorSourceBotAPI, "finalize",

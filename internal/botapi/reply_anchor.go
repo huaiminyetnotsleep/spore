@@ -171,13 +171,13 @@ func pinExistingResultText(o queue.PinOutcome) string {
 	}
 	var b strings.Builder
 	if len(pinned) > 0 {
-		fmt.Fprintf(&b, "📌 已置顶到：\n%s", strings.Join(pinned, "\n"))
+		fmt.Fprintf(&b, "📌 已置顶到：\n<blockquote>%s</blockquote>", strings.Join(pinned, "\n"))
 	}
 	if len(failed) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "置顶失败：\n%s", strings.Join(failed, "\n"))
+		fmt.Fprintf(&b, "置顶失败：\n<blockquote>%s</blockquote>", strings.Join(failed, "\n"))
 	}
 	return b.String()
 }

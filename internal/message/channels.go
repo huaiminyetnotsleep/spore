@@ -46,11 +46,12 @@ func channelFooterText(links []ChannelLink) string {
 	return sb.String()
 }
 
-// channelFooterHTML 渲染脚注为 Bot API HTML：标签加粗、每个频道一个
-// 可点击链接独占一行（Label 与 URL 均转义，防止频道标题/用户名注入 HTML）。
+// channelFooterHTML 渲染脚注为 Bot API HTML：整段引用块包裹，标签加粗、
+// 每个频道一个可点击链接独占一行（Label 与 URL 均转义，防止频道标题/
+// 用户名注入 HTML）。与原消息来源卡片同款引用块视觉。
 func channelFooterHTML(links []ChannelLink) string {
 	var sb strings.Builder
-	sb.WriteString("\n\n📢 <b>频道</b>：")
+	sb.WriteString("\n\n<blockquote>📢 <b>频道</b>：")
 	for _, l := range links {
 		sb.WriteString(footerSeparator)
 		sb.WriteString(`<a href="`)
@@ -59,12 +60,14 @@ func channelFooterHTML(links []ChannelLink) string {
 		sb.WriteString(html.EscapeString(l.Label))
 		sb.WriteString("</a>")
 	}
+	sb.WriteString("</blockquote>")
 	return sb.String()
 }
 
-// channelFooterEntities 构建脚注对应的 MTProto 实体：加粗的"📢 频道"标签 +
-// 每个频道一个 TextURL 实体（Label 为展示文本）。baseUnits 是脚注文本在
-// 最终消息中的起始 UTF-16 unit 偏移（即正文前缀的 unit 数）。
+// channelFooterEntities 构建脚注对应的 MTProto 实体：整段脚注的引用块 +
+// 加粗的"📢 频道"标签 + 每个频道一个 TextURL 实体（Label 为展示文本）。
+// baseUnits 是脚注文本在最终消息中的起始 UTF-16 unit 偏移（即正文前缀的
+// unit 数）；引用块跳过前导 "\n\n" 分隔空行，从标签行起包裹。
 func channelFooterEntities(links []ChannelLink, baseUnits int) []tg.MessageEntityClass {
 
 	// 标签"📢 频道"的 unit 区间：跳过前导 "\n\n"（2 个 unit）；
@@ -87,6 +90,11 @@ func channelFooterEntities(links []ChannelLink, baseUnits int) []tg.MessageEntit
 		})
 		cursor += labelUnits
 	}
+	// 引用块覆盖除前导空行外的整段脚注；追加在末尾不影响既有实体定位
+	entities = append(entities, &tg.MessageEntityBlockquote{
+		Offset: baseUnits + labelStart,
+		Length: newUnitMapper(channelFooterText(links)).units - labelStart,
+	})
 	return entities
 }
 

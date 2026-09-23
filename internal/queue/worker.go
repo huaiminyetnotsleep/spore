@@ -506,13 +506,19 @@ func (d Deps) finishPin(ctx context.Context, j Job, outcome PinOutcome) {
 }
 
 // pinResultText 渲染置顶结果确认文案（HTML：目标名逐行列出，频道/群组名
-// 可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。目标名带
-// 跳转链接（与脚注同源），多个目标逐行展示；原消息以来源卡片样式附在末尾。
-// Skipped（绑定属于其他受理 bot）单独成组提示，不计入失败。
+// 可能含 HTML 特殊字符，一律转义；与 failureNoticeHTML 同风格）。原消息以
+// 来源卡片样式开头，置顶结果各组随后（频道列表以引用块包裹，目标名带跳转
+// 链接，与脚注同源）。Skipped（绑定属于其他受理 bot）单独成组提示，不计入
+// 失败。
 func pinResultText(sourceURL string, o PinOutcome) string {
+	var b strings.Builder
+	if sourceURL != "" {
+		b.WriteString(sourceLinkCardHTML(sourceLinkAnchorHTML(sourceURL)))
+		b.WriteString("\n\n")
+	}
 	if o.Total == 0 && len(o.Skipped) == 0 {
-		return "任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。\n" +
-			sourceLinkCardHTML(sourceLinkAnchorHTML(sourceURL))
+		b.WriteString("任务已完成。您尚未绑定频道/群组，未执行置顶；先 /bind 绑定后对新任务生效。")
+		return b.String()
 	}
 	var pinned, failed, skipped []string
 	for _, t := range o.Targets {
@@ -526,32 +532,26 @@ func pinResultText(sourceURL string, o PinOutcome) string {
 	for _, s := range o.Skipped {
 		skipped = append(skipped, pinTargetHTML(s))
 	}
-	var b strings.Builder
 	if len(pinned) > 0 {
-		fmt.Fprintf(&b, "📌 已置顶到：\n%s", strings.Join(pinned, "\n"))
+		fmt.Fprintf(&b, "📌 已置顶到：\n<blockquote>%s</blockquote>", strings.Join(pinned, "\n"))
 	}
 	if len(failed) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "📌 置顶失败：\n%s", strings.Join(failed, "\n"))
+		fmt.Fprintf(&b, "📌 置顶失败：\n<blockquote>%s</blockquote>", strings.Join(failed, "\n"))
 	}
 	if len(skipped) > 0 {
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		if o.Total == 0 {
-			fmt.Fprintf(&b, "任务已完成，未执行置顶：本任务的受理机器人名下暂无绑定，以下绑定属于其他机器人（用对应机器人发链接即可投递）：\n%s",
+			fmt.Fprintf(&b, "任务已完成，未执行置顶：本任务的受理机器人名下暂无绑定，以下绑定属于其他机器人（用对应机器人发链接即可投递）：\n<blockquote>%s</blockquote>",
 				strings.Join(skipped, "\n"))
 		} else {
-			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：\n%s", len(skipped), strings.Join(skipped, "\n"))
+			fmt.Fprintf(&b, "另有 %d 个绑定属于其他机器人，本次未投递：\n<blockquote>%s</blockquote>",
+				len(skipped), strings.Join(skipped, "\n"))
 		}
-	}
-	if sourceURL != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(sourceLinkCardHTML(sourceLinkAnchorHTML(sourceURL)))
 	}
 	return b.String()
 }

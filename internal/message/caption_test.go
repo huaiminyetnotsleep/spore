@@ -191,7 +191,7 @@ func TestCaptionWithQuotedBody(t *testing.T) {
 		wantHTML := `<blockquote><b>🔗 原消息</b>` + "\n" +
 			`<a href="https://t.me/example_channel/42">https://t.me/example_channel/42</a></blockquote>` +
 			"\n\n<blockquote><b>hello</b></blockquote>" +
-			"\n\n📢 <b>频道</b>：\n<a href=\"https://t.me/chan\">@chan</a>"
+			"\n\n<blockquote>📢 <b>频道</b>：\n<a href=\"https://t.me/chan\">@chan</a></blockquote>"
 		if html := got.RenderHTML(); html != wantHTML {
 			t.Fatalf("HTML 不符\nwant: %s\ngot:  %s", wantHTML, html)
 		}
