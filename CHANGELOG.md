@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.34.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.34.1...v1.34.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* **bot:** 任务提示消息统一来源卡片样式并美化云盘确认 ([3da7147](https://github.com/huaiminyetnotsleep/spore/commit/3da71472f820095b1e1250555f831b151a399420))
+
 ## [1.34.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.34.0...v1.34.1) (2026-09-23)
 
 
