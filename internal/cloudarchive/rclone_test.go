@@ -166,6 +166,8 @@ func TestRcloneUploadClassifiesErrors(t *testing.T) {
 	}{
 		{"凭据错误", "Failed to create file system: user or password is incorrect", apperr.CodeCloudAuthFailed},
 		{"登录失败", "mega: login failed for user", apperr.CodeCloudAuthFailed},
+		// 真机采样：MEGA session 失效/账号被拒时的 critical 日志（2026-09-22 生产）
+		{"MEGA 登录被拒", `Failed to create file system for "mega-imnpc:p/2026-09-11/520/": couldn't login: Object (typically, node or user) not found`, apperr.CodeCloudAuthFailed},
 		{"配额满", "Storage quota exceeded (over quota)", apperr.CodeCloudQuota},
 		{"空间不足", "failed: not enough space", apperr.CodeCloudQuota},
 		{"网络超时", "dial tcp 1.2.3.4:443: i/o timeout", apperr.CodeCloudNetwork},
@@ -341,6 +343,20 @@ exit 0
 	err := sink2.Ping(context.Background(), testDest())
 	if ae := apperr.From(err); ae.Code != apperr.CodeCloudAuthFailed {
 		t.Fatalf("Ping 凭据错误应归类 CLOUD_AUTH_FAILED，得到 %v", err)
+	}
+
+	// 探测超时：归 CLOUD_NETWORK（日志 code 与用户文案一致），且保留
+	// cause 链（cloudTestFailureText 靠 errors.Is 判超时给网络文案）。
+	hangBin := fakeRclone(t, `sleep 5`)
+	sink3 := &RcloneSink{Bin: hangBin, Log: testLog()}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = sink3.Ping(ctx, testDest())
+	if ae := apperr.From(err); ae.Code != apperr.CodeCloudNetwork {
+		t.Fatalf("Ping 超时应归类 CLOUD_NETWORK，得到 %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Ping 超时应保留 DeadlineExceeded cause 链: %v", err)
 	}
 }
 

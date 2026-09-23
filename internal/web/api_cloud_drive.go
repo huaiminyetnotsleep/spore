@@ -28,9 +28,11 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
 
-// cloudPingTimeout 是连通性测试的单次时间窗（MEGA 管理类调用可能较慢；
-// 按需手动点击，不做自动化轮询——高频会触发封禁。
-const cloudPingTimeout = 30 * time.Second
+// cloudPingTimeout 是连通性测试的单次时间窗（按需手动点击，不做自动化
+// 轮询——高频会触发封禁）。MEGA 登录失败的单周期可达数十秒（go-mega
+// 内部退避重试），窗口过短会把确定性凭据错误吞成超时，管理台拿不到
+// 明确答案。
+const cloudPingTimeout = 60 * time.Second
 
 const cloudSecretMask = "********"
 

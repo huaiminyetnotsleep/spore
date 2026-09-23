@@ -257,7 +257,10 @@ func (s *RcloneSink) Ping(ctx context.Context, dest Destination) error {
 	cmd.Stderr = stderr
 	err = cmd.Run()
 	if ctx.Err() != nil {
-		return ctx.Err()
+		// 探测超时/取消统一归网络异常：裸 ctx 错误经 apperr.From 会回落
+		// INTERNAL_ERROR，管理端日志与用户文案（网盘网络异常）不一致。
+		// Wrap 保留 cause 链，cloudTestFailureText 的 errors.Is 判定不受影响。
+		return apperr.Wrap(apperr.CodeCloudNetwork, ctx.Err())
 	}
 	if err == nil {
 		return nil
@@ -528,8 +531,10 @@ func classifyRcloneError(dest Destination, runErr error, tail string) *apperr.Ap
 	switch {
 	case containsAny(text,
 		"user or password", "password is incorrect", "invalid password",
-		"login failed", "authentication", "unauthorized", "unauthorised",
+		"login failed", "couldn't login", "authentication", "unauthorized", "unauthorised",
 		"invalid_grant", "401", "forbidden", "403", "access denied"):
+		// "couldn't login" 是 rclone mega 后端登录被拒的统一包装措辞
+		//（如 session 失效/账号状态异常时 MEGA 返回 ENOENT），属凭据问题。
 		code = apperr.CodeCloudAuthFailed
 	case containsAny(text,
 		"quota", "storage full", "not enough space", "insufficient storage",
