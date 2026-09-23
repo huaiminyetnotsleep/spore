@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.33.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.32.1...v1.33.0) (2026-09-23)
+
+
+### Features
+
+* **bot:** /download 输入引导智能选择网盘目的地 ([2a55bbd](https://github.com/huaiminyetnotsleep/spore/commit/2a55bbd240574369c7774d57eb216a6decc6c248))
+* **bot:** 无参命令 ForceReply 输入引导与常驻命令键盘 ([f1e0257](https://github.com/huaiminyetnotsleep/spore/commit/f1e0257545b6447abf1d618e1f3e745ad4e30653))
+* **cloud:** 云盘下载目的地配置表格化与弹窗表单交互优化 ([aa1574c](https://github.com/huaiminyetnotsleep/spore/commit/aa1574c4235cc96b3c12c080b4588b131f8d5057))
+
 ## [1.32.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.32.0...v1.32.1) (2026-09-23)
 
 
