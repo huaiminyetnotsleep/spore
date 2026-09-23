@@ -32,6 +32,7 @@ import {
 import { fmtBytes, fmtTime } from "../../shared/format";
 import { useAdminAction } from "../shared/actions";
 import { FormActions } from "../shared/FormActions";
+import { PageAnchorNav, type PageAnchorItems } from "../shared/PageAnchorNav";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState } from "../shared/QueryStates";
 
@@ -93,6 +94,14 @@ const TRANSFER_FIELDS: Array<{
 const MEDIA_UNIT_OPTIONS = [
   { value: "MB", label: "MB" },
   { value: "GB", label: "GB" },
+];
+
+/** 左侧锚点目录：生效状态与受控重启两卡并排同高，合并为一个锚点指向其 grid 容器。 */
+const SETTINGS_ANCHOR_ITEMS: PageAnchorItems = [
+  { key: "settings-basics", href: "#settings-basics", title: "基础运营" },
+  { key: "settings-queue", href: "#settings-queue", title: "队列与媒体" },
+  { key: "settings-concurrency", href: "#settings-concurrency", title: "传输并发调试" },
+  { key: "settings-status", href: "#settings-status", title: "状态与重启" },
 ];
 
 export function SettingsPage() {
@@ -227,6 +236,11 @@ export function SettingsPage() {
         hasData={!!data}
         onRetry={() => void refetch()}
       >
+        <div className="page-anchor-layout">
+          <aside className="page-anchor-rail" aria-label="页面导航">
+            <PageAnchorNav items={SETTINGS_ANCHOR_ITEMS} />
+          </aside>
+          <div className="page-anchor-body">
         <Space direction="vertical" size="middle" className="field-width-full settings-page">
           {data && !data.queue_same ? (
             <Alert
@@ -267,6 +281,7 @@ export function SettingsPage() {
             onFinish={(values) => void save.run(values)}
           >
             <PageSection
+              id="settings-basics"
               title="基础运营"
               extra={<Tag color="green">保存后即时生效</Tag>}
             >
@@ -327,6 +342,7 @@ export function SettingsPage() {
             </PageSection>
 
             <PageSection
+              id="settings-queue"
               title="队列与媒体"
               extra={<Tag color="gold">重启后生效</Tag>}
             >
@@ -406,7 +422,7 @@ export function SettingsPage() {
               </div>
             </PageSection>
 
-            <PageSection title="传输并发调试">
+            <PageSection id="settings-concurrency" title="传输并发调试">
               <Text type="secondary" className="settings-note">
                 线程数将在下一任务（上传为下一次上传）生效；连接并发上限对新分片即时生效。调低连接并发上限不会取消在途请求；实际文件分片并发取线程数与连接数的较小值。设置为
                 1 可做单线程/单连接基线。
@@ -466,7 +482,7 @@ export function SettingsPage() {
             {/* 服务端 400/409 等受控文案统一经 useAdminAction 的 message.error 提示 */}
           </Form>
 
-          <div className="settings-status-grid">
+          <div id="settings-status" className="settings-status-grid">
             <PageSection title="生效状态">
               <Space direction="vertical" size="small" className="field-width-full">
                 <Text>
@@ -537,6 +553,8 @@ export function SettingsPage() {
             </PageSection>
           </div>
         </Space>
+          </div>
+        </div>
       </PageQueryState>
     </PageScaffold>
   );

@@ -274,6 +274,28 @@ body {
   min-width: 0;
 }
 
+/* 页面锚点目录：左侧 sticky 导航 + 右侧正文。
+   sticky 相对唯一滚动容器 .page-content 生效；min-width:0 保证窄内容不撑破横向溢出断言。 */
+.page-anchor-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-anchor-rail {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  width: 168px;
+}
+
+.page-anchor-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .responsive-action-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1263,6 +1285,15 @@ body {
   .app-header,
   .page-content {
     margin-inline-start: 0;
+  }
+
+  /* 锚点目录仅桌面宽屏保留；窄屏隐藏避免挤压正文 */
+  .page-anchor-rail {
+    display: none;
+  }
+
+  .page-anchor-layout {
+    display: block;
   }
 
   /* 总览与统计网格：双列 → 单列 */

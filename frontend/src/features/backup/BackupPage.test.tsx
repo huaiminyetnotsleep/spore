@@ -182,6 +182,24 @@ describe("数据备份页", () => {
     expect(screen.getByText("peers.json")).toBeInTheDocument();
   });
 
+  it("左侧锚点目录与三个区块 id 一一对应", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("link", { name: "备份与导出" })).toHaveAttribute(
+      "href",
+      "#backup-export",
+    );
+    expect(screen.getByRole("link", { name: "定时备份 R2" })).toHaveAttribute("href", "#backup-r2");
+    expect(screen.getByRole("link", { name: "数据恢复与导入" })).toHaveAttribute(
+      "href",
+      "#backup-restore",
+    );
+    // 锚点目标区块存在（PageSection 透传 id 到 Card 根节点）
+    expect(document.getElementById("backup-export")).toBeInTheDocument();
+    expect(document.getElementById("backup-r2")).toBeInTheDocument();
+    expect(document.getElementById("backup-restore")).toBeInTheDocument();
+  });
+
   it("导出数据库备份确认使用 default 意图（非 danger），确认后触发导出", async () => {
     exportBackupMock.mockResolvedValue(undefined);
     renderPage();

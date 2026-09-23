@@ -75,6 +75,7 @@ import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { DataTable } from "../shared/DataTable";
 import { FormActions } from "../shared/FormActions";
 import { FormModal } from "../shared/FormModal";
+import { PageAnchorNav, type PageAnchorItems } from "../shared/PageAnchorNav";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState } from "../shared/QueryStates";
 
@@ -95,6 +96,13 @@ const CONFIRM_CLOUD_DRIVE_ROLLBACK_TEXT =
 
 const CONFIRM_RESTART_TEXT =
   "确认立即重启 Spore 服务？服务将在数秒内平滑重启以重新加载会话与配置。";
+
+/** 左侧锚点目录：href 与三个 PageSection 的 id 一一对应。 */
+const BACKUP_ANCHOR_ITEMS: PageAnchorItems = [
+  { key: "backup-export", href: "#backup-export", title: "备份与导出" },
+  { key: "backup-r2", href: "#backup-r2", title: "定时备份 R2" },
+  { key: "backup-restore", href: "#backup-restore", title: "数据恢复与导入" },
+];
 
 interface ExportCloudBackupFormValues {
   password: string;
@@ -428,6 +436,11 @@ export function BackupPage() {
         hasData={!!data}
         onRetry={() => void refetch()}
       >
+        <div className="page-anchor-layout">
+          <aside className="page-anchor-rail" aria-label="页面导航">
+            <PageAnchorNav items={BACKUP_ANCHOR_ITEMS} />
+          </aside>
+          <div className="page-anchor-body">
         <Space direction="vertical" size="large" className="field-width-full">
           {needRestartNotice ? (
             <Alert
@@ -482,7 +495,7 @@ export function BackupPage() {
           ) : null}
 
           {/* ==================== 区域一：数据备份与导出 ==================== */}
-          <PageSection title="数据备份与导出">
+          <PageSection id="backup-export" title="数据备份与导出">
             <Space direction="vertical" size="middle" className="field-width-full">
               {/* 四张操作卡片：全量导出、所有 JSON、数据库、多级单项 JSON 导出 */}
               <Row gutter={[16, 16]}>
@@ -683,7 +696,7 @@ export function BackupPage() {
           </PageSection>
 
           {/* ==================== 区域二：定时备份与云端同步 ==================== */}
-          <PageSection title="定时备份与云端同步（Cloudflare R2）">
+          <PageSection id="backup-r2" title="定时备份与云端同步（Cloudflare R2）">
             <Space direction="vertical" size="middle" className="field-width-full">
               <Paragraph type="secondary" className="layout-margin-top-0 layout-margin-bottom-0">
                 按间隔自动生成数据库一致性快照写入 data/backups 并保留最近 N 份；开启 R2
@@ -804,7 +817,7 @@ export function BackupPage() {
           </PageSection>
 
           {/* ==================== 区域三：数据恢复与导入 ==================== */}
-          <PageSection title="数据恢复与导入">
+          <PageSection id="backup-restore" title="数据恢复与导入">
             <Tabs
               defaultActiveKey="json"
               type="card"
@@ -1192,6 +1205,8 @@ export function BackupPage() {
             />
           </PageSection>
         </Space>
+          </div>
+        </div>
       </PageQueryState>
 
       <FormModal<ExportCloudBackupFormValues>

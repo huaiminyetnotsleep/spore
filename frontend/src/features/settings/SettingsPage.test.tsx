@@ -129,6 +129,34 @@ describe("运行设置页", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
+  it("左侧锚点目录与四个区块 id 一一对应（生效状态与受控重启合并为一个锚点）", async () => {
+    fetchSettingsMock.mockResolvedValue(settingsView());
+    fetchBackupStatusMock.mockResolvedValue(backupView);
+
+    renderPage();
+
+    expect(await screen.findByRole("link", { name: "基础运营" })).toHaveAttribute(
+      "href",
+      "#settings-basics",
+    );
+    expect(screen.getByRole("link", { name: "队列与媒体" })).toHaveAttribute(
+      "href",
+      "#settings-queue",
+    );
+    expect(screen.getByRole("link", { name: "传输并发调试" })).toHaveAttribute(
+      "href",
+      "#settings-concurrency",
+    );
+    expect(screen.getByRole("link", { name: "状态与重启" })).toHaveAttribute(
+      "href",
+      "#settings-status",
+    );
+    expect(document.getElementById("settings-basics")).toBeInTheDocument();
+    expect(document.getElementById("settings-queue")).toBeInTheDocument();
+    expect(document.getElementById("settings-concurrency")).toBeInTheDocument();
+    expect(document.getElementById("settings-status")).toBeInTheDocument();
+  });
+
   it("回填服务端当前值（时区/队列容量）", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
     fetchBackupStatusMock.mockResolvedValue(backupView);
