@@ -46,8 +46,9 @@ func (s *Service) Retry(ctx context.Context, actor string, requestID int64) erro
 		if err := checkRetryable(ctx, tx, r); err != nil {
 			return err
 		}
-		// 队列满在事务内预检（与 Submit 第 6 步同款系统性保护）
-		if s.queue.Full() {
+		// 队列满在事务内预检（与 Submit 第 6 步同款系统性保护）；
+		// 按行上目的地检查对应优先级通道（云盘任务走低优先级通道）
+		if s.queue.FullFor(req.CloudDestination != "") {
 			return apperr.New(apperr.CodeQueueFull, "内存队列已满")
 		}
 		if err := tx.RetryRequest(ctx, requestID, now); err != nil {

@@ -31,10 +31,10 @@ const (
 	dayFormat           = "2006-01-02" // usage_daily.day 键格式（运营时区日期）
 )
 
-// Enqueuer 是服务对内存队列的最小依赖（饱和预检 + 入队）。
+// Enqueuer 是服务对内存队列的最小依赖（按优先级的饱和预检 + 入队）。
 // 以接口注入便于为"事务提交后入队失败（队列满竞态）"分支写确定性测试。
 type Enqueuer interface {
-	Full() bool
+	FullFor(cloud bool) bool
 	Enqueue(job queue.Job) error
 }
 
@@ -274,7 +274,8 @@ func (s *Service) Submit(ctx context.Context, in Submission) (Decision, error) {
 		}
 
 		// 6. 队列满：在事务内预检（非阻塞内存读），拒绝同样只记 last_denied_*
-		if s.queue.Full() {
+		// 按提交形态检查对应优先级通道（云盘任务走低优先级通道）
+		if s.queue.FullFor(in.CloudDest != "") {
 			return s.deny(ctx, tx, u, now, apperr.CodeQueueFull, &d)
 		}
 

@@ -12,15 +12,26 @@ func TestInputPrompterResolveAndConsume(t *testing.T) {
 	p.now = func() time.Time { return now }
 	p.register(101, "/pin", "pin usage", 7, 7)
 
+	// /pin 的链接输入进入模式选择阶段，pending 保留待按钮消费
 	got, outcome, entry := p.resolve("https://t.me/example/42", 101, 7)
-	if outcome != promptExecute || got != "/pin https://t.me/example/42" {
-		t.Fatalf("resolve = (%q, %v), want pin execution", got, outcome)
+	if outcome != promptPinMode || got != "https://t.me/example/42" {
+		t.Fatalf("resolve = (%q, %v), want pin mode selection", got, outcome)
 	}
 	if entry.promptMessageID != 101 {
 		t.Fatalf("entry = %+v, want prompt ID 101", entry)
 	}
-	if _, outcome, _ := p.resolve("https://t.me/example/42", 101, 7); outcome != promptPassthrough {
-		t.Fatalf("second reply outcome = %v, want passthrough", outcome)
+	if _, ok := p.get(101, 7); !ok {
+		t.Fatal("mode selection reply must keep pending")
+	}
+	if _, ok := p.beginPinMode(101, 7, "https://t.me/example/42"); !ok {
+		t.Fatal("begin pin mode failed")
+	}
+	selected, ok := p.selectPinMode(101, 7)
+	if !ok || selected.input != "https://t.me/example/42" {
+		t.Fatalf("selectPinMode = (%+v, %v)", selected, ok)
+	}
+	if _, ok := p.selectPinMode(101, 7); ok {
+		t.Fatal("pin mode selection must be one-shot")
 	}
 }
 
@@ -94,8 +105,8 @@ func TestInputPrompterUsageKeywordKeepsPending(t *testing.T) {
 	if _, ok := p.get(101, 7); !ok {
 		t.Fatal("usage reply must not consume pending prompt")
 	}
-	if _, outcome, _ := p.resolve("https://t.me/example/1", 101, 7); outcome != promptExecute {
-		t.Fatal("pending should still execute after usage reply")
+	if _, outcome, _ := p.resolve("https://t.me/example/1", 101, 7); outcome != promptPinMode {
+		t.Fatal("pending should enter pin mode selection after usage reply")
 	}
 }
 
@@ -203,13 +214,19 @@ func TestInputPrompterTakeForChatAutoCancelSemantics(t *testing.T) {
 		t.Fatalf("takeForChat = (%+v, %v), want /watch", entry, ok)
 	}
 
-	// 已执行（消费）或已取消的 pending 不可再被自动取消。
+	// 已消费（选择完成）的 pending 不可再被自动取消。
 	p.register(203, "/pin", "pin usage", 7, 7)
-	if _, outcome, _ := p.resolve("https://t.me/example/1", 203, 7); outcome != promptExecute {
-		t.Fatal("reply should consume pending")
+	if _, outcome, _ := p.resolve("https://t.me/example/1", 203, 7); outcome != promptPinMode {
+		t.Fatal("reply should enter pin mode selection")
+	}
+	if _, ok := p.beginPinMode(203, 7, "https://t.me/example/1"); !ok {
+		t.Fatal("begin pin mode failed")
+	}
+	if _, ok := p.selectPinMode(203, 7); !ok {
+		t.Fatal("pin mode selection should consume pending")
 	}
 	if _, ok := p.takeForChat(7, 7); ok {
-		t.Fatal("executed prompt must not be auto-cancelled")
+		t.Fatal("consumed prompt must not be auto-cancelled")
 	}
 
 	p.register(204, "/pin", "pin usage", 7, 7)

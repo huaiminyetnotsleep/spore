@@ -165,7 +165,7 @@ openssl rand -hex 32
 | --- | --- | --- |
 | `timezone` | `Asia/Shanghai` | 惰性读取；影响运营日分桶、额度重置与去重展示 |
 | `dedup_window_min` | 10（分钟） | 即时影响普通链接去重；云盘同目的地成功复用不受该窗口限制 |
-| `queue_capacity` | 64；合法 1–4096 | 重启生效（内存队列启动时构造） |
+| `queue_capacity` | 64；合法 1–4096 | 重启生效（内存队列启动时构造；高/低优先级通道各此容量） |
 | `worker_count` | 环境默认（通常 1）；数据库合法 1–16 | 重启生效 |
 | `max_file_size` / `stream_limit` / `temp_dir_max_size` | 回退环境默认（2000 MiB / 20 MiB / 5 GiB） | 重启生效；无效覆盖回退环境配置并产生事件 |
 | `channel_copy_enabled` | `true` | 每次任务成功副本投递前读取，即时生效；关闭后绑定关系保留 |

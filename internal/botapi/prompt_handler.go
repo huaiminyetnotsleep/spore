@@ -10,6 +10,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
+	"github.com/huaiminyetnotsleep/spore/internal/tmeurl"
 )
 
 const (
@@ -17,6 +18,7 @@ const (
 	promptUsageCallbackPrefix       = "pi:usage:"
 	promptDestinationCallbackPrefix = "pi:dest:"
 	promptPageCallbackPrefix        = "pi:page:"
+	promptPinModeCallbackPrefix     = "pi:pinmode:"
 	downloadDestinationPageSize     = 8
 	expiredDownloadSelectionText    = "本次目的地选择已失效，请重新发送 /download。"
 )
@@ -220,6 +222,51 @@ func handlePromptCallback(ctx context.Context, opt Options, snd delivery.Sender,
 	}
 
 	switch {
+	case strings.HasPrefix(callback.Data, promptPinModeCallbackPrefix):
+		promptID, mode, ok := parsePromptIndexedCallback(callback.Data, promptPinModeCallbackPrefix)
+		if !ok {
+			return
+		}
+		entry, ok := prompter.selectPinMode(promptID, callback.From.ID)
+		if !ok {
+			sendPromptCallbackNotice(ctx, opt, snd, callback, expiredPinModeText)
+			return
+		}
+		chatID := callbackChatID(callback, entry.chatID)
+		if callback.Message.Message != nil {
+			entry.controlMessageID = callback.Message.Message.ID
+		}
+		refs := tmeurl.ParseAll(entry.input)
+		if len(refs) == 0 {
+			// 选择阶段链接输入被外部改动的防御：正常流程入口已校验过
+			sendPromptCallbackNotice(ctx, opt, snd, callback, expiredPinModeText)
+			return
+		}
+		if mode == 0 {
+			finishPromptSubmission(ctx, opt, snd, chatID, entry,
+				"<blockquote>📌 已选择仅置顶，正在提交。</blockquote>")
+			handleUpdate(ctx, opt, snd, callback.From, chatID, "/pin "+entry.input, 0)
+			return
+		}
+		// 置顶+转存：权限与云盘运行时预检，失败降级为仅置顶
+		cs, ready := requireDownloadReady(ctx, opt, snd, callback.From.ID, chatID)
+		dest := ""
+		if ready {
+			dest = cs.DefaultDestination()
+			if dest == "" || !cs.DestinationEnabled(dest) {
+				sendText(ctx, opt, snd, chatID, cloudDestNotFoundText(cs.EnabledDestinations()))
+				dest = ""
+			}
+		}
+		if dest == "" {
+			finishPromptSubmission(ctx, opt, snd, chatID, entry,
+				"<blockquote>📌 云盘暂不可用，已按仅置顶提交。</blockquote>")
+			handleUpdate(ctx, opt, snd, callback.From, chatID, "/pin "+entry.input, 0)
+			return
+		}
+		finishPromptSubmission(ctx, opt, snd, chatID, entry,
+			"<blockquote>📌☁️ 已选择置顶+转存网盘（目的地 <b>"+dest+"</b>），正在提交。</blockquote>")
+		submitPinWithCloud(ctx, opt, snd, callback.From, chatID, refs, dest)
 	case strings.HasPrefix(callback.Data, promptDestinationCallbackPrefix):
 		promptID, index, ok := parsePromptIndexedCallback(callback.Data, promptDestinationCallbackPrefix)
 		if !ok {

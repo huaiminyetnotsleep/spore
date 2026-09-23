@@ -153,11 +153,11 @@ func TestRetryRejectBranches(t *testing.T) {
 	})
 
 	t.Run("队列满", func(t *testing.T) {
-		// 容量 1 且无 worker：提交路径留下的任务即占满，Full() 稳定为真
+		// 容量 1 且无 worker：提交路径留下的任务即占满，FullFor(false) 稳定为真
 		svc, st, q := newTestService(t, 1, newClock(baseTime).Now)
 		mustEnabledUser(t, st, 1)
 		r := newFailedRequest(t, svc, st, 7)
-		if !q.Full() {
+		if !q.FullFor(false) {
 			t.Fatal("前置失败：队列应已被提交路径的任务占满")
 		}
 		assertRetryCode(t, svc.Retry(context.Background(), "admin", r.ID), apperr.CodeQueueFull)
@@ -193,7 +193,7 @@ type halfFullQueue struct {
 	fail     bool
 }
 
-func (h *halfFullQueue) Full() bool { return false }
+func (h *halfFullQueue) FullFor(bool) bool { return false }
 func (h *halfFullQueue) Enqueue(job queue.Job) error {
 	if h.fail {
 		return queue.ErrBusy

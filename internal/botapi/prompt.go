@@ -16,6 +16,7 @@ const (
 	promptCancel
 	promptUsage
 	promptDownloadDestination
+	promptPinMode
 )
 
 type promptStage uint8
@@ -23,6 +24,7 @@ type promptStage uint8
 const (
 	promptAwaitInput promptStage = iota
 	promptAwaitDownloadDestination
+	promptAwaitPinMode
 )
 
 type pendingPrompt struct {
@@ -179,6 +181,11 @@ func (p *inputPrompter) resolve(text string, replyMessageID, userID int64) (stri
 			return link, promptDownloadDestination, clonePendingPrompt(entry)
 		}
 	}
+	// /pin 的 ForceReply 输入进入模式选择准备阶段（仅置顶 / 置顶+转存），
+	// pending 暂不消费；云盘功能不可用时由入口直接走原提交链，不进面板。
+	if entry.command == "/pin" {
+		return trimmed, promptPinMode, clonePendingPrompt(entry)
+	}
 
 	p.removeLocked(replyMessageID)
 	return entry.command + " " + trimmed, promptExecute, clonePendingPrompt(entry)
@@ -247,6 +254,48 @@ func (p *inputPrompter) selectDownloadDestination(messageID, userID int64, index
 	destination := entry.destinations[index]
 	p.removeLocked(messageID)
 	return clonePendingPrompt(entry), destination, true
+}
+
+// beginPinMode 进入 /pin 模式选择准备阶段：登记输入、刷新 TTL，pending
+// 保留待内联按钮消费（与 beginDownloadSelection 同构）。
+func (p *inputPrompter) beginPinMode(messageID, userID int64, input string) (pendingPrompt, bool) {
+	if p == nil || messageID == 0 {
+		return pendingPrompt{}, false
+	}
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.pending[messageID]
+	if !ok || now.After(entry.expiresAt) || entry.ownerID != userID || entry.command != "/pin" {
+		if ok && now.After(entry.expiresAt) {
+			p.removeLocked(messageID)
+		}
+		return pendingPrompt{}, false
+	}
+	entry.stage = promptAwaitPinMode
+	entry.input = strings.TrimSpace(input)
+	entry.expiresAt = now.Add(promptTTL)
+	p.pending[messageID] = entry
+	return clonePendingPrompt(entry), true
+}
+
+// selectPinMode 消费模式选择阶段的 pending。非该阶段或已过期返回 false。
+func (p *inputPrompter) selectPinMode(messageID, userID int64) (pendingPrompt, bool) {
+	if p == nil || messageID == 0 {
+		return pendingPrompt{}, false
+	}
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.pending[messageID]
+	if !ok || now.After(entry.expiresAt) || entry.ownerID != userID || entry.stage != promptAwaitPinMode {
+		if ok && now.After(entry.expiresAt) {
+			p.removeLocked(messageID)
+		}
+		return pendingPrompt{}, false
+	}
+	p.removeLocked(messageID)
+	return clonePendingPrompt(entry), true
 }
 
 func (p *inputPrompter) consume(messageID, userID int64) (pendingPrompt, bool) {

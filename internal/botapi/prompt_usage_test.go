@@ -16,8 +16,9 @@ func TestInputPrompterUsageLookupKeepsPending(t *testing.T) {
 	if !ok || entry.usage != "pin usage" {
 		t.Fatalf("usage lookup = (%+v, %v), want pending pin usage", entry, ok)
 	}
-	if _, outcome, _ := p.resolve("https://t.me/example/1", 101, 7); outcome != promptExecute {
-		t.Fatal("usage lookup should not consume pending prompt")
+	// /pin 的链接输入进入模式选择阶段（仅置顶 / 置顶+转存），pending 保留
+	if _, outcome, _ := p.resolve("https://t.me/example/1", 101, 7); outcome != promptPinMode {
+		t.Fatal("pin link input should enter pin mode selection without consuming pending")
 	}
 }
 

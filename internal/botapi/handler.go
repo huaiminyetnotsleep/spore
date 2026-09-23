@@ -180,6 +180,9 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 		case promptDownloadDestination:
 			handleDownloadPromptInput(ctx, localOpt, snd, prompter, *from, msg.Chat.ID, entry, resolved)
 			return
+		case promptPinMode:
+			handlePinPromptInput(ctx, localOpt, snd, prompter, *from, msg.Chat.ID, entry, resolved)
+			return
 		case promptExecute:
 			text = resolved
 		default:
@@ -462,13 +465,14 @@ func batchSubmitSummary(succeeded int, failures []submitFailure) string {
 }
 
 func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from models.User, chatID int64,
-	refs []tmeurl.SourceRef, prompt, cloudDest string, pin bool) {
+	refs []tmeurl.SourceRef, prompt, cloudDest string, pin, continuation bool) {
 	multi := len(refs) > 1
 	succeeded := 0
 	failures := make([]submitFailure, 0)
 	for i, ref := range refs {
 		// access 内部仍会权威检查；此处快速路径避免为已饱和队列发送占位。
-		if opt.Queue.Full() {
+		// 按提交形态检查对应优先级通道（云盘任务走低优先级通道）。
+		if opt.Queue.FullFor(cloudDest != "") {
 			failures = append(failures, submitFailure{ref: ref, code: apperr.CodeQueueFull})
 			if !multi {
 				sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeQueueFull))
@@ -493,7 +497,7 @@ func submitRefs(ctx context.Context, opt Options, snd delivery.Sender, from mode
 			Username:          from.Username,
 			DisplayName:       displayNameOf(from),
 			ProfileProvided:   true,
-			BatchContinuation: i > 0,
+			BatchContinuation: i > 0 || continuation,
 			CloudDest:         cloudDest,
 			BotID:             botInfo.ID,
 			BotUsername:       botInfo.Username,
@@ -545,7 +549,7 @@ func handleLinkWithProfile(ctx context.Context, opt Options, snd delivery.Sender
 	if rejectTooManyLinks(ctx, opt, snd, chatID, refs) {
 		return
 	}
-	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", false)
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", false, false)
 }
 
 const cancelUsage = "用法：/cancel 消息链接（即当初提交的那条链接）\n\n" +
@@ -715,12 +719,13 @@ func handleDownload(ctx context.Context, opt Options, snd delivery.Sender, from 
 	}
 
 	// 4–5. 每条链接独立创建云盘占位并经同一六步链提交到相同目的地。
-	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest, false)
+	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest, false, false)
 }
 
 // pinUsage 是 /pin 的参数提示：说明命令形式与置顶落点、前提。
 const pinUsage = "用法：/pin 消息链接（可一次多条）\n\n" +
 	"• 提交转发任务，完成后自动同步到您绑定的频道/群组并置顶\n" +
+	"• 回复 /pin 提示粘贴链接时，可选择「置顶+转存网盘」一并上传到默认目的地\n" +
 	"• 置顶落在任务完工时的绑定目标上，未绑定时不置顶（/bind 绑定）\n" +
 	"• 需要机器人在目标拥有置顶权限（频道「编辑消息」/群组「置顶消息」）\n" +
 	"• 也可以回复机器人发出的任务消息发送 /pin：在途任务补标记，已完成任务事后补置顶"
@@ -760,11 +765,23 @@ func handlePin(ctx context.Context, opt Options, snd delivery.Sender, from model
 			noBindingHint = true
 		}
 	}
-	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", true)
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", true, false)
 	if noBindingHint {
 		sendText(ctx, opt, snd, chatID,
 			"提示：您尚未绑定频道/群组，本任务不会置顶；/bind 绑定后对新任务生效。")
 	}
+}
+
+// submitPinWithCloud 配对提交「置顶+转存」：同一条（或同一批）链接先提交
+// 高优先级 TG 任务（置顶标记），再提交低优先级云盘任务（默认目的地）。
+// 两路独立 Submit、独立占位提示与失败反馈，某一路被拒（额度/队列满/去重）
+// 不影响另一路；云盘路豁免提交间隔（同一动作的延续提交，与批量多链接同款
+// 豁免）。队列优先级保证 TG 投递先于云盘执行，云盘任务只在无高优先级任务
+// 排队时启动。
+func submitPinWithCloud(ctx context.Context, opt Options, snd delivery.Sender, from models.User,
+	chatID int64, refs []tmeurl.SourceRef, dest string) {
+	submitRefs(ctx, opt, snd, from, chatID, refs, statusPrompt, "", true, false)
+	submitRefs(ctx, opt, snd, from, chatID, refs, cloudStatusPrompt, dest, false, true)
 }
 
 // handleWhoami 经 MTProto 查询自身账号并回显，用于验证用户通道；调试命令，不在帮助文本列出。

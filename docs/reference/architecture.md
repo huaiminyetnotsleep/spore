@@ -94,7 +94,7 @@ spore/
 │   ├── message/                 # 源消息标准化、媒体类型判定、Entity→HTML、caption
 │   ├── media/                   # 媒体下载句柄（流式 io.Pipe / 内存管道 / 临时文件）与清理
 │   ├── delivery/                # 发送路由：Bot API 上传 / Bot 号 MTProto 大文件直传 / 相册
-│   ├── queue/                   # 内存 Job 队列 + worker：普通投递、缓存复用、云盘任务
+│   ├── queue/                   # 双通道优先级 Job 队列 + worker：普通投递、缓存复用、云盘任务（云盘低优先）
 │   ├── dumpcache/               # 缓存频道干净副本写入与复制（转存频道复用）
 │   ├── watch/                   # 监听源（/watch）生命周期：申请/审批/上限/移除
 │   ├── listener/                # 监听源消息接收：相册聚合 → 缓存频道预热（双路径）
@@ -740,7 +740,7 @@ ready(ctx, api)
 | 内存管道下载协程 | 每个内存管道媒体一个（StreamLimit–InMemoryLimit 区间），下载结束即退出 | `downloader.Parallel` 多线程乱序写入 `reorderBuffer`，上传侧顺序阻塞读（边下边发）；消费方放弃经 Cleanup 终止 |
 | 相册并发打开协程 | 每个相册成员一个（errgroup，并发上限 2），打开完成或整组失败即退出 | 并发执行 `openWithRefresh`（含 file reference 刷新重试），句柄按索引落位 |
 
-- 队列是 `chan Job`（容量经设置项 `queue_capacity` 配置，缺省 64，重启生效）：`Enqueue` 非阻塞，满即拒（access 六步校验链末步检查，直接回繁忙）。
+- 队列是双通道优先级队列（`internal/queue/queue.go`：hi/lo 两个 `chan Job`，容量各按设置项 `queue_capacity` 配置，缺省 64，重启生效）：`Enqueue` 非阻塞按任务形态路由——云盘任务（`CloudDest` 非空，即 /download 与配对提交的转存路）入低优先级通道，其余任务（TG 投递、/pin、缓存补写）入高优先级通道；各自通道满即拒（access 六步校验链末步按提交形态检查对应通道，直接回繁忙）。worker 出队严格先排空高优先级通道（锁内先 hi 后 lo + 入队信号唤醒），保证高优先级任务排队期间云盘任务不启动——避免云盘大任务占用临时目录预算（`TEMP_DIR_MAX_SIZE` 预检直接拒绝）导致 TG 任务连带失败。不做运行中任务抢占：云盘任务开始后跑完为止；`WORKER_COUNT=1`（默认）下任务永不并发，多 worker 部署时建议 ≥2 并接受云盘与 TG 并发的临时目录预检兜底。缓存补写任务不降级的理由：副本越早写入缓存频道，后续同链接 TG 请求越早命中零下载复用，降级反而推迟缓存变热。
 - botapi 的全部发送/删除都经 `opt.Sender`，统一享受 delivery 的错误分类与 429 重试。
 
 ### 11.5 一次用户请求的执行顺序
@@ -755,7 +755,7 @@ update 到达
  ├─ 4. /start → HandleStart()；/help → helpText；/status、/health → 脱敏运行状态快照；/usage → 用量查询；/whoami → Whoami() 查询 MTProto 账号
  └─ 5. 其余文本 → handleLink：
        ├─ tmeurl.Parse 失败 → INVALID_URL 文案
-       ├─ Queue.Full() → busy 文案（占位提示都省了）
+       ├─ Queue.FullFor(按提交形态) → busy 文案（占位提示都省了）
        ├─ SendMessage("正在获取消息...") → 记 StatusMsgID（发送失败仅告警）
        ├─ NewJob + Enqueue；入队失败 → busy 文案 + 删除占位提示
        └─ 记日志：任务已入队

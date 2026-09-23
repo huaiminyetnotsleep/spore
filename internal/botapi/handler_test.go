@@ -861,10 +861,13 @@ func TestHandleDownloadLinkParsing(t *testing.T) {
 }
 
 // 队列饱和快速路径：直接回繁忙，不触达 access、不发占位提示。
+// 云盘提交检查低优先级通道：普通任务占用高优先级通道不影响云盘入队。
 func TestHandleDownloadQueueFullPreflight(t *testing.T) {
 	opt, fa, fs := newHarness(t, 1)
 	opt.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
-	if err := opt.Queue.Enqueue(queue.NewJob(9, 9, tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "x", MessageID: 1}, 0, 0)); err != nil {
+	cloudJob := queue.NewJob(9, 9, tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "x", MessageID: 1}, 0, 0)
+	cloudJob.CloudDest = "mega-1"
+	if err := opt.Queue.Enqueue(cloudJob); err != nil {
 		t.Fatalf("占位失败: %v", err)
 	}
 	run(opt, fs, "/download https://t.me/example_channel/1")
@@ -874,6 +877,16 @@ func TestHandleDownloadQueueFullPreflight(t *testing.T) {
 	}
 	if n := len(fa.submitted()); n != 0 {
 		t.Errorf("饱和快速路径不应触达 access: %d", n)
+	}
+	// 普通任务占满高优先级通道时，云盘提交走低优先级通道不受阻
+	opt2, fa2, fs2 := newHarness(t, 1)
+	opt2.CloudStatus = fakeCloudStatus{enabled: true, avail: true, def: "mega-1", dests: []string{"mega-1"}}
+	if err := opt2.Queue.Enqueue(queue.NewJob(9, 9, tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "x", MessageID: 1}, 0, 0)); err != nil {
+		t.Fatalf("占位失败: %v", err)
+	}
+	run(opt2, fs2, "/download https://t.me/example_channel/1")
+	if n := len(fa2.submitted()); n != 1 {
+		t.Errorf("高优先级通道满不应阻塞云盘提交: %d", n)
 	}
 }
 

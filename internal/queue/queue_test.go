@@ -589,7 +589,7 @@ func TestEnqueueFull(t *testing.T) {
 	if err := q.Enqueue(NewJob(1, 1, tmeurl.SourceRef{}, 0, 0)); err != nil {
 		t.Fatalf("首个任务应入队成功: %v", err)
 	}
-	if !q.Full() {
+	if !q.FullFor(false) {
 		t.Error("容量 1 的队列应报告已满")
 	}
 	if err := q.Enqueue(NewJob(2, 2, tmeurl.SourceRef{}, 0, 0)); !errors.Is(err, ErrBusy) {
@@ -663,5 +663,163 @@ func TestNewJobRequestAssociation(t *testing.T) {
 	}
 	if _, err := strconv.ParseInt(j.ID, 10, 64); err != nil {
 		t.Errorf("任务 ID 应保持纯数字纳秒时间戳格式（media 孤儿清理依赖）: %q", j.ID)
+	}
+}
+
+// ---- 优先级队列：云盘任务低优先，hi 非空不取 lo ----
+
+// newCloudJob 构造一个云盘任务（唯一入低优先级通道的形态）。
+func newCloudJob(userID, chatID int64, requestID int64) Job {
+	j := NewJob(userID, chatID, tmeurl.SourceRef{Kind: tmeurl.PeerUsername, Username: "example", MessageID: 1}, 0, requestID)
+	j.CloudDest = "mega"
+	return j
+}
+
+func TestEnqueueRoutesByPriority(t *testing.T) {
+	q := New(1)
+	// 两形态各占一通道：普通任务占 hi、云盘任务占 lo，互不挤占
+	if err := q.Enqueue(NewJob(1, 1, tmeurl.SourceRef{}, 0, 0)); err != nil {
+		t.Fatalf("普通任务应入高优先级通道: %v", err)
+	}
+	if err := q.Enqueue(newCloudJob(1, 1, 0)); err != nil {
+		t.Fatalf("云盘任务应入低优先级通道: %v", err)
+	}
+	if q.FullFor(true) != true {
+		t.Error("低优先级通道应报告已满")
+	}
+	if q.FullFor(false) != true {
+		t.Error("高优先级通道也应报告已满（各占一通道）")
+	}
+	if q.Len() != 2 {
+		t.Errorf("Len 应汇总双通道，得到 %d", q.Len())
+	}
+	// 各通道再入第二个任务：分别撞各自通道的容量上限
+	if err := q.Enqueue(newCloudJob(1, 1, 0)); !errors.Is(err, ErrBusy) {
+		t.Errorf("低优先级通道满应返回 ErrBusy，得到 %v", err)
+	}
+	if err := q.Enqueue(NewJob(2, 2, tmeurl.SourceRef{}, 0, 0)); !errors.Is(err, ErrBusy) {
+		t.Errorf("高优先级通道满应返回 ErrBusy，得到 %v", err)
+	}
+}
+
+func TestPriorityHiBeforeLo(t *testing.T) {
+	q := New(8)
+	// 交错入队：云盘、普通、云盘、普通
+	want := []string{"lo", "hi", "lo", "hi"}
+	var gotOrder []string
+	for _, kind := range want {
+		if kind == "lo" {
+			if err := q.Enqueue(newCloudJob(1, 1, 0)); err != nil {
+				t.Fatalf("入队失败: %v", err)
+			}
+			continue
+		}
+		if err := q.Enqueue(NewJob(1, 1, tmeurl.SourceRef{}, 0, 0)); err != nil {
+			t.Fatalf("入队失败: %v", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	process := func(_ context.Context, j Job) {
+		mu.Lock()
+		defer mu.Unlock()
+		if j.CloudDest != "" {
+			gotOrder = append(gotOrder, "lo")
+		} else {
+			gotOrder = append(gotOrder, "hi")
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		q.Run(ctx, 1, process, func(context.Context, Job) {})
+		close(done)
+	}()
+	for {
+		mu.Lock()
+		done_ := len(gotOrder) == 4
+		mu.Unlock()
+		if done_ {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("任务未处理完 Run 就退出了")
+		case <-time.After(time.Second):
+		}
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(gotOrder, []string{"hi", "hi", "lo", "lo"}) {
+		t.Errorf("应先排空高优先级通道再取低优先级，得到 %v", gotOrder)
+	}
+}
+
+func TestAcquireWakesOnBothChannels(t *testing.T) {
+	q := New(4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	acquired := make(chan Job, 1)
+	go func() {
+		job, ok := q.acquire(ctx)
+		if ok {
+			acquired <- job
+		}
+	}()
+	// 双通道皆空时阻塞；先到 lo（此刻 hi 空，取 lo 合法），随后到 hi
+	time.Sleep(50 * time.Millisecond)
+	if err := q.Enqueue(newCloudJob(1, 1, 0)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	select {
+	case job := <-acquired:
+		if job.CloudDest == "" {
+			t.Error("先入队的 lo 任务应先被取到")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquire 应被 lo 入队唤醒")
+	}
+	// 第二次 acquire 取 hi 任务
+	go func() {
+		job, ok := q.acquire(ctx)
+		if ok {
+			acquired <- job
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := q.Enqueue(NewJob(1, 1, tmeurl.SourceRef{}, 0, 0)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	select {
+	case job := <-acquired:
+		if job.CloudDest != "" {
+			t.Error("后入队的 hi 任务应被取到")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquire 应被 hi 入队唤醒")
+	}
+}
+
+func TestCancelPendingLowPriorityJob(t *testing.T) {
+	q := New(4)
+	var pendingJobs []Job
+	q.SetPendingCancelHandler(func(j Job) { pendingJobs = append(pendingJobs, j) })
+	if err := q.Enqueue(newCloudJob(1, 1, 42)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	if q.CancelRequest(42) {
+		t.Error("排队任务未出队，应走 pending 回调而非活动取消")
+	}
+	if len(pendingJobs) != 1 || pendingJobs[0].RequestID != 42 {
+		t.Fatalf("取消应命中排队中的低优先级任务: %+v", pendingJobs)
+	}
+	// 命中即从索引移除：重复取消落空
+	if q.CancelRequest(42) {
+		t.Error("已移除的 pending 任务不应再次命中")
+	}
+	if len(pendingJobs) != 1 {
+		t.Error("重复取消不应再次触发回调")
 	}
 }
