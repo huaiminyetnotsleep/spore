@@ -8,12 +8,12 @@
  * 失败只在区块内展示错误与重试，不拖垮状态一览与服务信息。
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { App, Button, Card, Descriptions, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Descriptions, Drawer, Space, Tag, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { fetchOverview, fetchVersionCheck, type OverviewBot } from "../../api/admin";
+import { fetchOverview, fetchTempDir, fetchVersionCheck, type OverviewBot } from "../../api/admin";
 import {
   MTPROTO_STATE_LABELS,
   botAPIStateText,
@@ -25,6 +25,7 @@ import { PageScaffold, PageSection } from "../shared/PageLayout";
 import { PageQueryState } from "../shared/QueryStates";
 
 const SystemMetricsSection = lazy(() => import("./SystemMetricsSection").then((module) => ({ default: module.SystemMetricsSection })));
+const TempDirSection = lazy(() => import("./TempDirSection").then((module) => ({ default: module.TempDirSection })));
 const { Text } = Typography;
 
 /** 状态卡色调：绿=正常，橙=需要注意，红=异常。 */
@@ -116,9 +117,14 @@ function StatusTile({
 }
 
 export function OverviewPage() {
+  const [tempDirOpen, setTempDirOpen] = useState(false);
   const { data, isPending, isError, refetch } = useQuery({
     queryKey: ["overview"],
     queryFn: () => fetchOverview(),
+  });
+  const tempDirQuery = useQuery({
+    queryKey: ["temp-dir"],
+    queryFn: fetchTempDir,
   });
   const { message } = App.useApp();
   // 检查更新：进入页面自动查询一次（服务端有 1h 缓存窗口，频度无虞）；
@@ -139,6 +145,11 @@ export function OverviewPage() {
   });
 
   const health = data?.health;
+  const tempDirCountLabel = tempDirQuery.data
+    ? `${tempDirQuery.data.file_count} 个文件`
+    : tempDirQuery.isError
+      ? "文件数不可用"
+      : "正在统计文件数…";
   const backlog = (data?.requests.queued_rows ?? 0) + (data?.requests.processing_rows ?? 0);
   const todoCount = (data?.join.pending ?? 0) + (data?.users.pending ?? 0);
 
@@ -261,8 +272,22 @@ export function OverviewPage() {
                   <span className="source-link">{health.db_path}</span>
                 </Descriptions.Item>
                 <Descriptions.Item label="临时目录">
-                  {fmtBytes(health.temp_dir_bytes)}
-                  <Text type="secondary">（{health.temp_dir}）</Text>
+                  <Button
+                    type="link"
+                    className="service-info-temp-dir"
+                    aria-label={`打开临时目录管理，${tempDirCountLabel}`}
+                    aria-haspopup="dialog"
+                    aria-expanded={tempDirOpen}
+                    onClick={() => setTempDirOpen(true)}
+                  >
+                    <Space size={6} wrap>
+                      <span>
+                        {fmtBytes(health.temp_dir_bytes)}
+                        <Text type="secondary">（{health.temp_dir}）</Text>
+                      </span>
+                      <Tag color="blue">{tempDirCountLabel}</Tag>
+                    </Space>
+                  </Button>
                 </Descriptions.Item>
               </Descriptions>
             </PageSection>
@@ -293,6 +318,20 @@ export function OverviewPage() {
             <Suspense fallback={<PageSection loading />}>
               <SystemMetricsSection />
             </Suspense>
+            <Drawer
+              title="临时目录管理"
+              placement="right"
+              width="min(760px, 100vw)"
+              open={tempDirOpen}
+              onClose={() => setTempDirOpen(false)}
+              destroyOnHidden
+            >
+              {tempDirOpen ? (
+                <Suspense fallback={<PageSection loading />}>
+                  <TempDirSection embedded />
+                </Suspense>
+              ) : null}
+            </Drawer>
           </>
         ) : null}
       </PageQueryState>

@@ -823,3 +823,66 @@ func TestCancelPendingLowPriorityJob(t *testing.T) {
 		t.Error("重复取消不应再次触发回调")
 	}
 }
+
+func TestTryMaintenanceRejectsQueuedAndRunningJobs(t *testing.T) {
+	q := New(2)
+	if err := q.Enqueue(Job{ID: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	if release, ok := q.TryMaintenance(); ok {
+		release()
+		t.Fatal("maintenance must reject queued jobs")
+	}
+
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		q.Run(ctx, 1, func(context.Context, Job) {
+			close(started)
+			<-finish
+		}, func(context.Context, Job) {})
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start queued job")
+	}
+	if release, ok := q.TryMaintenance(); ok {
+		release()
+		t.Fatal("maintenance must reject running jobs")
+	}
+	close(finish)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop")
+	}
+}
+
+func TestTryMaintenanceBlocksEnqueueUntilReleased(t *testing.T) {
+	q := New(2)
+	release, ok := q.TryMaintenance()
+	if !ok {
+		t.Fatal("idle queue should allow maintenance")
+	}
+	result := make(chan error, 1)
+	go func() { result <- q.Enqueue(Job{ID: "after-maintenance"}) }()
+	select {
+	case err := <-result:
+		t.Fatalf("enqueue should wait while maintenance is held, got %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("enqueue after maintenance failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enqueue remained blocked after maintenance release")
+	}
+}

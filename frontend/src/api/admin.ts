@@ -199,6 +199,24 @@ export function fetchSystemMetrics(range: SystemMetricsRange): Promise<SystemMet
   return apiRequest<SystemMetricsResponse>(`/api/v1/system-metrics${toQuery({ range })}`);
 }
 
+// ---- 临时目录管理 ----
+
+export interface TempFile {
+  path: string;
+  size_bytes: number;
+  modified_at: number;
+}
+
+export interface TempDirView {
+  files: TempFile[];
+  file_count: number;
+  total_bytes: number;
+}
+
+export function fetchTempDir(): Promise<TempDirView> {
+  return apiRequest<TempDirView>("/api/v1/temp-dir");
+}
+
 // ---- 业务统计（时间范围）----
 
 /** 运营时区日期范围筛选（YYYY-MM-DD，与 since/until 查询参数一致）。 */

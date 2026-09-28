@@ -42,6 +42,12 @@ type QueueStats interface {
 	Cap() int
 }
 
+// QueueMaintenance prevents workers and new tasks from racing temporary-directory
+// maintenance; TryMaintenance succeeds only when no task is queued or running.
+type QueueMaintenance interface {
+	TryMaintenance() (release func(), ok bool)
+}
+
 // MTProtoRelogin 是扫码登录页对 MTProto 登录会话的最小依赖
 // （*mtproto.Session 实现；本包只接触状态快照，不依赖任何 gotd 类型）。
 type MTProtoRelogin interface {
@@ -266,6 +272,7 @@ type Server struct {
 	client           *http.Client
 	access           *access.Service
 	queue            QueueStats
+	queueMaintenance QueueMaintenance
 	mtp              MTProtoRelogin
 	botMTP           BotMTProtoStatus
 	botMTPs          BotMTProtoStatuses
@@ -329,43 +336,45 @@ func New(opt Options) (*Server, error) {
 	if version == "" {
 		version = Version
 	}
+	queueMaintenance, _ := opt.Queue.(QueueMaintenance)
 	return &Server{
-		st:           opt.Store,
-		cfg:          opt.Cfg,
-		log:          opt.Log,
-		now:          now,
-		limiter:      newLoginLimiter(),
-		states:       newOAuthStateStore(),
-		oauth:        endpoints,
-		client:       client,
-		access:       opt.Access,
-		queue:        opt.Queue,
-		mtp:          opt.MTProto,
-		botMTP:       opt.BotMTProto,
-		botMTPs:      opt.BotMTProtoList,
-		botIdentity:  opt.BotIdentity,
-		botList:      opt.BotList,
-		botRuntime:   opt.BotRuntimeControl,
-		profile:      opt.Profile,
-		restartFunc:  opt.RestartFunc,
-		nonceFunc:    randomToken,
-		hub:          opt.Hub,
-		notification: opt.Notification,
-		progress:     opt.Progress,
-		monitor:      opt.Monitor,
-		bindings:     opt.Bindings,
-		dumpCache:    opt.DumpCache,
-		channelJoin:  opt.ChannelJoin,
-		watch:        opt.Watch,
-		transfer:     opt.Transfer,
-		cloudCfg:     opt.CloudCfg,
-		cloudSink:    opt.CloudSink,
-		cloudPending: cloudPending,
-		errLog:       opt.ErrLog,
-		dbPath:       dbPath,
-		version:      version,
-		release:      opt.ReleaseCheck,
-		started:      now(),
+		st:               opt.Store,
+		cfg:              opt.Cfg,
+		log:              opt.Log,
+		now:              now,
+		limiter:          newLoginLimiter(),
+		states:           newOAuthStateStore(),
+		oauth:            endpoints,
+		client:           client,
+		access:           opt.Access,
+		queue:            opt.Queue,
+		queueMaintenance: queueMaintenance,
+		mtp:              opt.MTProto,
+		botMTP:           opt.BotMTProto,
+		botMTPs:          opt.BotMTProtoList,
+		botIdentity:      opt.BotIdentity,
+		botList:          opt.BotList,
+		botRuntime:       opt.BotRuntimeControl,
+		profile:          opt.Profile,
+		restartFunc:      opt.RestartFunc,
+		nonceFunc:        randomToken,
+		hub:              opt.Hub,
+		notification:     opt.Notification,
+		progress:         opt.Progress,
+		monitor:          opt.Monitor,
+		bindings:         opt.Bindings,
+		dumpCache:        opt.DumpCache,
+		channelJoin:      opt.ChannelJoin,
+		watch:            opt.Watch,
+		transfer:         opt.Transfer,
+		cloudCfg:         opt.CloudCfg,
+		cloudSink:        opt.CloudSink,
+		cloudPending:     cloudPending,
+		errLog:           opt.ErrLog,
+		dbPath:           dbPath,
+		version:          version,
+		release:          opt.ReleaseCheck,
+		started:          now(),
 	}, nil
 }
 
