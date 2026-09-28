@@ -113,6 +113,7 @@ interface ExportCloudBackupFormValues {
 interface ScheduleFormValues {
   interval_hours: number;
   keep_count: number;
+  local_enabled: boolean;
   enabled: boolean;
   account_id: string;
   access_key_id: string;
@@ -165,6 +166,7 @@ export function BackupPage() {
     scheduleForm.setFieldsValue({
       interval_hours: scheduleQuery.data.interval_hours,
       keep_count: scheduleQuery.data.keep_count,
+      local_enabled: scheduleQuery.data.local_enabled,
       enabled: r2.enabled,
       account_id: r2.account_id,
       access_key_id: r2.access_key_id,
@@ -178,6 +180,7 @@ export function BackupPage() {
       saveBackupSchedule({
         interval_hours: values.interval_hours,
         keep_count: values.keep_count,
+        local_enabled: values.local_enabled,
         r2: {
           enabled: values.enabled,
           account_id: values.account_id,
@@ -699,11 +702,10 @@ export function BackupPage() {
           <PageSection id="backup-r2" title="定时备份与云端同步（Cloudflare R2）">
             <Space direction="vertical" size="middle" className="field-width-full">
               <Paragraph type="secondary" className="layout-margin-top-0 layout-margin-bottom-0">
-                按间隔自动生成数据库一致性快照写入 data/backups 并保留最近 N 份；开启 R2
-                后，同一份快照会打成全量 ZIP（含 JSON 配置）直传 Cloudflare R2
-                异地保存，远端同样按份数轮转。间隔 0 为关闭。R2 凭据只存本机
-                data/r2-backup.json，不进数据库、不进任何备份件；上传失败会进入事件中心告警。
-                四项配置的获取步骤见部署文档《Cloudflare R2 备份指南》。
+                定时任务按间隔生成数据库一致性快照；可选择保留在本地、上传到 Cloudflare R2，或两者都启用。
+                关闭本地保留时，R2 上传仍会使用临时快照，流程结束后自动清理。间隔 0 会关闭整个定时任务。
+                本地与 R2 分别按保留份数轮转。R2 凭据只存本机 data/r2-backup.json，不进数据库或备份件；
+                上传失败会进入事件中心告警。四项配置的获取步骤见部署文档《Cloudflare R2 备份指南》。
               </Paragraph>
 
               {scheduleQuery.data?.r2.last_upload_error ? (
@@ -711,7 +713,7 @@ export function BackupPage() {
                   type="warning"
                   showIcon
                   message={`最近一次 R2 上传未成功：${scheduleQuery.data.r2.last_upload_error}`}
-                  description={`最近上传尝试：${fmtTime(scheduleQuery.data.r2.last_upload_at)}。本地快照不受影响，下一轮定时备份会重试上传。`}
+                  description={`最近上传尝试：${fmtTime(scheduleQuery.data.r2.last_upload_at)}。当前${scheduleQuery.data.local_enabled ? "会保留本地快照" : "仅保留 R2 云端副本"}；下一轮定时备份会用新快照重试上传。`}
                 />
               ) : null}
 
@@ -736,16 +738,25 @@ export function BackupPage() {
                     name="keep_count"
                     label="保留份数（1–50）"
                     rules={[{ type: "integer", min: 1, max: 50, message: "保留份数必须为 1–50 的整数。" }]}
-                    extra="本地与 R2 各保留最近 N 份；缺省 8 份（默认间隔下约 48 小时窗口）。"
+                    extra="本地与 R2 分别按最近 N 份轮转；缺省 8 份。"
                   >
                     <InputNumber min={1} max={50} precision={0} className="field-width-160" />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="local_enabled"
+                    label="保留本地定时备份"
+                    valuePropName="checked"
+                    extra="关闭后不保留 data/backups 快照；R2 上传会使用临时快照并在流程结束后清理。仅关闭本地时需同时启用 R2。"
+                  >
+                    <Switch />
                   </Form.Item>
 
                   <Form.Item
                     name="enabled"
                     label="上传到 Cloudflare R2"
                     valuePropName="checked"
-                    extra="开启前需填齐右侧四项连接配置；关闭只停止上云，本地定时备份照常。"
+                    extra="开启前需填齐右侧四项连接配置；关闭后不上传云端，本地备份是否保留由上方开关决定。"
                   >
                     <Switch />
                   </Form.Item>

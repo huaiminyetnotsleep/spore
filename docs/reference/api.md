@@ -1469,13 +1469,14 @@ OAuth App 的申请步骤与部署配置见 [github-oauth.md](../guide/github-oa
 
 ### GET /api/v1/backup/r2
 
-定时备份整体状态（认证；备份页「定时备份与云端同步」卡片的读取口径）。间隔/份数沿用 settings 键（`backup_interval_hours` / `backup_keep_count`，编辑入口在本端点 POST；设置页不再展示这两个字段）。
+定时备份整体状态（认证；备份页「定时备份与云端同步」卡片的读取口径）。间隔、份数与本地保留开关沿用 settings 配置，编辑入口在本端点 POST。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `interval_hours` | int | 备份间隔小时（0 = 关闭；缺省 6） |
-| `keep_count` | int | 保留份数（缺省 8；本地与 R2 同步轮转） |
-| `last_backup_at` | int64 | 最近本地快照时间（0 = 从未；上传失败不影响该口径） |
+| `interval_hours` | int | 备份间隔小时（0 = 关闭整个定时任务；缺省 6） |
+| `keep_count` | int | 保留份数（缺省 8；分别作用于已启用的本地与 R2 目标） |
+| `local_enabled` | bool | 是否保留本地定时快照（缺省 `true`；关闭后仅在 R2 启用时生成临时快照并在流程结束后清理） |
+| `last_backup_at` | int64 | 最近成功生成快照时间（0 = 从未；上传失败不影响该口径） |
 | `r2.enabled` | bool | 是否启用 R2 上云 |
 | `r2.complete` | bool | 连接四要素是否齐备（开启的前提） |
 | `r2.account_id` | string | Cloudflare Account ID（32 位十六进制） |
@@ -1490,19 +1491,20 @@ OAuth App 的申请步骤与部署配置见 [github-oauth.md](../guide/github-oa
 
 ### POST /api/v1/backup/r2
 
-合并保存定时备份配置（认证 + CSRF）。字段缺省不变更；间隔/份数与 `POST /api/v1/settings` 同键同审计（`settings.backup_interval` / `settings.backup_keep`）。
+合并保存定时备份配置（认证 + CSRF）。字段缺省不变更；间隔/份数与 `POST /api/v1/settings` 同键同审计（`settings.backup_interval` / `settings.backup_keep`），本地保留开关使用 `settings.backup_local` 审计。
 
 | 请求字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `interval_hours` | int | 否 | 0–168（0 = 关闭）；即时生效 |
+| `interval_hours` | int | 否 | 0–168（0 = 关闭整个定时任务）；即时生效 |
 | `keep_count` | int | 否 | 1–50；即时生效 |
+| `local_enabled` | bool | 否 | 是否保留本地快照；缺省 `true`，即时生效 |
 | `r2.enabled` | bool | 否 | 开启前需四要素齐备，否则 `400` |
 | `r2.account_id` | string | 否 | 空串 = 不变更 |
 | `r2.access_key_id` | string | 否 | 空串或掩码 = 沿用已保存值 |
 | `r2.secret_access_key` | string | 否 | 空串或掩码 = 沿用已保存值 |
 | `r2.bucket` | string | 否 | 空串 = 不变更 |
 
-响应 `{"ok":true,"backup_schedule":{...同 GET 响应}}`。连接配置变更会清除旧的上传错误记录并写 `backup.r2_config` 审计（不含密钥）。错误：`400`（参数非法 / 开启但配置不完整）。
+保存后至少需满足 `interval_hours=0`（关闭任务），或本地保留与 R2 至少启用一个；仅关闭本地保留时必须启用且完整配置 R2。响应 `{"ok":true,"backup_schedule":{...同 GET 响应}}`。连接配置变更会清除旧的上传错误记录并写 `backup.r2_config` 审计（不含密钥）。错误：`400`（参数非法 / 开启但配置不完整 / 定时任务没有有效备份目标）。
 
 ### POST /api/v1/backup/r2/test
 

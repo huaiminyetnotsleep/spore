@@ -1,6 +1,5 @@
-// 自动备份配置：settings 表 backup_interval_hours / backup_keep_count 键的
-// 单一来源。键名、缺省值与校验只在本包定义，定时循环 / CLI / Web 共用
-// 同一实现。
+// 自动备份配置：settings 表中的定时备份键的单一来源。键名、缺省值与
+// 校验只在本包定义，定时循环 / CLI / Web 共用同一实现。
 package syscfg
 
 import (
@@ -29,7 +28,28 @@ const backupKeepCountUpper = 50
 const (
 	keyBackupIntervalHours = "backup_interval_hours"
 	keyBackupKeepCount     = "backup_keep_count"
+	keyBackupLocalEnabled  = "backup_local_enabled"
 )
+
+// LoadBackupLocalEnabled 读取是否保留定时生成的本地快照；未配置时默认开启，
+// 以保持升级前的定时备份行为。
+func LoadBackupLocalEnabled(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return true
+	}
+	if v, ok := loadBoolSetting(ctx, st, keyBackupLocalEnabled); ok {
+		return v
+	}
+	return true
+}
+
+// SetBackupLocalEnabled 保存是否保留定时生成的本地快照。
+func SetBackupLocalEnabled(ctx context.Context, st *store.Store, enabled bool) error {
+	if st == nil {
+		return errors.New("syscfg: Store 为必填项")
+	}
+	return setSettingJSON(ctx, st, keyBackupLocalEnabled, enabled)
+}
 
 // LoadBackupIntervalHours 读取自动备份间隔（小时）：0 = 关闭；键缺失或
 // 非法时回退缺省值。定时循环每 tick 重读，管理端修改即时生效。

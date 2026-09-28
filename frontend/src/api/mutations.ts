@@ -345,6 +345,7 @@ export interface BackupR2ConfigInput {
 export interface BackupScheduleSaveInput {
   interval_hours?: number;
   keep_count?: number;
+  local_enabled?: boolean;
   r2?: BackupR2ConfigInput;
 }
 

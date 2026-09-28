@@ -55,13 +55,13 @@ func Run(ctx context.Context, st *store.Store, dataDir, output string, keep int,
 	}
 	dbPath := filepath.Join(dataDir, branding.DatabaseFile)
 	backupDir := filepath.Join(dataDir, "backups")
-	if err := os.MkdirAll(backupDir, 0o700); err != nil {
-		return Result{}, apperr.Wrap(apperr.CodeInternal, fmt.Errorf("创建备份目录失败: %w", err))
-	}
 
 	dest := output
 	rotatable := false
 	if dest == "" {
+		if err := os.MkdirAll(backupDir, 0o700); err != nil {
+			return Result{}, apperr.Wrap(apperr.CodeInternal, fmt.Errorf("创建备份目录失败: %w", err))
+		}
 		// 秒级时间戳撞名（同一秒重试）时递增序号保证唯一——VACUUM INTO
 		// 要求目标文件不存在。
 		base := filepath.Join(backupDir, filePrefix+now.Format("20060102-150405"))
@@ -79,7 +79,7 @@ func Run(ctx context.Context, st *store.Store, dataDir, output string, keep int,
 		return Result{}, apperr.New(apperr.CodeInvalidURL, "备份目标文件已存在")
 	}
 
-	if err := checkDiskSpace(backupDir, dbPath); err != nil {
+	if err := checkDiskSpace(filepath.Dir(dest), dbPath); err != nil {
 		return Result{}, err
 	}
 

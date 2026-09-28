@@ -56,8 +56,9 @@ func TestAPIBackupR2GetMasksSecrets(t *testing.T) {
 		t.Fatalf("GET 状态码 %d", resp.StatusCode)
 	}
 	var view struct {
-		IntervalHours int `json:"interval_hours"`
-		KeepCount     int `json:"keep_count"`
+		IntervalHours int  `json:"interval_hours"`
+		KeepCount     int  `json:"keep_count"`
+		LocalEnabled  bool `json:"local_enabled"`
 		R2            struct {
 			Enabled         bool   `json:"enabled"`
 			Complete        bool   `json:"complete"`
@@ -71,8 +72,8 @@ func TestAPIBackupR2GetMasksSecrets(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
 		t.Fatal(err)
 	}
-	if view.IntervalHours != 3 || view.KeepCount != syscfg.DefaultBackupKeepCount {
-		t.Fatalf("间隔/份数口径不符: %+v", view)
+	if view.IntervalHours != 3 || view.KeepCount != syscfg.DefaultBackupKeepCount || !view.LocalEnabled {
+		t.Fatalf("间隔/份数/本地开关口径不符: %+v", view)
 	}
 	if !view.R2.Enabled || !view.R2.Complete {
 		t.Fatalf("R2 状态不符: %+v", view.R2)
@@ -127,12 +128,52 @@ func TestAPIBackupR2PostEnableIncompleteRejected(t *testing.T) {
 	j := e.login(t)
 	csrf := e.sessionCSRF(t, j)
 	body := r2PostBody(t, map[string]any{
-		"r2": map[string]any{"enabled": true, "account_id": "0123456789abcdef0123456789abcdef"},
+		"local_enabled": false,
+		"r2":            map[string]any{"enabled": true, "account_id": "0123456789abcdef0123456789abcdef"},
 	})
 	resp := e.apiPost(j, "/api/v1/backup/r2", csrf, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("开启且不完整应 400，got %d", resp.StatusCode)
+	}
+	if !syscfg.LoadBackupLocalEnabled(t.Context(), e.st) {
+		t.Fatal("R2 配置无效时，本地保留开关不应被提前关闭")
+	}
+}
+
+func TestAPIBackupR2PostLocalOnlyDisabledRequiresR2(t *testing.T) {
+	e := newTestEnv(t, nil)
+	e.srv.cfg.DataDir = t.TempDir()
+	j := e.login(t)
+	csrf := e.sessionCSRF(t, j)
+
+	resp := e.apiPost(j, "/api/v1/backup/r2", csrf,
+		r2PostBody(t, map[string]any{"local_enabled": false}))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("关闭本地保留但未启用 R2 应 400，got %d", resp.StatusCode)
+	}
+	if !syscfg.LoadBackupLocalEnabled(t.Context(), e.st) {
+		t.Fatal("校验失败时本地保留设置不应改变")
+	}
+}
+
+func TestAPIBackupR2PostR2OnlyMode(t *testing.T) {
+	e := newTestEnv(t, nil)
+	dataDir := t.TempDir()
+	e.srv.cfg.DataDir = dataDir
+	seedR2Config(t, dataDir, validR2Config())
+	j := e.login(t)
+	csrf := e.sessionCSRF(t, j)
+
+	resp := e.apiPost(j, "/api/v1/backup/r2", csrf,
+		r2PostBody(t, map[string]any{"local_enabled": false}))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("R2-only 配置保存应 200，got %d", resp.StatusCode)
+	}
+	if syscfg.LoadBackupLocalEnabled(t.Context(), e.st) {
+		t.Fatal("本地保留开关应关闭")
 	}
 }
 
