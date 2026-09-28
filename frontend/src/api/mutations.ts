@@ -21,6 +21,7 @@ import type {
   NotificationWebhookFormat,
   OAuthSettingsView,
   SettingsView,
+  TempDirView,
 } from "./admin";
 
 /** 写请求公共出口：JSON 体 + CSRF 请求头。 */
@@ -63,6 +64,16 @@ async function deleteJSON<T>(path: string, body?: unknown): Promise<T> {
 export interface WriteOK {
   ok: boolean;
 }
+
+export interface TempDirMutationResult extends WriteOK {
+  temp_dir: TempDirView;
+}
+
+export const clearTempDir = (): Promise<TempDirMutationResult> =>
+  postJSON<TempDirMutationResult>("/api/v1/temp-dir/clear");
+
+export const deleteTempFiles = (paths: string[]): Promise<TempDirMutationResult> =>
+  postJSON<TempDirMutationResult>("/api/v1/temp-dir/delete", { paths });
 
 // ---- 申请审批 ----
 

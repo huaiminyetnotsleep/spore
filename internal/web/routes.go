@@ -59,6 +59,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// /api/v1/overview 的时间范围请求指标与图表数据。
 	mux.Handle("GET /api/v1/stats", s.apiAuth(s.handleAPIStats))
 	mux.Handle("GET /api/v1/system-metrics", s.apiAuth(s.handleAPISystemMetrics))
+	mux.Handle("GET /api/v1/temp-dir", s.apiAuth(s.handleAPITempDirGet))
+	s.mountAPIWrite(mux, "/api/v1/temp-dir/clear", s.handleAPITempDirClear)
+	s.mountAPIWrite(mux, "/api/v1/temp-dir/delete", s.handleAPITempDirDelete)
 
 	// 只读页面迁移：列表/详情查询端点，
 	// 筛选与分页语义对齐对应 SSR 页面。

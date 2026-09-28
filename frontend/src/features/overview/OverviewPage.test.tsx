@@ -3,11 +3,11 @@
  * 渲染、机器人身份展示、进入页面自动检查更新（落后→升级提示/最新→绿色
  * 标签/失败→受控文案）、状态色调与待办跳转链接；旧版本后端响应缺少 join
  * 字段时回退零值不崩白。fetch 桩按 URL 路由应答——页面初始并发发起
- * overview / 版本检查 / 系统监控三个请求，到达顺序不定，不能按调用队列
+ * overview / 版本检查 / 系统监控 / 临时目录四个请求，到达顺序不定，不能按调用队列
  * 消费。业务统计图表仍由 /stats 承担。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App as AntApp } from "antd";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,10 +97,12 @@ function versionCheckResponse(overrides: Partial<VersionCheckResponse> = {}): Ve
 function overviewRoutes(
   payload: unknown = overviewResponse(),
   versionCheck: RouteSpec = { payload: versionCheckResponse({ status: "up_to_date", current_version: "dev" }) },
+  tempDir: RouteSpec = { payload: { files: [], file_count: 0, total_bytes: 0 } },
 ): Record<string, RouteSpec> {
   return {
     "/api/v1/overview": { payload },
     "/api/v1/system-metrics": { payload: METRICS_FIXTURE },
+    "/api/v1/temp-dir": tempDir,
     "/api/v1/version/check": versionCheck,
   };
 }
@@ -189,6 +191,31 @@ describe("总览页", () => {
     expect(screen.queryByText("频道加入")).not.toBeInTheDocument();
     expect(screen.queryByText("已加入频道")).not.toBeInTheDocument();
   }, 10_000);
+
+  it("从服务信息打开临时目录抽屉并显示文件数", async () => {
+    stubRoutes(
+      overviewRoutes(overviewResponse(), undefined, {
+        payload: {
+          files: [{ path: "nested/clip.mkv", size_bytes: 2048, modified_at: 1_700_000_000_000 }],
+          file_count: 4,
+          total_bytes: 4096,
+        },
+      }),
+    );
+
+    renderPage();
+
+    const entry = await screen.findByRole("button", { name: "打开临时目录管理，4 个文件" });
+    fireEvent.click(entry);
+
+    const drawer = await screen.findByRole("dialog", { name: "临时目录管理" });
+    expect(await within(drawer).findByText("nested/clip.mkv")).toBeInTheDocument();
+    expect(within(drawer).getByText(/共 4 个文件/)).toBeInTheDocument();
+    expect(drawer.querySelector(".page-section")).toBeNull();
+
+    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "临时目录管理" })).not.toBeInTheDocument());
+  });
 
   it("进入页面自动检查更新，版本旁展示上游最新版本（无需点击）", async () => {
     stubRoutes(overviewRoutes());

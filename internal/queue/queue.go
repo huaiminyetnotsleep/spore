@@ -57,6 +57,10 @@ type Queue struct {
 	hi chan Job
 	lo chan Job
 
+	maintenanceMu sync.RWMutex
+	runningMu     sync.Mutex
+	running       int
+
 	// takeMu 保证"hi 出队"与"lo 出队"互斥：acquire 在锁内先排空 hi 再取
 	// lo，Enqueue 的 hi 入队与 lo 出队因此不会交错出"hi 非空却取到 lo"
 	// 的时序（纯 select 多通道就绪时由 Go 随机选择分支，做不到严格优先）。
@@ -125,6 +129,8 @@ func (q *Queue) SetPendingCancelHandler(fn PendingCancelHandler) {
 // 通道，保证取消不会漏掉刚入队的任务；入队失败时回滚登记。成功后发入队
 // 信号唤醒阻塞中的 acquire（缓冲 1，合并连续信号）。
 func (q *Queue) Enqueue(j Job) error {
+	q.maintenanceMu.RLock()
+	defer q.maintenanceMu.RUnlock()
 	ch := q.route(j)
 	if j.RequestID != 0 {
 		q.activeMu.Lock()
@@ -169,6 +175,40 @@ func (q *Queue) Len() int { return len(q.hi) + len(q.lo) }
 
 // Cap 返回单通道容量（进程生命周期内固定；与容量配置语义一致）。
 func (q *Queue) Cap() int { return cap(q.hi) }
+
+// TryMaintenance 在没有排队或执行任务时独占队列维护窗口。返回的 release
+// 必须在维护操作结束后调用；窗口期间入队和 worker 出队都会等待。
+func (q *Queue) TryMaintenance() (release func(), ok bool) {
+	if !q.maintenanceMu.TryLock() {
+		return nil, false
+	}
+	q.runningMu.Lock()
+	busy := q.running > 0 || len(q.hi)+len(q.lo) > 0
+	q.runningMu.Unlock()
+	if busy {
+		q.maintenanceMu.Unlock()
+		return nil, false
+	}
+	return q.maintenanceMu.Unlock, true
+}
+
+func (q *Queue) takeForRun() (Job, bool) {
+	q.maintenanceMu.RLock()
+	job, ok := q.tryTake()
+	if ok {
+		q.runningMu.Lock()
+		q.running++
+		q.runningMu.Unlock()
+	}
+	q.maintenanceMu.RUnlock()
+	return job, ok
+}
+
+func (q *Queue) finishRun() {
+	q.runningMu.Lock()
+	q.running--
+	q.runningMu.Unlock()
+}
 
 // NewJob 以纳秒时间戳生成任务 ID 的便捷构造。
 // requestID 是 access.Submit 落库的 requests 行 ID，worker 据此回写阶段与终态。
@@ -278,8 +318,10 @@ func (q *Queue) Run(ctx context.Context, workers int, process, discard Processor
 					dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownWindow)
 					discard(dctx, job)
 					cancel()
+					q.finishRun()
 					continue
 				}
+
 				jobCtx, cancel := context.WithCancelCause(ctx)
 				if job.RequestID != 0 {
 					q.RegisterRequest(job.RequestID, cancel)
@@ -289,6 +331,8 @@ func (q *Queue) Run(ctx context.Context, workers int, process, discard Processor
 					q.UnregisterRequest(job.RequestID)
 				}
 				cancel(nil)
+				q.finishRun()
+
 			}
 		}()
 	}
@@ -311,7 +355,7 @@ func (q *Queue) Run(ctx context.Context, workers int, process, discard Processor
 // 阻塞等待入队信号再重查。
 func (q *Queue) acquire(ctx context.Context) (Job, bool) {
 	for {
-		if job, ok := q.tryTake(); ok {
+		if job, ok := q.takeForRun(); ok {
 			return job, true
 		}
 		select {

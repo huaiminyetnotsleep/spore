@@ -226,6 +226,20 @@
 
 错误：`400`（range 非法）、`503`（监控服务未接入）、`500/503`（存储类，经统一映射）；响应 `Cache-Control: no-store`。
 
+### GET /api/v1/temp-dir
+
+查询配置的 `TEMP_DIR` 内容（认证）。目录不存在时返回空文件列表；仅列出普通文件，不跟随符号链接。文件路径相对临时目录根路径，不返回宿主机绝对路径；响应禁止缓存。
+
+响应字段：`files` 为 `{path, size_bytes, modified_at}` 数组（相对路径、字节大小、修改时间 Unix 毫秒）；`file_count` 为文件数；`total_bytes` 为总字节数。
+
+### POST /api/v1/temp-dir/clear
+
+清空临时目录内所有内容并保留目录本身（认证 + 会话 CSRF）。队列有排队或正在执行的任务时返回 `409 CONFLICT`；执行成功返回 `{ok, temp_dir}`，其中 `temp_dir` 是清理后最新快照。清理不跟随符号链接。
+
+### POST /api/v1/temp-dir/delete
+
+删除指定的一个或多个普通文件（认证 + 会话 CSRF）。请求体为 `{"paths":["relative/path"]}`，每次最多 500 个相对路径。路径必须指向临时目录内现存普通文件；无效或过期路径返回 `400 BAD_REQUEST`。队列有排队或正在执行的任务时返回 `409 CONFLICT`。成功返回 `{ok, temp_dir}` 清理后的最新快照。
+
 ### GET /api/v1/stats
 
 业务统计页数据（认证）。查询参数：`since`/`until`（`YYYY-MM-DD`，可选；缺省运营时区近 7 天含当天）；`all=1`（可选；全量统计，忽略 `since`/`until`，`since_day`/`until_day` 回显空串）；`bot_id`（可选；多机器人池限定受理 bot，正整数）。
