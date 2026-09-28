@@ -52,6 +52,7 @@ function LocationProbe() {
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidateSpy = vi.spyOn(client, "invalidateQueries");
   render(
     <QueryClientProvider client={client}>
       <AntApp component={false}>
@@ -62,6 +63,7 @@ function renderPage() {
       </AntApp>
     </QueryClientProvider>,
   );
+  return invalidateSpy;
 }
 
 beforeEach(() => {
@@ -154,6 +156,20 @@ describe("事件中心页", () => {
     await waitFor(() => expect(resolveEventMock).toHaveBeenCalledWith(1));
     await waitFor(() => expect(resolveButtons[0]).toHaveClass("ant-btn-loading"));
     expect(resolveButtons[1]).not.toHaveClass("ant-btn-loading");
+  });
+
+  it("标记解决成功后立即失效通知红点缓存", async () => {
+    resolveEventMock.mockResolvedValue({ ok: true });
+    fetchEventsMock.mockResolvedValue(envelope([eventRow()]));
+    const invalidateSpy = renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /标记解决/ }));
+
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["notification", "badge"],
+      }),
+    );
   });
 
   it("已解决行不再提供标记解决入口", async () => {

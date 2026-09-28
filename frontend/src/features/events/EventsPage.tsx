@@ -85,7 +85,7 @@ export function EventsPage() {
       setBusyEventId(id);
       return resolveEvent(id);
     },
-    invalidate: [["events"], ["overview"]],
+    invalidate: [["events"], ["overview"], ["notification", "badge"]],
     successText: "已标记为已解决。",
   });
 
