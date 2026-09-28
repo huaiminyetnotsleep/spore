@@ -80,10 +80,9 @@ func TestRunOutputExactPath(t *testing.T) {
 	if _, err := Run(ctx, st, dir, out, 2, "cli", time.Now(), testLog()); err == nil {
 		t.Fatal("目标已存在应拒绝")
 	}
-	// 不参与轮转：默认目录为空
-	entries, _ := filepath.Glob(filepath.Join(dir, "backups", "spore-backup-*.db"))
-	if len(entries) != 0 {
-		t.Fatalf("指定路径不应在轮转目录产生文件: %v", entries)
+	// 不参与轮转，也不应创建本地备份目录
+	if _, err := os.Stat(filepath.Join(dir, "backups")); !os.IsNotExist(err) {
+		t.Fatalf("指定路径备份不应创建本地备份目录，stat err=%v", err)
 	}
 }
 

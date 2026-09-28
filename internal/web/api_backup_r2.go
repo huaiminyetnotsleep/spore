@@ -49,7 +49,8 @@ type apiBackupR2View struct {
 type apiBackupScheduleView struct {
 	IntervalHours int             `json:"interval_hours"` // 0 = 关闭
 	KeepCount     int             `json:"keep_count"`
-	LastBackupAt  int64           `json:"last_backup_at"` // 本地快照口径（上传失败不影响）
+	LocalEnabled  bool            `json:"local_enabled"`  // 是否保留本地快照
+	LastBackupAt  int64           `json:"last_backup_at"` // 最近成功生成快照时间
 	R2            apiBackupR2View `json:"r2"`
 }
 
@@ -83,6 +84,7 @@ func (s *Server) buildBackupScheduleView(ctx context.Context) (apiBackupSchedule
 	}
 	view.IntervalHours = syscfg.LoadBackupIntervalHours(ctx, s.st)
 	view.KeepCount = syscfg.LoadBackupKeepCount(ctx, s.st)
+	view.LocalEnabled = syscfg.LoadBackupLocalEnabled(ctx, s.st)
 	view.LastBackupAt = s.lastBackupAt(ctx)
 	view.R2 = r2View(cfg)
 	return view, nil
@@ -108,8 +110,9 @@ func (s *Server) handleAPIBackupR2Post(w http.ResponseWriter, r *http.Request, _
 	const op = "api.backup.r2.save"
 	ctx := r.Context()
 	var in struct {
-		IntervalHours *int `json:"interval_hours"`
-		KeepCount     *int `json:"keep_count"`
+		IntervalHours *int  `json:"interval_hours"`
+		KeepCount     *int  `json:"keep_count"`
+		LocalEnabled  *bool `json:"local_enabled"`
 		R2            *struct {
 			Enabled         bool   `json:"enabled"`
 			AccountID       string `json:"account_id"`
@@ -119,6 +122,29 @@ func (s *Server) handleAPIBackupR2Post(w http.ResponseWriter, r *http.Request, _
 		} `json:"r2"`
 	}
 	if !s.apiReadJSON(w, r, op, &in) {
+		return
+	}
+
+	currentR2, err := r2backup.Load(s.cfg.DataDir)
+	if err != nil {
+		s.log.Error("读取 R2 备份配置失败", "op", op, "error", err.Error())
+		s.writeAPIAppErr(w, r, op, apperr.Wrap(apperr.CodeStoreUnavailable, err))
+		return
+	}
+	nextInterval := syscfg.LoadBackupIntervalHours(ctx, s.st)
+	if in.IntervalHours != nil {
+		nextInterval = *in.IntervalHours
+	}
+	nextLocalEnabled := syscfg.LoadBackupLocalEnabled(ctx, s.st)
+	if in.LocalEnabled != nil {
+		nextLocalEnabled = *in.LocalEnabled
+	}
+	nextR2Enabled := currentR2.Enabled
+	if in.R2 != nil {
+		nextR2Enabled = in.R2.Enabled
+	}
+	if nextInterval > 0 && !nextLocalEnabled && !nextR2Enabled {
+		s.apiBadRequest(w, r, op, "定时备份至少需要启用本地备份或 Cloudflare R2。")
 		return
 	}
 
@@ -155,7 +181,6 @@ func (s *Server) handleAPIBackupR2Post(w http.ResponseWriter, r *http.Request, _
 				"before": current, "after": n, "effect": "即时生效"})
 		}
 	}
-
 	if in.R2 != nil {
 		cur, err := r2backup.Load(s.cfg.DataDir)
 		if err != nil {
@@ -205,6 +230,17 @@ func (s *Server) handleAPIBackupR2Post(w http.ResponseWriter, r *http.Request, _
 			"changed":    credentialChanged,
 			"effect":     "即时生效",
 		})
+	}
+	if in.LocalEnabled != nil {
+		enabled := *in.LocalEnabled
+		if current := syscfg.LoadBackupLocalEnabled(ctx, s.st); enabled != current {
+			if err := syscfg.SetBackupLocalEnabled(ctx, s.st, enabled); err != nil {
+				s.writeAPIAppErr(w, r, op, apperr.Wrap(apperr.CodeInternal, err))
+				return
+			}
+			s.audit(ctx, "settings.backup_local", "settings", map[string]any{
+				"before": current, "after": enabled, "effect": "即时生效"})
+		}
 	}
 
 	view, err := s.buildBackupScheduleView(ctx)

@@ -923,9 +923,11 @@ export interface BackupR2ConfigView {
 export interface BackupScheduleView {
   /** 间隔小时（0 = 关闭；缺省 6）。 */
   interval_hours: number;
-  /** 保留份数（本地与 R2 同步轮转；缺省 8 ≈ 48 小时窗口）。 */
+  /** 保留份数（分别作用于已启用的备份目标；缺省 8）。 */
   keep_count: number;
-  /** 最近本地快照时间（Unix 毫秒，上传失败不影响该口径）。 */
+  /** 是否保留本地定时快照（缺省 true）。 */
+  local_enabled: boolean;
+  /** 最近生成快照时间（Unix 毫秒，上传失败不影响该口径）。 */
   last_backup_at: number;
   r2: BackupR2ConfigView;
 }

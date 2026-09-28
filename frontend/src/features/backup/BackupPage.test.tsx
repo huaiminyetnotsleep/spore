@@ -115,6 +115,7 @@ function scheduleView(overrides: Partial<BackupScheduleView> = {}): BackupSchedu
   return {
     interval_hours: 6,
     keep_count: 8,
+    local_enabled: true,
     last_backup_at: 1756598400000,
     r2: {
       enabled: true,
@@ -328,9 +329,10 @@ describe("数据备份页", () => {
     ).toBeInTheDocument();
     // 两个密钥字段都回填为掩码（沿用语义的视觉锚点）
     expect(await screen.findAllByDisplayValue("********")).toHaveLength(2);
-    // 开关回填为已开启
+    // 本地保留与 R2 上传开关均按服务端状态回填为已开启
     await waitFor(() => {
-      expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+      expect(screen.getAllByRole("switch")).toHaveLength(2);
+      expect(screen.getAllByRole("switch").every((toggle) => toggle.getAttribute("aria-checked") === "true")).toBe(true);
     });
     // 端点与最近上传状态行
     expect(await screen.findByText(/端点：.*r2\.cloudflarestorage\.com/)).toBeInTheDocument();
@@ -341,6 +343,7 @@ describe("数据备份页", () => {
     saveScheduleMock.mockResolvedValue({ ok: true, backup_schedule: scheduleView({}) });
     renderPage();
     await screen.findAllByDisplayValue("********");
+    fireEvent.click(screen.getAllByRole("switch")[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 
@@ -348,6 +351,7 @@ describe("数据备份页", () => {
     expect(saveScheduleMock).toHaveBeenCalledWith({
       interval_hours: 6,
       keep_count: 8,
+      local_enabled: false,
       r2: {
         enabled: true,
         account_id: "0123456789abcdef0123456789abcdef",
@@ -381,6 +385,6 @@ describe("数据备份页", () => {
     renderPage();
 
     expect(await screen.findByText(/最近一次 R2 上传未成功/)).toBeInTheDocument();
-    expect(screen.getByText(/本地快照不受影响/)).toBeInTheDocument();
+    expect(screen.getByText(/当前会保留本地快照/)).toBeInTheDocument();
   });
 });

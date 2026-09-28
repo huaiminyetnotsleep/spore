@@ -123,7 +123,7 @@ openssl rand -hex 32
    - `worker_count`（合法范围 1–16）；
    - `max_links_per_message`（合法范围 1–50；管理端「运行设置」修改后即时生效）；
    - `max_request_attempts`（合法范围 1–10，累计含首次；管理端「运行设置」修改后即时生效）；
-   - `backup_interval_hours` / `backup_keep_count`（自动备份间隔与保留份数；管理端备份页「定时备份与云端同步」修改后即时生效，定时循环每轮重读）；
+   - `backup_interval_hours` / `backup_keep_count` / `backup_local_enabled`（自动备份间隔、保留份数与本地保留开关；管理端备份页「定时备份与云端同步」修改后即时生效，定时循环每轮重读）；
    - 媒体三项 `max_file_size` / `stream_limit` / `temp_dir_max_size`：三项**整体校验**，任一非法则整套回退环境配置并产生 `media.config_invalid` 事件；
    - 传输四项 `download_threads` / `upload_threads` / `download_connections` / `upload_connections`：逐键覆盖，非法、越界或损坏的值被忽略并回退环境默认；
    - `dump_channel_id`：数据库键存在即优先，**包括显式 0（关闭）**；键缺失或非法时回落 `DUMP_CHANNEL_ID`；
@@ -176,8 +176,9 @@ openssl rand -hex 32
 | `join_enabled` 等 `join_*` 六项 | 关 / 关 / 需审核 / 20 / 开 / 开 | 即时生效（语义见[使用指南](../guide/usage.md)第 11 节） |
 | `watch_apply_enabled` / `watch_require_approval` / `watch_max_sources` / `watch_per_user_limit` | 关 / 需审核 / 20 / 3 | 监听源用户申请配置，即时生效；管理员 Web 添加与号主不受数量上限（语义见[使用指南](../guide/usage.md)第 10 节） |
 | 传输四项（数据库覆盖值） | 各自环境默认（通常 4） | 事务内整体发布；线程/连接语义见第 3.2 节 |
-| `backup_interval_hours` | 6；合法 0–168（0 = 关闭自动备份） | 即时生效；定时备份到 `data/backups/`（磁盘空间预检，不足则跳过并产生 `backup.failed` 事件）；CLI 同款逻辑 `spore admin backup`。管理端编辑入口在备份页 |
-| `backup_keep_count` | 8；合法 1–50 | 即时生效；按修改时间保留最近 N 份，超出自动删除最老（默认 6h×8 ≈ 48 小时窗口）；R2 上云开启时远端按同份数轮转。管理端编辑入口在备份页 |
+| `backup_interval_hours` | 6；合法 0–168（0 = 关闭整个定时任务） | 即时生效；本地与 R2 目标由独立开关决定；临时快照磁盘空间不足时跳过并产生 `backup.failed` 事件。管理端编辑入口在备份页 |
+| `backup_keep_count` | 8；合法 1–50 | 即时生效；本地与 R2 分别按修改时间/远端时间轮转最近 N 份；默认间隔下约 48 小时窗口。管理端编辑入口在备份页 |
+| `backup_local_enabled` | `true` | 即时生效；关闭后不保留 `data/backups/` 定时快照；需开启 R2，快照仅临时用于上传后清理。管理端编辑入口在备份页 |
 | `error_log_retention_days` | 30；合法 1–365 | 即时生效（清理循环每轮重读）；error_logs 表按该天数周期自动清理（每小时执行 + 启动即清一次），管理端错误日志页另有手动批量/按时间段删除 |
 | `last_backup_at` | 0 | 数据库备份导出（Web 手动 / CLI / 定时）成功后写入 Unix 毫秒时间；仅页面状态展示 |
 | `access_key_hash` | 首次启动自动生成 | 只存 SHA-256 哈希；明文仅在生成时输出一次；重置会使全部 Web 会话失效 |
@@ -194,7 +195,7 @@ openssl rand -hex 32
 | 管理端页面 | 对应设置 |
 | --- | --- |
 | 运行设置（`/admin/settings`） | `timezone`、`max_links_per_message`、`max_request_attempts`、`queue_capacity`、`worker_count`、媒体三项、传输四项；展示配置值/运行值差异与待重启原因 |
-| 数据备份（`/admin/backup`） | `backup_interval_hours`、`backup_keep_count` 与 R2 上云连接配置（`data/r2-backup.json`，见第 6b 节）：定时备份间隔/份数与 Cloudflare R2 异地直传的单一配置入口 |
+| 数据备份（`/admin/backup`） | `backup_interval_hours`、`backup_keep_count`、`backup_local_enabled` 与 R2 上云连接配置（`data/r2-backup.json`，见第 6b 节）：定时备份间隔/份数、本地保留与 Cloudflare R2 异地直传的单一配置入口 |
 | 系统设置（`/admin/settings/system`） | `system_name` |
 | GitHub 登录（`/admin/settings/oauth`） | `github_oauth_config`、`github_binding` |
 | 频道设置（`/admin/channel-settings`） | `channel_copy_enabled`、缓存频道（ID 与标题）、`tg_reuse_enabled`、`dedup_window_min`、缓存迁移工具（旧频道副本整批搬到当前频道） |
