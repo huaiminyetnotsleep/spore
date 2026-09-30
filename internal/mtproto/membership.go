@@ -42,6 +42,7 @@ type InviteInfo struct {
 	Participants    int    // 参与人数
 	IsChannel       bool   // 是频道/超级组（false 为普通群组）
 	AlreadyJoined   bool   // 当前账号已是成员
+	Creator         bool   // 当前账号是否为创建者（跳过自动静音/归档）
 	RequestedToJoin bool   // 需管理员审批才能加入的频道（加入请求制）
 	// AlreadyJoined 为 true 时携带频道定位信息（供事后静音/归档补执行）；
 	// 其余场景为零值。
@@ -105,6 +106,7 @@ func inviteInfoFromChat(chat tg.ChatClass, alreadyJoined bool) InviteInfo {
 		info.IsChannel = true
 		info.ChannelID = ch.ID
 		info.AccessHash = ch.AccessHash
+		info.Creator = ch.Creator
 	case *tg.Chat:
 		info.Title = ch.Title
 	}

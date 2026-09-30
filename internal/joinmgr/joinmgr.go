@@ -209,7 +209,7 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, text s
 		// 已是成员（含被外部拉入后提交 /join 的场景）：按配置补执行
 		// 静音/归档——checkInvite 在此分支携带频道定位信息正是为此预留。
 		// 自动退出开启时让位给 Enforce 的退出语义。
-		if info.ChannelID != 0 && !cfg.AutoLeaveExternal && (cfg.MuteEnabled || cfg.ArchiveEnabled) {
+		if info.ChannelID != 0 && !info.Creator && !cfg.AutoLeaveExternal && (cfg.MuteEnabled || cfg.ArchiveEnabled) {
 			if err := s.applyPostJoinCfg(ctx, info.ChannelID, info.AccessHash, cfg); err != nil {
 				s.log.Warn("已是成员频道补静音/归档失败", "channel_id", info.ChannelID, "error", err.Error())
 			}
@@ -553,6 +553,7 @@ func (s *Service) ListJoined(ctx context.Context) ([]JoinedChannelView, error) {
 // （update）、页面刷新（ListJoined）与周期对账（ReconcileExternal）三个
 // 入口共用。本系统经 /join 或审批加入的频道不在此处理（加入时已执行过，
 // 且归档失败不越界重试）。失败只记日志——下次入口触发时按未归档状态重试。
+// 创建者频道/超级群组保留账号自己的通知与归档设置，不参与自动处理。
 func (s *Service) archiveExternalPass(ctx context.Context, cfg syscfg.JoinConfig,
 	live []mtproto.JoinedChannel, records map[int64]store.JoinedChannelRecord) int {
 	// 「自动退出外部拉入」开启时退出优先，归档让位（Enforce 负责退出）
@@ -561,6 +562,9 @@ func (s *Service) archiveExternalPass(ctx context.Context, cfg syscfg.JoinConfig
 	}
 	n := 0
 	for _, c := range live {
+		if c.Creator {
+			continue // 自建频道/超级群组不自动静音或归档
+		}
 		if c.Archived {
 			continue // 已在归档夹
 		}
@@ -595,6 +599,9 @@ func (s *Service) OnChannelsSeen(ctx context.Context, seen []mtproto.JoinedChann
 		return
 	}
 	for _, c := range seen {
+		if c.Creator {
+			continue // 自建频道/超级群组不自动静音或归档
+		}
 		if c.AccessHash == 0 {
 			continue // 无定位信息（异常形态），留给惰性对账
 		}
@@ -753,9 +760,11 @@ func (s *Service) ReconcilePendingJoins(ctx context.Context) error {
 		if !info.AlreadyJoined || info.ChannelID == 0 {
 			continue // 频道侧尚未批准
 		}
-		if err := s.applyPostJoinCfg(ctx, info.ChannelID, info.AccessHash, cfg); err != nil {
-			s.log.Warn("请求制频道补执行静音/归档失败", "request_id", r.ID, "channel_id", info.ChannelID, "error", err.Error())
-			continue
+		if !info.Creator {
+			if err := s.applyPostJoinCfg(ctx, info.ChannelID, info.AccessHash, cfg); err != nil {
+				s.log.Warn("请求制频道补执行静音/归档失败", "request_id", r.ID, "channel_id", info.ChannelID, "error", err.Error())
+				continue
+			}
 		}
 		// 频道补留痕（邀请制加入本系统无从记录来源，按审批通过归档）
 		if err := s.st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
@@ -765,10 +774,13 @@ func (s *Service) ReconcilePendingJoins(ctx context.Context) error {
 			s.log.Warn("请求制频道补写留痕失败", "channel_id", info.ChannelID, "error", err.Error())
 		}
 		note := "频道管理员已批准加入，已执行静音/归档。"
+		if info.Creator {
+			note = "账号已是频道创建者，已跳过自动静音/归档。"
+		}
 		if err := s.st.UpdateJoinRequestNote(ctx, r.ID, note, 0); err != nil {
 			s.log.Warn("请求制频道对账备注回写失败", "request_id", r.ID, "error", err.Error())
 		}
-		s.log.Info("请求制频道已批准，补执行静音/归档完成", "request_id", r.ID, "channel_id", info.ChannelID)
+		s.log.Info("请求制频道加入对账完成", "request_id", r.ID, "channel_id", info.ChannelID)
 	}
 	return nil
 }

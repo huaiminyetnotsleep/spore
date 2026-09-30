@@ -570,6 +570,112 @@ func TestReconcileExternal(t *testing.T) {
 	}
 }
 
+func TestExternalPostJoinSkipsCreators(t *testing.T) {
+	entries := []struct {
+		name string
+		run  func(*testing.T, context.Context, *Service, []mtproto.JoinedChannel) error
+	}{
+		{"列表刷新", func(t *testing.T, ctx context.Context, svc *Service, _ []mtproto.JoinedChannel) error {
+			views, err := svc.ListJoined(ctx)
+			if err == nil && (len(views) != 2 || !views[0].Creator) {
+				t.Fatalf("创建者频道应继续显示在列表中: %+v", views)
+			}
+			return err
+		}},
+		{"实时更新", func(_ *testing.T, ctx context.Context, svc *Service, live []mtproto.JoinedChannel) error {
+			svc.OnChannelsSeen(ctx, live)
+			return nil
+		}},
+		{"周期对账", func(_ *testing.T, ctx context.Context, svc *Service, _ []mtproto.JoinedChannel) error {
+			return svc.ReconcileExternal(ctx)
+		}},
+	}
+	for _, entry := range entries {
+		for _, kind := range []string{"channel", "supergroup"} {
+			for _, source := range []string{"无留痕", store.JoinedViaExternal} {
+				t.Run(entry.name+"/"+kind+"/"+source, func(t *testing.T) {
+					ctx := context.Background()
+					bridge := &fakeBridge{live: []mtproto.JoinedChannel{
+						{ChannelID: 1, AccessHash: 11, Kind: kind, Creator: true},
+						{ChannelID: 2, AccessHash: 22, Kind: kind},
+					}}
+					svc, st := newTestService(t, bridge, nil)
+					// 使用默认配置：/join 总开关关闭，静音/归档开启。
+					if source == store.JoinedViaExternal {
+						if err := st.UpsertJoinedChannel(ctx, store.JoinedChannelRecord{
+							ChannelID: 1, Kind: kind, JoinedVia: source,
+						}); err != nil {
+							t.Fatalf("预置留痕失败: %v", err)
+						}
+					}
+					// 重复触发，覆盖取消归档后再次刷新/对账的场景。
+					for range 2 {
+						if err := entry.run(t, ctx, svc, bridge.live); err != nil {
+							t.Fatalf("处理失败: %v", err)
+						}
+					}
+					if len(bridge.postJoinIDs) != 2 {
+						t.Fatalf("应只对普通外部频道执行动作: %v", bridge.postJoinIDs)
+					}
+					for i, id := range bridge.postJoinIDs {
+						if id != 2 || !bridge.postJoinOpts[i].Mute || !bridge.postJoinOpts[i].Archive {
+							t.Fatalf("创建者应跳过、普通成员应按默认配置处理: %v %+v", bridge.postJoinIDs, bridge.postJoinOpts)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSubmitAlreadyJoinedSkipsCreator(t *testing.T) {
+	bridge := &fakeBridge{checkInfo: mtproto.InviteInfo{
+		AlreadyJoined: true, IsChannel: true, Creator: true,
+		ChannelID: 7, AccessHash: 77, Title: "自建频道",
+	}}
+	svc, st := newTestService(t, bridge, nil)
+	cfg := syscfg.DefaultJoinConfig()
+	cfg.Enabled = true
+	enableJoin(t, st, cfg)
+	out, err := svc.Submit(context.Background(), 100, true, baseInviteText)
+	if err != nil || out.Kind != SubmitAlreadyJoined || out.Title != "自建频道" {
+		t.Fatalf("自建频道应保持已加入结果: %+v %v", out, err)
+	}
+	if len(bridge.postJoinIDs) != 0 || len(bridge.joinedOpts) != 0 {
+		t.Fatalf("创建者不应被静音、归档或重复加入: %v %+v", bridge.postJoinIDs, bridge.joinedOpts)
+	}
+}
+
+func TestReconcilePendingJoinsSkipsCreator(t *testing.T) {
+	ctx := context.Background()
+	bridge := &fakeBridge{checkInfo: mtproto.InviteInfo{
+		AlreadyJoined: true, IsChannel: true, Creator: true,
+		ChannelID: 42, AccessHash: 99, Title: "自建频道",
+	}}
+	svc, st := newTestService(t, bridge, nil)
+	req, _, err := st.CreateJoinRequest(ctx, store.JoinRequest{
+		UserID: 100, InviteHash: "AbCdEfGh12345678", ChannelTitle: "自建频道",
+	})
+	if err != nil {
+		t.Fatalf("写申请失败: %v", err)
+	}
+	if _, err := st.ReviewJoinRequest(ctx, req.ID, store.JoinApproved, "admin", noteJoinRequestedPrefix, 0); err != nil {
+		t.Fatalf("预置审批失败: %v", err)
+	}
+	for range 2 {
+		if err := svc.ReconcilePendingJoins(ctx); err != nil {
+			t.Fatalf("对账失败: %v", err)
+		}
+	}
+	if len(bridge.postJoinIDs) != 0 || len(bridge.checkHashes) != 1 {
+		t.Fatalf("创建者应跳过静音/归档，申请应完成对账: %v %v", bridge.postJoinIDs, bridge.checkHashes)
+	}
+	req, err = st.GetJoinRequest(ctx, req.ID)
+	if err != nil || !strings.Contains(req.Note, "创建者") || strings.Contains(req.Note, "已执行静音/归档") {
+		t.Fatalf("备注应说明创建者已跳过动作: %+v %v", req, err)
+	}
+}
+
 func TestLeaveBatch(t *testing.T) {
 	bridge := &fakeBridge{leaveErrFor: map[int64]error{
 		9: mtproto.ErrChannelCreator,

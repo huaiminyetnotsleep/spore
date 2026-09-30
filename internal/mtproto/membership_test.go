@@ -50,6 +50,19 @@ func TestInviteInfoFromChatDistinguishesGroups(t *testing.T) {
 	}
 }
 
+func TestInviteInfoFromChatPreservesCreator(t *testing.T) {
+	for _, broadcast := range []bool{true, false} {
+		for _, creator := range []bool{true, false} {
+			info := inviteInfoFromChat(&tg.Channel{
+				ID: 42, AccessHash: 7, Broadcast: broadcast, Creator: creator,
+			}, true)
+			if !info.IsChannel || !info.AlreadyJoined || info.Creator != creator {
+				t.Fatalf("邀请预检应保留创建者标记（broadcast=%v creator=%v）: %+v", broadcast, creator, info)
+			}
+		}
+	}
+}
+
 func TestClassifyMembershipError(t *testing.T) {
 	cases := []struct {
 		err  error

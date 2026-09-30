@@ -1189,8 +1189,8 @@ cloud-drive.json.enc
 | `join_auto_leave_external` | bool | 自动退出外部拉入频道（惰性检测；缺省 `false`） |
 | `join_require_approval` | bool | 普通用户加入需号主审批（缺省 `true`） |
 | `join_max_channels` | int | 活跃加入频道数量上限（0–200，0 = 不限；缺省 20） |
-| `join_mute_enabled` | bool | 加入后静音（缺省 `true`） |
-| `join_archive_enabled` | bool | 加入后归档（缺省 `true`） |
+| `join_mute_enabled` | bool | 加入后静音（缺省 `true`；读取账号是创建者时跳过） |
+| `join_archive_enabled` | bool | 加入后归档（缺省 `true`；读取账号是创建者时跳过） |
 | `watch_apply_enabled` | bool | 监听源用户自助申请（/watch）开关（即时生效；缺省 `false`；管理员添加不受限） |
 | `watch_require_approval` | bool | 用户申请需审批后生效（缺省 `true`；false = 免审批直接生效；号主恒直接生效） |
 | `watch_max_sources` | int | 监听源总数上限（0–200，0 = 不限；仅约束用户申请；缺省 20） |
