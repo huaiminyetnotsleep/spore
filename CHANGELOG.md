@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.36.3](https://github.com/huaiminyetnotsleep/spore/compare/v1.36.2...v1.36.3) (2026-10-08)
+
+
+### Bug Fixes
+
+* **delivery:** 相册总量超 Bot API 请求体上限时整组分流 MTProto 直传 ([b4d6990](https://github.com/huaiminyetnotsleep/spore/commit/b4d6990dedb1bd8e31dbcd515f226b98cb04e736))
+
 ## [1.36.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.36.1...v1.36.2) (2026-09-30)
 
 
