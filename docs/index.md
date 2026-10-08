@@ -5,6 +5,9 @@ hero:
   name: Spore
   text: Telegram 受保护消息提取机器人
   tagline: 把频道消息链接发给 Bot，收到的就是一条可再次转发的全新消息。
+  image:
+    src: /icon.svg
+    alt: Spore
   actions:
     - theme: brand
       text: 快速部署 →
