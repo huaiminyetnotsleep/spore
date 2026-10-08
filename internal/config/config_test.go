@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -179,6 +180,9 @@ func TestLoadBotAPIServerRules(t *testing.T) {
 	if cfg.BotAPIUploadCap() != OfficialMaxFileSize {
 		t.Errorf("官方服务器上传上限应为 50MB，得到 %d", cfg.BotAPIUploadCap())
 	}
+	if cfg.BotAPIAlbumCap() != OfficialMaxFileSize {
+		t.Errorf("官方服务器相册总量上限应为 50MB，得到 %d", cfg.BotAPIAlbumCap())
+	}
 	// 配置了本地服务器则上传上限放宽到 MaxFileSize，且 photo 上限同步放宽
 	cfg, err = Load(baseEnv(map[string]string{
 		"BOT_API_URL":   "http://localhost:8081",
@@ -192,6 +196,11 @@ func TestLoadBotAPIServerRules(t *testing.T) {
 	}
 	if cfg.BotAPIUploadCap() != 2097152000 {
 		t.Errorf("本地服务器下 BotAPIUploadCap 应等于 MAX_FILE_SIZE，得到 %d", cfg.BotAPIUploadCap())
+	}
+	// 本地服务器对请求体无该量级上限：不做相册总量分流（拆分相册既行走
+	// sendMediaGroup，总量数 GB）
+	if cfg.BotAPIAlbumCap() != math.MaxInt64 {
+		t.Errorf("本地服务器不应做相册总量分流，得到 %d", cfg.BotAPIAlbumCap())
 	}
 	// 官方服务器下 PhotoLimit 为默认 10MB；缺省 MaxFileSize 为 2000MB
 	cfg, err = Load(baseEnv(nil))

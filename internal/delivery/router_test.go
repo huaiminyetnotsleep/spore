@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 
@@ -157,6 +158,7 @@ var _ Sender = (*fakeAPISender)(nil)
 const (
 	testUploadCap = int64(100)
 	testLargeCap  = int64(1000)
+	testAlbumCap  = int64(150) // Bot API sendMediaGroup 请求体上限（整组总量阈值）
 )
 
 func TestRouterSendMediaDispatch(t *testing.T) {
@@ -166,7 +168,7 @@ func TestRouterSendMediaDispatch(t *testing.T) {
 	t.Run("超上限且通道可用 → MTProto 大文件直传", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		m := message.Media{Kind: message.KindVideo, FileName: "big.mp4", Size: testUploadCap + 1}
 		if _, err := s.SendMedia(ctx, 7, m, cap, strings.NewReader("data")); err != nil {
@@ -183,7 +185,7 @@ func TestRouterSendMediaDispatch(t *testing.T) {
 	t.Run("超上限且通道不可用 → 确定性失败（零网络）", func(t *testing.T) {
 		large := &fakeLargeSender{available: false}
 		api := &fakeAPISender{}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		m := message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}
 		var ae *apperr.AppError
@@ -199,7 +201,7 @@ func TestRouterSendMediaDispatch(t *testing.T) {
 	t.Run("未超上限 → Bot API（通道不可用也不受影响）", func(t *testing.T) {
 		large := &fakeLargeSender{available: false}
 		api := &fakeAPISender{}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		m := message.Media{Kind: message.KindVideo, Size: testUploadCap}
 		if _, err := s.SendMedia(ctx, 7, m, cap, strings.NewReader("data")); err != nil {
@@ -212,7 +214,7 @@ func TestRouterSendMediaDispatch(t *testing.T) {
 
 	t.Run("缺 reader → 契约防御", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
-		s := NewRouter(&fakeAPISender{}, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(&fakeAPISender{}, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 		var ae *apperr.AppError
 		_, err := s.SendMedia(ctx, 7, message.Media{Kind: message.KindPhoto, Size: 1}, cap, nil)
 		if !errors.As(err, &ae) || ae.Code != apperr.CodeInternal {
@@ -227,7 +229,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 	t.Run("全员在上限内 → Bot API 整组", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a")},
@@ -245,7 +247,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 	t.Run("混入超上限成员 → MTProto 整组直传", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
@@ -282,7 +284,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 	t.Run("混入超上限成员且通道不可用 → 确定性失败（零网络）", func(t *testing.T) {
 		large := &fakeLargeSender{available: false}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap + 1}, Reader: strings.NewReader("b")},
@@ -301,7 +303,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 	t.Run("成员超出双通道上限 → 防御错误（调用方应逐条发送）", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindVideo, Size: testLargeCap + 1}, Reader: strings.NewReader("b")},
@@ -319,7 +321,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 	t.Run("全 document 组（分卷拆分段）→ MTProto 整组直传", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindDocument, FileName: "big.mkv.part1of2", Size: testUploadCap + 1},
@@ -339,10 +341,79 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("成员全部合规但总量超上限 → MTProto 整组直传", func(t *testing.T) {
+		// sendMediaGroup 把整组字节装进同一 multipart 请求体：官方服务器的
+		// 请求体容量独立于逐成员上限起效（成员各自 ≤50MB、总量约 70MB 被
+		// 纯文本 413 拒绝，真机 2026-10-08）——全员合规的相册总量超
+		// albumCap 时整组分流 MTProto，caption 归一化照常在发送前完成
+		large := &fakeLargeSender{available: true}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap}, Reader: strings.NewReader("a"),
+				Caption: message.Caption{Text: "视频一"}},
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap}, Reader: strings.NewReader("b"),
+				Caption: message.Caption{Text: "视频二"}},
+		}
+		ids, err := s.SendAlbum(ctx, 7, entries)
+		if err != nil {
+			t.Fatalf("总量超限应整组分流 MTProto: %v", err)
+		}
+		if large.albumCalls != 1 || api.albumCalls != 0 {
+			t.Fatalf("应只调大文件通道整组: large=%d api=%d", large.albumCalls, api.albumCalls)
+		}
+		if len(ids) != 2 {
+			t.Fatalf("应透传消息 ID: %v", ids)
+		}
+		if len(large.lastMedias) != 2 || large.lastMedias[0].Size != testUploadCap {
+			t.Errorf("整组调用应按序透传全部成员: %+v", large.lastMedias)
+		}
+		if large.lastCaptions[0].Text != "视频一\n\n视频二" || large.lastCaptions[1].Text != "" {
+			t.Errorf("归一化应照常合并进组首: %q / %q", large.lastCaptions[0].Text, large.lastCaptions[1].Text)
+		}
+	})
+
+	t.Run("总量恰在上限内 → Bot API 整组", func(t *testing.T) {
+		large := &fakeLargeSender{available: true}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindVideo, Size: testAlbumCap / 2}, Reader: strings.NewReader("a")},
+			{Media: message.Media{Kind: message.KindVideo, Size: testAlbumCap / 2}, Reader: strings.NewReader("b")},
+		}
+		if _, err := s.SendAlbum(ctx, 7, entries); err != nil {
+			t.Fatalf("总量在上限内应走 Bot API: %v", err)
+		}
+		if api.albumCalls != 1 || large.albumCalls != 0 {
+			t.Fatalf("应只调 Bot API 通道: api=%d large=%d", api.albumCalls, large.albumCalls)
+		}
+	})
+
+	t.Run("总量超上限且通道不可用 → 确定性失败（零网络）", func(t *testing.T) {
+		large := &fakeLargeSender{available: false}
+		api := &fakeAPISender{groupable: true}
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
+
+		entries := []AlbumEntry{
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap}, Reader: strings.NewReader("a")},
+			{Media: message.Media{Kind: message.KindVideo, Size: testUploadCap}, Reader: strings.NewReader("b")},
+		}
+		var ae *apperr.AppError
+		_, err := s.SendAlbum(ctx, 7, entries)
+		if !errors.As(err, &ae) || ae.Code != apperr.CodeLargeChannelUnavailable {
+			t.Fatalf("通道不可用应确定性失败，得到 %v", err)
+		}
+		if api.albumCalls != 0 || large.albumCalls != 0 {
+			t.Errorf("不应发出任何整组请求: api=%d large=%d", api.albumCalls, large.albumCalls)
+		}
+	})
+
 	t.Run("缺 Reader → 契约防御", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a")},
@@ -361,7 +432,7 @@ func TestRouterSendAlbumDispatch(t *testing.T) {
 func TestRouterDelegation(t *testing.T) {
 	large := &fakeLargeSender{available: false}
 	api := &fakeAPISender{groupable: true}
-	s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+	s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 	ctx := context.Background()
 
 	if _, err := s.SendMessage(ctx, 7, "hi"); err != nil || api.messageCalls != 1 {
@@ -385,7 +456,7 @@ func TestRouterDelegation(t *testing.T) {
 // 应始终委托 Bot API 通道。
 func TestRouterCopyMessagesDelegation(t *testing.T) {
 	api := &fakeAPISender{}
-	s := NewRouter(api, &fakeLargeSender{available: true}, testUploadCap, testLargeCap, testLogger())
+	s := NewRouter(api, &fakeLargeSender{available: true}, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 	ids, err := s.CopyMessages(context.Background(), 111, 222, []int{7, 8})
 	if err != nil {
 		t.Fatalf("复制应成功: %v", err)
@@ -406,7 +477,7 @@ func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	t.Run("MTProto 整组 → 合并进组首、其余清零", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
@@ -441,7 +512,7 @@ func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	t.Run("Bot API 整组（普通相册）→ 同样归一化", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
@@ -467,12 +538,13 @@ func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	})
 
 	t.Run("Bot API 整组含拆分段（本地服务器模式形态）→ 同样归一化", func(t *testing.T) {
-		// 本地 Bot API 服务器：uploadCap = MaxFileSize，分段全员落在 Bot API
-		// 承载内、整组走 sendMediaGroup 分支——与 MTProto 分支同一归一化规则，
-		// 不再有 Split 特判
+		// 本地 Bot API 服务器：uploadCap = MaxFileSize 且请求体无该量级上限
+		//（BotAPIAlbumCap = MaxInt64），分段全员落在 Bot API 承载内、总量超
+		// 单成员上限也不做总量分流，整组走 sendMediaGroup 分支——与 MTProto
+		// 分支同一归一化规则，不再有 Split 特判
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, math.MaxInt64, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
@@ -503,7 +575,7 @@ func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	t.Run("合并保留实体并平移 UTF-16 偏移", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),
@@ -534,7 +606,7 @@ func TestRouterAlbumCaptionNormalization(t *testing.T) {
 	t.Run("恰好组首一条 → 原样透传", func(t *testing.T) {
 		large := &fakeLargeSender{available: true}
 		api := &fakeAPISender{groupable: true}
-		s := NewRouter(api, large, testUploadCap, testLargeCap, testLogger())
+		s := NewRouter(api, large, testUploadCap, testLargeCap, testAlbumCap, testLogger())
 
 		entries := []AlbumEntry{
 			{Media: message.Media{Kind: message.KindPhoto, Size: 10}, Reader: strings.NewReader("a"),

@@ -170,6 +170,7 @@ Bot 命令菜单均需在私聊中使用。命令支持 `/命令@机器人用户
 | 文件超过 `MAX_FILE_SIZE`（默认 2000 MiB） | 下载前直接拒绝，提示超过大小上限 |
 | 不超过 50MB（官方 Bot API 模式） | 由 Bot API 直接发送 |
 | 超过 50MB 且不超过 `MAX_FILE_SIZE` | 走机器人账号的 MTProto 直传通道；该通道未就绪时提示"大文件发送通道暂不可用"，小文件不受影响 |
+| 相册成员都不超 50MB 但整组总量超过 50MB（官方 Bot API 模式） | 整组改走机器人账号的 MTProto 直传通道（Bot API 的 `sendMediaGroup` 受整个请求体的容量上限约束，不按单个附件计），相册仍作为同一条消息整组送达 |
 | 配置了本地 Bot API 服务器（`BOT_API_URL`） | 上传上限放宽到 `MAX_FILE_SIZE`，不再使用 MTProto 直传 |
 
 说明：

@@ -1069,7 +1069,8 @@ type albumMemberPlan struct {
 // planAlbumSend 纯元数据预检相册的整组可行性（不发起下载，与 SendAlbum
 // 分流判定同源）：
 //   - 全员可整组（Sender.AlbumGroupable，photo/video 且超限成员 ≤2000MB）
-//     → 常规整组；
+//     → 常规整组；成员全部合规但整组总量超 Bot API 请求体上限的组仍属
+//     此形态，由 SendAlbum 按 albumCap 在发送时分流 MTProto 整组直传；
 //   - 不可整组成员全部是"可拆视频"（超过 2000MB 但有时长、ffmpeg 可用）且
 //     展开后总成员数 ≤ 相册上限 → 拆分整组：大视频成员切段为可播放分段，
 //     与其余成员合成同一条相册（如 [图片, 段1, 段2]），任务级原子——任何

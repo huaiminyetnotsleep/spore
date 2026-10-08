@@ -377,10 +377,11 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 
 	sender := delivery.New(b, delivery.Config{PhotoLimit: a.cfg.PhotoLimit})
 	// 业务发送走路由：未超过 Bot API 上限的媒体走 Bot API 上传，超限媒体经
-	// 本 bot 的 MTProto 会话直传（上限 2000MB）。已计数包装供 worker 与审批
-	// 通知使用；原始 sender 供事件/加入通知使用（通知失败不计业务失败）。
+	// 本 bot 的 MTProto 会话直传（上限 2000MB）；相册总量超 Bot API 请求体
+	// 上限时整组分流 MTProto 直传，保住相册整组语义。已计数包装供 worker 与
+	// 审批通知使用；原始 sender 供事件/加入通知使用（通知失败不计业务失败）。
 	counted := notify.NewCountSender(
-		delivery.NewRouter(sender, a.botClients[botID], a.cfg.BotAPIUploadCap(), a.cfg.MaxFileSize, a.log),
+		delivery.NewRouter(sender, a.botClients[botID], a.cfg.BotAPIUploadCap(), a.cfg.MaxFileSize, a.cfg.BotAPIAlbumCap(), a.log),
 		a.hub)
 	member := &botpool.Member{
 		ID:        botID,

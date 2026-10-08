@@ -48,9 +48,10 @@ type Sender interface {
 	// 副本整组复制）；每个成员的 caption 绑定在 AlbumEntry 上
 	//（Bot API 与 MTProto 路径同语义：逐成员携带，保持源相册中文字与
 	// 媒体的对应关系）。成员全部带 Reader（上传组）；不可整组发送时返回
-	// ErrAlbumNotSupported，由调用方降级为逐条发送。全员在 Bot API 上限内
-	// 走 sendMediaGroup；含超限成员（video 且 ≤2000MB）时分流到 Bot 号
-	// MTProto 整组直传（路由层内部决策，本契约对调用方透明）。
+	// ErrAlbumNotSupported，由调用方降级为逐条发送。全员在 Bot API 单成员
+	// 上限内且总量不超请求体上限走 sendMediaGroup；否则（含超限成员——video
+	// 且 ≤2000MB，或成员合规但总量超限）分流到 Bot 号 MTProto 整组直传
+	//（路由层内部决策，本契约对调用方透明）。
 	SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error)
 
 	// AlbumGroupable 判断媒体能否进入整组发送（与 SendAlbum 内部判定同源），

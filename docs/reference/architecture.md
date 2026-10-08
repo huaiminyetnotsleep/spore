@@ -230,10 +230,14 @@ SourceRef
          │     WithThreads(UPLOAD_THREADS) 并发分片上传（>10MB bigLoop 单读多发，
          │     ≤10MB smallLoop 固定串行）+ messages.sendMedia，上限 2000MB）；
          │     Bot 会话未就绪时 LARGE_CHANNEL_UNAVAILABLE 确定性失败（小文件不受影响）
-         └─ 相册整组：全员 ≤uploadCap 且 Bot API 可整组 → sendMediaGroup；
-               含超限成员（video 且 ≤2000MB）→ 同一 Bot 会话逐成员 uploader
-               上传（串行，避免按成员放大 invoke 并发）+ messages.sendMultiMedia
-               整组直传；全 document 组（分卷拆分段）同走该通道；
+         └─ 相册整组：全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap
+               （官方服务器 50MB——sendMediaGroup 把整组字节装进同一请求体，
+               请求体容量独立于逐成员上限，总量超限时官方服务器以纯文本
+               413 拒绝）→ sendMediaGroup；
+               含超限成员（video/document 且 ≤2000MB）或总量超 albumCap →
+               同一 Bot 会话逐成员 uploader 上传（串行，避免按成员放大
+               invoke 并发）+ messages.sendMultiMedia 整组直传；
+               全 document 组（分卷拆分段）同走该通道；
                通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
                全部相册满足"恰好组首一条 caption"不变量：客户端对多成员
                带 caption 的相册首渲染会抑制组级展示位（真机五组实验
@@ -367,7 +371,7 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 ### 3.6 Album 聚合
 
-同一 `GroupedID` 的多条消息是一个 Album，不能按独立消息逐条发送。`Fetch` 发现 `GroupedID != 0` 时**一次批量取** `[ID-9, ID+9]` 共 19 个 ID（`channels.getMessages` 支持批量），过滤相同 GroupedID 按升序返回。发送时逐成员构造语义 caption，路由层发送前统一归一化为"恰好组首一条合并 caption"（全部成员正文按源顺序合并进组首并保留实体；客户端对多成员 caption 的相册首渲染抑制组级展示位——真机 2026-09-20；不做发送后修补）。整组只接受 photo/video，且 `AlbumMaxItems=10`（超过 10 项暂不拆分，直接返回错误）；路由按成员大小分流——全员在 Bot API 上限内走 `sendMediaGroup`，含超限成员（video 且 ≤2000MB）走 Bot 号 MTProto 两阶段整组直传：每成员 `uploader.Upload` → `messages.uploadMedia`（注册到目标 peer，换取带新鲜 file_reference 的坐标）→ 汇总为 `InputMediaPhoto/InputMediaDocument` 引用 → `messages.sendMultiMedia` 一次整组发送（sendMultiMedia 只接受已注册引用，raw `inputMediaUploaded*` 会被 400 MEDIA_INVALID 拒绝——真机结论 2026-09-03）；photo 超 photoLimit、document/audio 成员或超 2000MB 时整组降级逐条发送。
+同一 `GroupedID` 的多条消息是一个 Album，不能按独立消息逐条发送。`Fetch` 发现 `GroupedID != 0` 时**一次批量取** `[ID-9, ID+9]` 共 19 个 ID（`channels.getMessages` 支持批量），过滤相同 GroupedID 按升序返回。发送时逐成员构造语义 caption，路由层发送前统一归一化为"恰好组首一条合并 caption"（全部成员正文按源顺序合并进组首并保留实体；客户端对多成员 caption 的相册首渲染抑制组级展示位——真机 2026-09-20；不做发送后修补）。整组只接受 photo/video，且 `AlbumMaxItems=10`（超过 10 项暂不拆分，直接返回错误）；路由按大小分流——全员在 Bot API 单成员上限内且整组总量不超请求体上限（官方服务器 50MB，`sendMediaGroup` 把整组字节装进同一 multipart 请求体）走 `sendMediaGroup`，含超限成员（video/document 且 ≤2000MB）或总量超限时走 Bot 号 MTProto 两阶段整组直传：每成员 `uploader.Upload` → `messages.uploadMedia`（注册到目标 peer，换取带新鲜 file_reference 的坐标）→ 汇总为 `InputMediaPhoto/InputMediaDocument` 引用 → `messages.sendMultiMedia` 一次整组发送（sendMultiMedia 只接受已注册引用，raw `inputMediaUploaded*` 会被 400 MEDIA_INVALID 拒绝——真机结论 2026-09-03）；photo 超 photoLimit、document/audio 成员或超 2000MB 时整组降级逐条发送。
 
 ### 3.7 持久化：内嵌 SQLite（internal/store）
 
@@ -720,8 +724,8 @@ ready(ctx, api)
  │        # 已创建（§11.1 第 16 步），每轮复用；sender 经 SetSender 回填 access
  ├─ 3. sender := delivery.New(b, …) → router := delivery.NewRouter(sender, botClient, BotAPIUploadCap, MaxFileSize)
  │        # 业务发送走路由：Size ≤ Bot API 上限（官方服务器 50MB）→ Bot API 上传；
- │        # 超限 → Bot 号 MTProto 大文件直传；相册含超限成员 → 同通道整组直传；
- │        # 文本/删除 → Bot API。
+ │        # 超限 → Bot 号 MTProto 大文件直传；相册含超限成员或整组总量超
+ │        # Bot API 请求体上限 → 同通道整组直传；文本/删除 → Bot API。
  │        # hub.SetSender 保留 Bot API 原始 owner 通道作兼容回退；配置化通知由 main 装配的 runtime sink 投递
  ├─ 4. deps := queue.Deps{Fetcher, Sender: counted(router), Store, Media 下载参数, Log}
  ├─ 5. go q.Run(ctx, cfg.WorkerCount, queue.Process(deps))   # worker 协程组
@@ -828,10 +832,11 @@ media.Open(ctx, api, media, jobID, opt, log)
  ├─ SendMedia：photo 超 sendPhoto 上限(10MB) → 归一为 document 发送；
  │      按 Kind 分发 sendPhoto / Video / Voice / Audio / Document
  ├─ SendAlbum（router 分流，发送前把全部成员 caption 归一化为组首一条）：
- │      全员 ≤uploadCap 且 Bot API 可整组 → sendMediaGroup 整组原子发送
- │      （attach://<名字> 挂附件，每项各自渲染 caption HTML）；组内混入
- │      不支持类型或超限图片 → ErrAlbumNotSupported；
- │      含超限成员（video ≤2000MB）→ mtproto.BotClient.SendAlbum 两阶段：
+ │      全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap → sendMediaGroup
+ │      整组原子发送（attach://<名字> 挂附件，每项各自渲染 caption HTML）；
+ │      组内混入不支持类型或超限图片 → ErrAlbumNotSupported；
+ │      含超限成员（video/document ≤2000MB）或总量超 albumCap →
+ │      mtproto.BotClient.SendAlbum 两阶段：
  │      逐成员 uploader.Upload → messages.uploadMedia 注册（photo 走
  │      InputMediaUploadedPhoto，video 复用单发大文件的 document+video
  │      属性构造）→ AsInput 坐标引用 → messages.sendMultiMedia 一次整组

@@ -37,20 +37,21 @@ type LargeFileSender interface {
 type routerSender struct {
 	api       Sender          // Bot API 实现（telegramSender）
 	large     LargeFileSender // 大文件直传实现（mtproto.BotClient）
-	uploadCap int64           // Bot API 上传路径的大小上限（官方服务器 50MB；本地服务器 = MaxFileSize）
+	uploadCap int64           // Bot API 上传路径的单文件大小上限（官方服务器 50MB；本地服务器 = MaxFileSize）
 	largeCap  int64           // MTProto 直传通道的大小上限（= MaxFileSize，2000MB 级）
+	albumCap  int64           // Bot API sendMediaGroup 整组请求体上限（官方服务器 50MB；本地服务器不设限）
 	log       *slog.Logger    // 整组 caption 修复的失败日志（尽力而为，不向上传播）
 }
 
 // NewRouter 组装路由 Sender：Size 超过 uploadCap 的媒体走 MTProto 大文件
-// 直传，其余（上传、文本、删除）委托 Bot API 实现；相册全员在上限内走
-// Bot API sendMediaGroup，含超限成员时走 MTProto 整组直传（largeCap）。
-// log 为 nil 时回退 slog.Default()。
-func NewRouter(botAPI Sender, large LargeFileSender, uploadCap, largeCap int64, log *slog.Logger) Sender {
+// 直传，其余（上传、文本、删除）委托 Bot API 实现；相册全员在上限内且总量
+// ≤ albumCap 走 Bot API sendMediaGroup，否则（含超限成员或总量超 albumCap）
+// 走 MTProto 整组直传（largeCap）。log 为 nil 时回退 slog.Default()。
+func NewRouter(botAPI Sender, large LargeFileSender, uploadCap, largeCap, albumCap int64, log *slog.Logger) Sender {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &routerSender{api: botAPI, large: large, uploadCap: uploadCap, largeCap: largeCap, log: log}
+	return &routerSender{api: botAPI, large: large, uploadCap: uploadCap, largeCap: largeCap, albumCap: albumCap, log: log}
 }
 
 func (s *routerSender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
@@ -100,8 +101,8 @@ func (s *routerSender) EditMessageCaption(ctx context.Context, chatID int64, mes
 	return s.api.EditMessageCaption(ctx, chatID, messageID, captionHTML)
 }
 
-// AlbumGroupable 判断媒体能否进入整组发送（与 SendAlbum 内部分流同源），
-// 供 worker 在打开下载句柄前做元数据预检：
+// AlbumGroupable 判断媒体能否进入整组发送（与 SendAlbum 内部逐成员判定
+// 同源），供 worker 在打开下载句柄前做元数据预检：
 //   - 全员满足 Bot API 判定（photo/video，photo ≤ photoLimit）且 ≤ uploadCap
 //     → Bot API sendMediaGroup 承载；
 //   - video 超过 uploadCap 但 ≤ largeCap（2000MB）→ Bot 号 MTProto 整组
@@ -109,6 +110,10 @@ func (s *routerSender) EditMessageCaption(ctx context.Context, chatID int64, mes
 //     保住相册整组语义）；
 //   - photo 超 photoLimit、document/audio/voice 及超 largeCap → 不可整组，
 //     由调用方降级逐条发送（Telegram 不允许 document 与 photo/video 混组）。
+//
+// 预检只看单成员；整组**总量**超 Bot API 请求体上限的组（成员全部合规）
+// 仍属"可整组"，通道选择由 SendAlbum 按 albumCap 在发送时分流 MTProto
+// 整组直传，worker 不感知。同源不变量：预检通过的组，SendAlbum 必有通道。
 func (s *routerSender) AlbumGroupable(m message.Media) bool {
 	if m.Size <= s.uploadCap && s.api.AlbumGroupable(m) {
 		return true
@@ -135,15 +140,25 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 	return s.large.SendMedia(ctx, chatID, m, caption, reader)
 }
 
-// SendAlbum 路由整组发送：全员经 Bot API 判定且在上限内 → Bot API
-// sendMediaGroup；含超限成员（经 AlbumGroupable 预检必为 video 且 ≤ largeCap）
-// → Bot 号 MTProto 整组直传，保住"图+大视频混合相册"的整组语义。
+// SendAlbum 路由整组发送：全员经 Bot API 判定且总量在上限内 → Bot API
+// sendMediaGroup；否则 → Bot 号 MTProto 整组直传，保住相册整组语义。分流
+// MTProto 的两种形态：
+//   - 含超限成员（经 AlbumGroupable 预检必为 video/document 且 ≤ largeCap，
+//     分卷拆分段与超限视频）；
+//   - 成员全部合规但**总量**超过 albumCap——sendMediaGroup 把整组字节装进
+//     同一个 multipart 请求体，官方服务器的请求体容量独立于逐成员上限起效
+//     （成员各自 ≤50MB 的相册总量约 70MB 即被纯文本 413 拒绝，真机
+//     2026-10-08），路由须按总量分流；MTProto 通道承载 photo/video/document
+//     全形态（botsend.go），小成员随组直传不受影响。
+//
 // document 成员同样走 MTProto 整组通道——只由分卷拆分路径产生（全 document
 // 组，Telegram 允许；与 photo/video 混组会被服务器拒绝，调用方保证不出现），
 // worker 相册预检（AlbumGroupable）不感知，普通相册的 document 成员仍逐条
 // 降级，历史行为不变。大文件通道未就绪按确定性失败处理（与单媒体路径同
 // 姿态）；混入双通道都承载不了的成员属调用方违约（worker 预检已排除），
-// 按防御错误处理。
+// 按防御错误处理。与 AlbumGroupable 的同源不变量：worker 预检通过的成员，
+// 本方法必有通道可走——MTProto 承载集合（photo/video/document ≤ largeCap）
+// 覆盖预检的全部通过形态。
 //
 // 发送前执行"恰好组首一条 caption"归一化（normalizeAlbumCaptions）：客户端
 // 对相册的首渲染在**多个成员携带 caption** 时抑制组级展示位（相册下方空白；
@@ -151,8 +166,8 @@ func (s *routerSender) SendMedia(ctx context.Context, chatID int64, m message.Me
 // 把署名写到组末分段后缓存频道副本也失去文字的反向验证）。全部成员语义
 // caption（各成员正文、切段说明）按源顺序合并进组首并保留实体，其余成员
 // 清零——两条整组通道（Bot API sendMediaGroup 与 MTProto sendMultiMedia）
-// 从首次请求起就收到规范形态，不依赖发送后编辑修补（Bot API 空串编辑受
-// 依赖库 omitempty 影响不可靠，且补写完成前存在错误展示窗口）。
+// 从首次请求起就只消费归一化后的条目，不依赖发送后编辑修补（Bot API 空串
+// 编辑受依赖库 omitempty 影响不可靠，且补写完成前存在错误展示窗口）。
 func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []AlbumEntry) ([]int, error) {
 	for i, e := range entries {
 		if e.Reader == nil {
@@ -162,7 +177,9 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 	}
 	entries = s.normalizeAlbumCaptions(chatID, entries)
 	allAPI := true
+	var totalSize int64
 	for i, e := range entries {
+		totalSize += e.Media.Size
 		switch {
 		case e.Media.Size <= s.uploadCap && s.api.AlbumGroupable(e.Media): // Bot API 承载
 		case e.Media.Size <= s.largeCap &&
@@ -173,12 +190,12 @@ func (s *routerSender) SendAlbum(ctx context.Context, chatID int64, entries []Al
 				fmt.Sprintf("相册第 %d 项不可整组（类型/大小超出双通道上限），应逐条发送", i))
 		}
 	}
-	if allAPI {
+	if allAPI && totalSize <= s.albumCap {
 		return s.api.SendAlbum(ctx, chatID, entries)
 	}
 	if !s.large.Available() {
 		return nil, apperr.New(apperr.CodeLargeChannelUnavailable,
-			fmt.Sprintf("相册含超过 Bot API 上限的成员（cap=%d）且大文件直传通道未就绪", s.uploadCap))
+			fmt.Sprintf("相册需 Bot 号 MTProto 整组直传（含超过 %d 字节的成员或总量超出 Bot API 请求体上限）且大文件直传通道未就绪", s.uploadCap))
 	}
 	medias := make([]message.Media, len(entries))
 	readers := make([]io.Reader, len(entries))

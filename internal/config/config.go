@@ -509,6 +509,20 @@ func (c Config) BotAPIUploadCap() int64 {
 	return OfficialMaxFileSize
 }
 
+// BotAPIAlbumCap 返回"经 Bot API sendMediaGroup 整组上传"的相册总大小上限。
+// sendMediaGroup 把整组字节装进同一个 multipart 请求体，官方服务器的请求体
+// 容量上限独立于逐成员上限起作用：成员各自 ≤50MB 的相册总量超出时以纯文本
+// 413 拒绝（真机 2026-10-08，约 70MB 的相册必现），路由层须按总量分流
+// MTProto 整组直传（见 delivery/router.go）。本地服务器按部署形态对请求体
+// 无该量级限制（拆分相册总量数 GB 已行走 sendMediaGroup），返回 MaxInt64
+// 表示本地模式不做总量分流，维持既有行为。
+func (c Config) BotAPIAlbumCap() int64 {
+	if c.BotAPIURL != "" {
+		return math.MaxInt64
+	}
+	return OfficialMaxFileSize
+}
+
 // ValidateMediaLimits 校验 Web 设置和启动覆盖使用的媒体边界。
 func ValidateMediaLimits(maxFileSize, streamLimit, tempDirMaxSize int64) error {
 	if maxFileSize < MinMediaFileSize || maxFileSize > MaxMediaFileSize {
