@@ -2,6 +2,14 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.37.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.36.3...v1.37.0) (2026-10-10)
+
+
+### Features
+
+* **binding:** 绑定频道失效与失权接入管理员事件告警 ([18db45b](https://github.com/huaiminyetnotsleep/spore/commit/18db45be1934786d923421b11b714a26d3fe192f))
+* **notify:** 源频道与缓存频道封禁接入管理员事件告警 ([3da5802](https://github.com/huaiminyetnotsleep/spore/commit/3da58023e29d04de2be053dcb3f6920bf6a16f4b))
+
 ## [1.36.3](https://github.com/huaiminyetnotsleep/spore/compare/v1.36.2...v1.36.3) (2026-10-08)
 
 
