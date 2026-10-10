@@ -1311,7 +1311,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/notification/event-catalog
 
-返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error` / `critical`（封禁类：`mtproto.banned` / `bot.banned`，穿透静音计划与最低级别门槛）。源与缓存频道失效类：`source.channel_inaccessible`（error，提取源无法访问）、`watch.source_unavailable`（error，监听源探活不可用，支持自动恢复）、`dump.channel_write_failed`（warn，缓存频道写入失败，支持自动恢复）。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
+返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error` / `critical`（封禁类：`mtproto.banned` / `bot.banned`，穿透静音计划与最低级别门槛）。源与缓存频道失效类：`source.channel_inaccessible`（error，提取源无法访问）、`watch.source_unavailable`（error，监听源探活不可用，支持自动恢复）、`dump.channel_write_failed`（warn，缓存频道写入失败，支持自动恢复）、`binding.channel_gone`（error，用户绑定频道失效已自动解绑）、`binding.channel_no_rights`（warn，Bot 失去绑定频道权限，支持自动恢复）。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
 
 ### GET /api/v1/notification/policy
 

@@ -71,6 +71,12 @@ type WatchSourceUnavailableData struct {
 	Extra   int      // 超出封顶数量的其余不可用源个数
 }
 
+// BindingChannelData 绑定频道失效/权限事件（binding.channel_gone /
+// binding.channel_no_rights）。
+type BindingChannelData struct {
+	Title string // 频道/群组展示名（标题优先，回退 @用户名；不含 HTML 转义）
+}
+
 // ---- 活动通知 payload ----
 
 // AdminLoginData 管理后台登录成功（web.admin_login）。

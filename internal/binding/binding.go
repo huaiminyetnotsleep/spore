@@ -93,10 +93,26 @@ type Options struct {
 // 实际固定使用少数 bot，全 bot 达标是过重负担）；缓存频道校验仍对全部 bot
 // 执行（部署级共享目标）。副本投递按受理 bot 执行（消息坐标是 bot 私有的，
 // 跨 bot 不可复制）。
+// Events 是绑定频道失效/权限事件的上报出口（*notify.Hub 结构性满足；nil
+// 表示未装配，跳过上报）。定义在包内以保持依赖边界——binding 不直接依赖
+// notify 包。
+type Events interface {
+	// BindingChannelGone 上报一次绑定频道本体消失（不存在/停用/被封禁）
+	// 的自动软解绑（title 为展示名，仅随推送展示）。
+	BindingChannelGone(ctx context.Context, title string)
+	// BindingChannelNoRights 上报机器人被移出绑定频道/失去发言权限
+	//（可恢复：未解绑，重新加回后自愈）。
+	BindingChannelNoRights(ctx context.Context, title string)
+	// BindingChannelRightsRecovered 在副本重新同步成功后自动解决权限事件
+	//（事件从未发生时为静默 no-op）。
+	BindingChannelRightsRecovered(ctx context.Context)
+}
+
 type Service struct {
 	store  *store.Store
 	invite InviteResolver
 	log    *slog.Logger
+	events Events // 失效/权限事件上报；nil 跳过（SetEvents 在服务使用前调用）
 
 	botMu sync.RWMutex
 	bots  []*tgbot.Bot // 装配顺序，主 bot（首项）承担元数据刷新等单通道操作
@@ -115,6 +131,12 @@ func New(opt Options) (*Service, error) {
 		opt.Log = slog.Default()
 	}
 	return &Service{store: opt.Store, invite: opt.Invite, log: opt.Log, refreshAt: map[int64]time.Time{}}, nil
+}
+
+// SetEvents 注入失效/权限事件出口（装配层在服务进入使用前调用一次，早于
+// 任何任务路径，因此字段无需加锁）。nil 表示不装配。
+func (s *Service) SetEvents(events Events) {
+	s.events = events
 }
 
 // SetBots 注入 Bot 客户端列表（多机器人池；主 bot 在前，单 bot 部署长度为 1）。
@@ -682,6 +704,7 @@ func (s *Service) CopyToChannels(ctx context.Context, requestID, botID, userID, 
 			continue
 		}
 		s.log.Info("频道副本已发送", "user_id", userID, "channel_id", bnd.ChannelID, "messages", len(msgIDs))
+		s.rightsRecovered(ctx) // 副本恢复同步：权限类事件（如开启中）自动解决
 		if len(sent) > 0 && requestID != 0 {
 			if err := s.store.InsertSentMessages(ctx, []store.SentMessage{{
 				RequestID: requestID,
@@ -735,6 +758,10 @@ func (s *Service) autoUnbindDeadChannel(ctx context.Context, botID, userID int64
 		AfterJSON: fmt.Sprintf(`{"reason":"channel_gone","channel_title":%q,"user_id":%d,"bot_id":%d}`,
 			bnd.Title, bnd.UserID, botID),
 	})
+	// 管理员事件：用户私聊提醒只到用户本人，管理侧此前仅有审计留痕。
+	if s.events != nil {
+		s.events.BindingChannelGone(ctx, bindingChannelTitle(bnd))
+	}
 	s.log.Warn("绑定频道已不可用，自动解绑",
 		"user_id", bnd.UserID, "channel_id", bnd.ChannelID, "bot_id", botID)
 	title := channelDisplayTitle(bnd)
@@ -745,10 +772,14 @@ func (s *Service) autoUnbindDeadChannel(ctx context.Context, botID, userID int64
 }
 
 // notifyChannelNoRights 机器人被移出频道/权限不足的提醒：不解绑（管理员
-// 重新加回即可恢复），尽力而为送达。
+// 重新加回即可恢复），尽力而为送达。同时上报管理员事件（副本恢复同步时
+// 自动解决）。
 func (s *Service) notifyChannelNoRights(ctx context.Context, b *tgbot.Bot, userID int64, bnd store.ChannelBinding) {
 	s.log.Warn("频道副本失败：机器人无该频道发言权限（不解绑，提醒用户）",
 		"user_id", userID, "channel_id", bnd.ChannelID)
+	if s.events != nil {
+		s.events.BindingChannelNoRights(ctx, bindingChannelTitle(bnd))
+	}
 	title := channelDisplayTitle(bnd)
 	nctx, cancel := notifyWindow(ctx)
 	defer cancel()
@@ -778,14 +809,28 @@ func (s *Service) notifyUserHTML(ctx context.Context, botID, userID int64, html 
 }
 
 // channelDisplayTitle 绑定频道的展示标题（标题 → @用户名 → 数字 ID）。
-func channelDisplayTitle(b store.ChannelBinding) string {
+// rightsRecovered 上报一次"副本恢复同步"信号：权限类事件（如开启中）
+// 自动解决。事件从未发生时为静默 no-op。
+func (s *Service) rightsRecovered(ctx context.Context) {
+	if s.events != nil {
+		s.events.BindingChannelRightsRecovered(ctx)
+	}
+}
+
+// bindingChannelTitle 绑定频道的展示名（事件推送用，不做 HTML 转义）：
+// 标题优先，回退 @用户名，最后回退数字 ID。
+func bindingChannelTitle(b store.ChannelBinding) string {
 	if b.Title != "" {
-		return html.EscapeString(b.Title)
+		return b.Title
 	}
 	if b.Username != "" {
 		return "@" + b.Username
 	}
 	return strconv.FormatInt(b.ChannelID, 10)
+}
+
+func channelDisplayTitle(b store.ChannelBinding) string {
+	return html.EscapeString(bindingChannelTitle(b))
 }
 
 // notifyWindow 给解绑/提醒通知的 Bot API 调用一个独立短时间窗：不占用

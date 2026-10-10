@@ -11,7 +11,7 @@
 | 用户号被封 / 会话撤销 | `mtproto.banned` **Critical** 事件（穿透静音计划）；状态页显示封禁详情与处置指引 | 管理端导出备份 → 清理会话文件 → 新号扫码 |
 | Bot Token 失效（401） | Bot 标记停用（发送路由自动降级到其他 Bot）；`bot.banned` **Critical** 事件；名下排队任务标记 `BOT_DISABLED` 失败 | 管理端替换 Token（add + delete，重启生效） |
 | 缓存频道被封 | 服务不中断，仅失去秒级复用（回退完整提取）；写失败产生 `dump.channel_write_failed` **警告**事件（写回成功自动解决） | 管理端改缓存频道 ID（即时生效）→ 可选「迁移旧缓存」免重提取搬副本 |
-| 用户绑定频道失效 | 副本投递检测到频道已不存在 → 自动**软解绑**（记录保留、状态置已解绑）+ 私聊通知该用户；管理端可查、可删除 | 用户创建新频道重新 /bind；Bot 被移出权限的场景只提醒不解绑 |
+| 用户绑定频道失效 | 副本投递检测到频道已不存在 → 自动**软解绑**（记录保留、状态置已解绑）+ 私聊通知该用户 + `binding.channel_gone` **错误**事件推送管理员；Bot 被移出/权限不足只提醒不解绑，产生 `binding.channel_no_rights` **警告**事件（副本恢复同步自动解决）；管理端可查、可删除 | 用户创建新频道重新 /bind；Bot 被移出权限的场景由用户重新加回管理员自愈 |
 | 转发源频道被封 | 提取源：任务失败即产生 `source.channel_inaccessible` **错误**事件；监听源：周期探活发现 bot 被移出/源失效 → `watch.source_unavailable` **错误**事件（恢复自动解决） | 确认源状态：私有提取源用 /join 提交新邀请链接；监听源重新拉入 Bot 或在管理端移除 |
 
 Critical 事件（`mtproto.banned` / `bot.banned`）不受通知静音计划与最低级别门槛约束——封禁发生时即使静音窗口开启也会送达；仅当管理员显式关闭该事件或渠道不可用时才收不到。`backup.failed` 为 error 级。
@@ -213,6 +213,7 @@ Critical 事件（`mtproto.banned` / `bot.banned`）不受通知静音计划与�
 | --- | --- |
 | 系统自动 | 副本投递检测到频道不存在（chat not found / deactivated / banned）→ 自动**软解绑** |
 | 用户侧 | 收到 Bot 私聊通知：「您绑定的频道 XXX 已不可用，已自动解绑…」 |
+| 通知推送 | `binding.channel_gone` **错误（error）** 事件推送管理员（正文含频道展示名）；Bot 被移出/权限不足的不解绑提醒对应 `binding.channel_no_rights` **警告（warn）** 事件（副本恢复同步后自动解决） |
 | Web 管理端 | 频道绑定页该行显示「已解绑 · 频道已失效（自动解绑）」+ 时间，写审计 `channel_binding.auto_unbind` |
 
 ### 5.2 软解绑语义（v24 起）
@@ -348,3 +349,5 @@ Bot：
 | `source.channel_inaccessible` | 错误（error） | 提取源频道无法访问（被封禁/删除/读取账号未加入），相关任务失败 | 受限（按规则） |
 | `watch.source_unavailable` | 错误（error） | 监听源探活连续失败（Bot 被移出或源被封禁），全部恢复自动解决 | 受限（按规则） |
 | `dump.channel_write_failed` | 警告（warn） | 缓存频道写入失败（被封禁/失去发帖权限/配置有误），写回成功自动解决 | 受限（按规则） |
+| `binding.channel_gone` | 错误（error） | 用户绑定频道/群组本体消失（被封禁/删除/停用），已自动软解绑并私聊通知用户 | 受限（按规则） |
+| `binding.channel_no_rights` | 警告（warn） | Bot 被移出用户绑定频道/失去发言权限（未解绑），副本恢复同步自动解决 | 受限（按规则） |

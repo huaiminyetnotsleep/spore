@@ -87,3 +87,35 @@ func TestWatchSourcesUnavailableCapsTitles(t *testing.T) {
 		t.Fatalf("应折叠为 5 个 + Extra=2，得到 %d/%d", len(data.Sources), data.Extra)
 	}
 }
+
+// 绑定频道本体消失：error 事件，人工解决（解绑已是终态处置）。
+func TestBindingChannelGoneRaisesEvent(t *testing.T) {
+	h, st, snd := newSourceTestHub(t)
+
+	h.BindingChannelGone(context.Background(), "我的频道")
+
+	e := mustEvent(t, st, KeyBindingChannelGone)
+	if e.Status != store.EventOpen || e.Severity != SeverityError {
+		t.Fatalf("失效事件应为 open/error: %+v", e)
+	}
+	if snd.count() != 1 {
+		t.Fatalf("应推送管理员一次，得到 %d", snd.count())
+	}
+}
+
+// 绑定频道权限事件：warn 事件，副本恢复同步后自动解决。
+func TestBindingChannelNoRightsRaisesAndRecovers(t *testing.T) {
+	h, st, _ := newSourceTestHub(t)
+	ctx := context.Background()
+
+	h.BindingChannelNoRights(ctx, "@mychan")
+	e := mustEvent(t, st, KeyBindingChannelNoRights)
+	if e.Status != store.EventOpen || e.Severity != SeverityWarn {
+		t.Fatalf("权限事件应为 open/warn: %+v", e)
+	}
+
+	h.BindingChannelRightsRecovered(ctx)
+	if e := mustEvent(t, st, KeyBindingChannelNoRights); e.Status != store.EventResolved {
+		t.Fatalf("恢复后事件应为 resolved: %+v", e)
+	}
+}

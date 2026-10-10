@@ -42,6 +42,8 @@ var eventCatalog = []EventDefinition{
 	{Type: KeySourceInaccessible, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "提取源频道无法访问", Description: "提取源频道无法访问（可能已被封禁、删除或读取账号未加入），相关任务已失败；请检查源频道状态。"},
 	{Type: KeyWatchSourceUnavailable, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "监听源不可用", Description: "监听源无法访问（受理 bot 可能已被移出或源已被封禁），该源新消息将无法预热缓存；请在管理端确认源状态。", SupportsRecovery: true},
 	{Type: KeyDumpChannelWriteFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityWarn, Title: "缓存频道写入失败", Description: "缓存频道写入失败（可能已被封禁、bot 失去发帖权限或配置有误）；任务投递不受影响，但同链接暂无法秒回复用。", SupportsRecovery: true},
+	{Type: KeyBindingChannelGone, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "绑定频道已失效", Description: "用户绑定的转发频道/群组已不存在或被封禁，已自动软解绑并私聊通知该用户；详情见管理端频道绑定页。"},
+	{Type: KeyBindingChannelNoRights, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityWarn, Title: "Bot 失去绑定频道权限", Description: "机器人被移出用户绑定的频道/群组或失去发言权限，副本暂无法同步；未解绑，用户重新加回管理员后自愈。", SupportsRecovery: true},
 
 	// 活动通知：逐次即时推送，不写事件中心（审计已有 audit_log 覆盖）。
 	{Type: KeyWebAdminLogin, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "管理后台登录成功", Description: "有新的管理后台登录。"},

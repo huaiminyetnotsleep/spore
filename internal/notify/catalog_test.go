@@ -23,6 +23,8 @@ func TestCatalogCompleteAndReadOnly(t *testing.T) {
 		KeySourceInaccessible,
 		KeyWatchSourceUnavailable,
 		KeyDumpChannelWriteFailed,
+		KeyBindingChannelGone,
+		KeyBindingChannelNoRights,
 		KeyWebAdminLogin,
 		KeyUserApplication,
 		KeyChannelJoinRequest,

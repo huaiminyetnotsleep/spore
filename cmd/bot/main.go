@@ -340,6 +340,8 @@ func main() {
 		logger.Error("初始化频道绑定服务失败", "error", err.Error())
 		os.Exit(1)
 	}
+	// 绑定频道失效/权限事件经 Hub 推送管理员（用户私聊提醒之外的管理侧感知）。
+	bindingSvc.SetEvents(hub)
 
 	// Web 管理端（认证底座与管理页面）：首次部署生成访问密钥
 	// （明文仅打印一次到 stderr），随后以独立 goroutine 启动 HTTP 服务。

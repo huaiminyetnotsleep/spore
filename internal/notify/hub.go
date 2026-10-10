@@ -51,6 +51,11 @@ const (
 	KeyWatchSourceUnavailable = "watch.source_unavailable"    // 监听源探活不可用（bot 被移出或源被封禁）
 	KeyDumpChannelWriteFailed = "dump.channel_write_failed"   // 缓存频道写入失败（被封禁/失去权限/配置有误）
 
+	// 绑定频道失效事件：用户绑定的转发频道/群组（副本同步目标）。用户侧
+	// 已有私聊提醒与自动解绑，这里补齐管理员侧主动感知。
+	KeyBindingChannelGone     = "binding.channel_gone"      // 绑定频道本体消失（被封禁/删除/停用），已自动软解绑
+	KeyBindingChannelNoRights = "binding.channel_no_rights" // bot 被移出绑定频道/失去发言权限（可恢复，未解绑）
+
 	// 云盘下载（/download）事件源。
 	KeyCloudUploadFailed  = "cloud.upload_failed"  // 云盘任务连续失败（独立计数）
 	KeyCloudConfigInvalid = "cloud.config_invalid" // 云盘配置损坏或默认目的地悬空
@@ -524,6 +529,25 @@ func (h *Hub) WatchSourcesUnavailable(ctx context.Context, titles []string) {
 // （事件从未发生时为静默 no-op）。
 func (h *Hub) WatchSourcesRecovered(ctx context.Context) {
 	h.Recover(ctx, KeyWatchSourceUnavailable)
+}
+
+// BindingChannelGone 记录一次用户绑定频道/群组失效自动解绑（本体不存在/
+// 停用/被封禁）。title 为展示名，仅随推送展示；解绑本身已是终态处置且
+// 用户已获私聊指引，事件无需自动恢复（人工确认后解决）。
+func (h *Hub) BindingChannelGone(ctx context.Context, title string) {
+	h.Raise(ctx, KeyBindingChannelGone, SeverityError, BindingChannelData{Title: title})
+}
+
+// BindingChannelNoRights 记录机器人被移出绑定频道/失去发言权限（可恢复：
+// 未解绑，用户重新加回管理员后副本自愈）。
+func (h *Hub) BindingChannelNoRights(ctx context.Context, title string) {
+	h.Raise(ctx, KeyBindingChannelNoRights, SeverityWarn, BindingChannelData{Title: title})
+}
+
+// BindingChannelRightsRecovered 副本重新同步成功后自动解决权限事件
+// （事件从未发生时为静默 no-op）。
+func (h *Hub) BindingChannelRightsRecovered(ctx context.Context) {
+	h.Recover(ctx, KeyBindingChannelNoRights)
 }
 
 // CheckTempDir 抽样检查临时目录占用：超过阈值时产生（或合并）事件，
