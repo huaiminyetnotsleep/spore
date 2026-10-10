@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.39.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.38.0...v1.39.0) (2026-10-10)
+
+
+### Features
+
+* **recovery:** 独立任务详情页、可下拉可输入表单与跨机器人防重 ([d1e762d](https://github.com/huaiminyetnotsleep/spore/commit/d1e762df504418444b9ed39876c80f05ac79a43c))
+
 ## [1.38.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.37.0...v1.38.0) (2026-10-10)
 
 
