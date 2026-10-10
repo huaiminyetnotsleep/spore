@@ -137,6 +137,11 @@ const MTProtoPage = lazy(() =>
 const RecoveryPage = lazy(() =>
   import("../features/recovery/RecoveryPage").then((m) => ({ default: m.RecoveryPage })),
 );
+const RecoveryJobDetailPage = lazy(() =>
+  import("../features/recovery/RecoveryJobDetailPage").then((m) => ({
+    default: m.RecoveryJobDetailPage,
+  })),
+);
 const AuditPage = lazy(() =>
   import("../features/audit/AuditPage").then((m) => ({ default: m.AuditPage })),
 );
@@ -257,6 +262,16 @@ export const routeMeta = [
     groupKey: "request-channels",
     icon: <HistoryOutlined />,
     menuVisible: true,
+  },
+  {
+    key: "recovery-detail",
+    path: "/recovery/jobs/:id",
+    label: "恢复任务详情",
+    title: "恢复任务详情",
+    groupKey: "request-channels",
+    icon: <HistoryOutlined />,
+    menuVisible: false,
+    parentKey: "recovery",
   },
   {
     key: "watch-events",
@@ -566,6 +581,7 @@ export function AppRoutes() {
         <Route path="/watch-events" element={<WatchEventsPage />} />
         <Route path="/cloud-drive" element={<CloudDrivePage />} />
         <Route path="/recovery" element={<RecoveryPage />} />
+        <Route path="/recovery/jobs/:id" element={<RecoveryJobDetailPage />} />
         <Route path="/invite-approvals" element={<JoinApprovalsPage />} />
         <Route path="/joined-channels" element={<JoinedChannelsPage />} />
         <Route path="/join-settings" element={<JoinSettingsPage />} />

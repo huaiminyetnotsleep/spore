@@ -107,7 +107,7 @@ func (s *Store) CreateRecoveryJob(ctx context.Context, j RecoveryJob, items []Re
 			// 身份只锚定来源与最小成员：历史后补相册成员会改变成员集合，
 			// 让成员数组进入身份会绕过既有结果核对。
 			it.IdentityKey = recoveryIdentity(it.ChannelKey, it.MessageID)
-			conflict, superseded, e := tx.recoveryOverlap(ctx, it.ChannelKey, it.MemberIDs, j.TargetChatID, j.BotID, j.ID)
+			conflict, superseded, e := tx.recoveryOverlap(ctx, it.ChannelKey, it.MemberIDs, j.TargetChatID, j.ID)
 			if e != nil {
 				return e
 			}
@@ -323,11 +323,11 @@ func (s *Store) ClaimRecoveryItem(ctx context.Context, jobID int64) (RecoveryIte
 		if e != nil {
 			return wrapDB("选择恢复条目", e)
 		}
-		var target, bot int64
-		if e := tx.ex.QueryRowContext(ctx, `SELECT target_chat_id,bot_id FROM recovery_jobs WHERE id=?`, jobID).Scan(&target, &bot); e != nil {
+		var target int64
+		if e := tx.ex.QueryRowContext(ctx, `SELECT target_chat_id FROM recovery_jobs WHERE id=?`, jobID).Scan(&target); e != nil {
 			return wrapDB("读取恢复任务目标", e)
 		}
-		conflict, superseded, e := tx.recoveryOverlap(ctx, it.ChannelKey, it.MemberIDs, target, bot, jobID)
+		conflict, superseded, e := tx.recoveryOverlap(ctx, it.ChannelKey, it.MemberIDs, target, jobID)
 		if e != nil {
 			return e
 		}
@@ -393,17 +393,18 @@ func recoveryIdentityPrefix(key string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(key) + ":%"
 }
 
-// recoveryPriorResult 是同目标同Bot下与本候选重叠的一条旧恢复结果。
+// recoveryPriorResult 是同目标下与本候选重叠的一条旧恢复结果。
 type recoveryPriorResult struct {
 	status  string
 	sentIDs []int
 }
 
-// recoveryOverlap 在同目标同Bot的历史结果中按成员交集核对：
+// recoveryOverlap 在同目标的历史结果中按成员交集核对，不区分执行 Bot：
+// 已知发送坐标属于目标聊天本身，换机器人继续恢复时旧结果同样有效。
 // processing/uncertain 与候选相交即冲突（不能盲目重发）；succeeded 覆盖
 // 候选全部成员才算已完成。精确身份相等会漏掉成员集合增长的情况。
-func (s *Store) recoveryOverlap(ctx context.Context, key string, members []int, target, bot, excludeJob int64) (conflict, superseded *recoveryPriorResult, err error) {
-	rows, err := s.ex.QueryContext(ctx, `SELECT i.status,i.member_ids_json,i.sent_ids_json FROM recovery_items i JOIN recovery_jobs j ON j.id=i.job_id WHERE i.identity_key LIKE ? ESCAPE '\' AND i.job_id!=? AND j.target_chat_id=? AND j.bot_id=? AND i.status IN ('succeeded','processing','uncertain')`, recoveryIdentityPrefix(key), excludeJob, target, bot)
+func (s *Store) recoveryOverlap(ctx context.Context, key string, members []int, target, excludeJob int64) (conflict, superseded *recoveryPriorResult, err error) {
+	rows, err := s.ex.QueryContext(ctx, `SELECT i.status,i.member_ids_json,i.sent_ids_json FROM recovery_items i JOIN recovery_jobs j ON j.id=i.job_id WHERE i.identity_key LIKE ? ESCAPE '\' AND i.job_id!=? AND j.target_chat_id=? AND i.status IN ('succeeded','processing','uncertain')`, recoveryIdentityPrefix(key), excludeJob, target)
 	if err != nil {
 		return nil, nil, wrapDB("核对同目标恢复结果", err)
 	}

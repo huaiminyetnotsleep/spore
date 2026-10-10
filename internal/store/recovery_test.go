@@ -90,6 +90,11 @@ func TestRecoveryMemberGrowthCannotBypassPriorOutput(t *testing.T) {
 	if apperr.From(err).Code != apperr.CodeStoreConstraint {
 		t.Fatalf("grown members bypassed uncertain: %v", err)
 	}
+	// 换机器人同目标同样受约束：已知发送坐标属于目标聊天，防重不区分执行 Bot。
+	_, err = s.CreateRecoveryJob(ctx, RecoveryJob{TargetChatID: j.TargetChatID, BotID: j.BotID + 100}, []RecoveryItem{{ChannelKey: "news", MessageID: 1, MemberIDs: []int{1}, CacheCopies: []RecoveryCopy{}}})
+	if apperr.From(err).Code != apperr.CodeStoreConstraint {
+		t.Fatalf("bot switch bypassed uncertain: %v", err)
+	}
 	// 部分 succeeded 重叠：旧 {2} 成功，新 [1,2] 须保持待处理（成员1仍未恢复，跳过会丢内容）。
 	finishAt := func(target, bot int64, items []RecoveryItem, sent []int) {
 		t.Helper()
@@ -130,6 +135,17 @@ func TestRecoveryMemberGrowthCannotBypassPriorOutput(t *testing.T) {
 	}
 	if j5.Skipped != 1 || j5.Pending != 0 {
 		t.Fatalf("contained succeeded must skip: %+v", j5)
+	}
+	// 换机器人继续同目标：旧 Bot 已成功的项跨 Bot 跳过，不重复发送。
+	if err = s.SetRecoveryJobState(ctx, j5.ID, "completed", ""); err != nil {
+		t.Fatal(err)
+	}
+	j6, err := s.CreateRecoveryJob(ctx, RecoveryJob{TargetChatID: -100997, BotID: 8}, []RecoveryItem{{ChannelKey: "news", MessageID: 3, MemberIDs: []int{3}, CacheCopies: []RecoveryCopy{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j6.Skipped != 1 || j6.Pending != 0 {
+		t.Fatalf("bot-switch continuation must skip known output: %+v", j6)
 	}
 }
 func TestRecoveryClaimUsesMemberIntersection(t *testing.T) {

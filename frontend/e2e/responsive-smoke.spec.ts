@@ -663,6 +663,7 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/channel-settings", heading: "频道设置" },
   { path: "/admin/cloud-drive", heading: "云盘下载" },
   { path: "/admin/recovery", heading: "历史恢复" },
+  { path: "/admin/recovery/jobs/71", heading: "恢复任务详情" },
   { path: "/admin/invite-approvals", heading: "加入审批" },
   { path: "/admin/joined-channels", heading: "已加入频道" },
   { path: "/admin/join-settings", heading: "受邀设置" },
@@ -810,18 +811,21 @@ test.describe("全路由响应式 smoke", () => {
     await expect(page.locator(".page-scaffold__title")).toHaveText("请求记录");
   });
 
-  test("400px：历史恢复预检和选中详情保持表内滚动", async ({ page }) => {
+  test("400px：历史恢复预检和独立任务详情页保持表内滚动", async ({ page }) => {
     await page.setViewportSize(PHONE_VIEWPORT);
     await mockAdminAPI(page);
     await gotoAdmin(page, "/admin/recovery");
     await page.getByLabel("目标频道 / 超级群组").fill("-1001234567890");
     await page.getByRole("button", { name: "权限预检" }).click();
     await expect(page.getByRole("button", { name: "开始恢复" })).toBeVisible();
+    await expectNoHorizontalOverflow(page, "历史恢复预检");
+    await expectActionsWithinViewport(page, "历史恢复预检");
+    // 独立详情页：点击任务链接整页跳转 /admin/recovery/jobs/71
     await page.getByRole("button", { name: "任务 #71" }).click();
     await expect(page.getByText("部分发送，请核对目标。", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "继续任务" })).toBeVisible();
-    await expectNoHorizontalOverflow(page, "历史恢复预检与详情");
-    await expectActionsWithinViewport(page, "历史恢复预检与详情");
+    await expectNoHorizontalOverflow(page, "历史恢复任务详情");
+    await expectActionsWithinViewport(page, "历史恢复任务详情");
   });
 
   test("400px：用户新增 Modal 主按钮在视口内且可关闭", async ({ page }) => {

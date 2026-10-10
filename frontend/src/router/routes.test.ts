@@ -21,7 +21,7 @@ describe("SPA 导航信息架构", () => {
       "系统运维",
     ]);
     expect(navRoutes).toHaveLength(26);
-    expect(routeMeta).toHaveLength(29);
+    expect(routeMeta).toHaveLength(30);
     expect(navigationGroups.flatMap((group) => group.routeKeys)).toEqual([
       "overview",
       "stats",
@@ -69,8 +69,10 @@ describe("SPA 导航信息架构", () => {
     expect(getActiveNavRoute("/users/123")?.key).toBe("users");
     expect(getActiveNavRoute("/requests/456")?.key).toBe("requests");
     expect(getActiveNavRoute("/channels/news")?.key).toBe("channels");
+    expect(getActiveNavRoute("/recovery/jobs/71")?.key).toBe("recovery");
     expect(getActiveNavRoute("/users/123/extra")).toBeUndefined();
     expect(getNavigationContext("/users/123")?.parent?.key).toBe("users");
+    expect(getNavigationContext("/recovery/jobs/71")?.parent?.key).toBe("recovery");
     expect(getNavigationContext("/users/123/extra")).toBeUndefined();
   });
 
