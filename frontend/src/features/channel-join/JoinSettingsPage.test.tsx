@@ -53,6 +53,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     tg_reuse_enabled: true,
     dump_channel_id: 0,
     dump_channel_title: "",
+    dump_channels: [],
     join_enabled: false,
     join_auto_leave_external: false,
     join_require_approval: true,

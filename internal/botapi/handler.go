@@ -965,6 +965,9 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 			"无法处理邀请「%s」：链接无效、已过期或指向普通群组（仅支持频道/超级群组）。", title))
 	case watch.SubmitReaderUnavailable:
 		sendText(ctx, opt, snd, chatID, "系统读取账号暂时不可用，请稍后重试。")
+	case watch.SubmitDumpChannelConflict:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"「%s」是缓存频道，不能同时作为监听源：预热副本写回会触发循环转发。请换一个频道，或先在「频道设置」移除该缓存频道。", title))
 	default:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInternal))
 	}

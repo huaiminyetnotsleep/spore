@@ -266,6 +266,16 @@ export const resolveEvent = (id: number): Promise<WriteOK> =>
 
 // ---- 系统设置 ----
 
+/** 缓存频道列表单项：已配置项传 id（+ enabled 切换），新增项传 target。 */
+export interface DumpChannelInput {
+  /** 已配置缓存频道的数字 ID（-100…）；与 target 二选一。 */
+  id?: number;
+  /** 新增频道目标（@用户名 / t.me 链接 / -100 数字 ID）；与 id 二选一。 */
+  target?: string;
+  /** 启用状态；缺省 true（已配置项缺省保持原状态）。 */
+  enabled?: boolean;
+}
+
 /** 设置保存载荷：缺省字段不变更；媒体大小沿用"数值 + 单位"原文。 */
 export interface SettingsSaveInput {
   timezone?: string;
@@ -288,8 +298,12 @@ export interface SettingsSaveInput {
   channel_copy_enabled?: boolean;
   /** TG 链接复用总开关（copyMessages 直拷跳过重复下载上传）；缺省不变更。 */
   tg_reuse_enabled?: boolean;
-  /** 缓存频道目标（@用户名 / t.me 链接 / -100 数字 ID）；空串清除；缺省不变更。 */
-  dump_channel?: string;
+  /**
+   * 缓存频道列表（整体替换语义；缺省不变更，传空数组清空 = 复用关闭）。
+   * 已配置频道传 {id, enabled}（启停切换/保序，标题保持快照）；新增频道传
+   * {target}（@用户名 / t.me 链接 / -100 数字 ID，服务端校验解析后默认启用）。
+   */
+  dump_channels?: DumpChannelInput[];
   /** 频道加入（/join）配置；缺省不变更（join_max_channels 0 = 不限）。 */
   join_enabled?: boolean;
   join_auto_leave_external?: boolean;

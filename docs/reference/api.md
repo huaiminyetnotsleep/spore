@@ -682,17 +682,17 @@
 
 ## 5b. 缓存补写（转存缓存频道）
 
-本组端点对**任意终态**请求记录（成功、失败、取消，含纯文本）按原链接重新获取源消息，把无脚注干净副本直接发送到缓存频道（即 TG 链接复用的副本来源）并落副本坐标（`dump_entries`），供同链接后续提交复用。与云盘补存不同，缓存补写**全程不向原用户发送任何消息**（成功失败都不发），仅产出缓存频道副本与新的 `delivery_mode=dump` 请求行。缓存频道未在系统设置或 `DUMP_CHANNEL_ID` 配置时本组功能不可用（`dump_disabled`）。
+本组端点对**任意终态**请求记录（成功、失败、取消，含纯文本）按原链接重新获取源消息，把无脚注干净副本直接发送到启用的缓存频道（即 TG 链接复用的副本来源）并逐频道落副本坐标（`dump_entries`），供同链接后续提交复用。多缓存频道部署下按启用频道扇出：首个发送成功的频道做完整重传（决定任务成败），其余启用频道从该副本服务端复制，单频道失败只告警不阻断。与云盘补存不同，缓存补写**全程不向原用户发送任何消息**（成功失败都不发），仅产出缓存频道副本与新的 `delivery_mode=dump` 请求行。没有任何启用缓存频道（未配置或全部停用）时本组功能不可用（`dump_disabled`）。
 
 ### POST /api/v1/requests/{id}/dump-backfill
 
 单条缓存补写（认证 + CSRF）。无请求体（空 JSON `{}` 亦可）。
 
-资格校验：请求存在、已终态、缓存频道已配置（settings 的缓存频道或 `DUMP_CHANNEL_ID` 环境变量）、缓存频道无同链接副本。通过后新建 `delivery_mode=dump` 的请求行（沿用原用户与链接，`parent_request_id` 指向原请求，状态 `queued`）并入队执行；执行阶段会再次复核副本存在性与缓存频道配置（覆盖并发窗口），源消息已被删除时新行以明确错误失败。动作写 `request.dump_backfill` 审计。
+资格校验：请求存在、已终态、存在启用缓存频道（settings 的缓存频道列表或 `DUMP_CHANNEL_ID` 环境变量）、全部启用频道均无同链接副本。通过后新建 `delivery_mode=dump` 的请求行（沿用原用户与链接，`parent_request_id` 指向原请求，状态 `queued`）并入队执行；执行阶段会再次复核副本存在性与缓存频道配置（覆盖并发窗口），源消息已被删除时新行以明确错误失败。动作写 `request.dump_backfill` 审计。
 
 响应 `200`：`{"ok":true,"created_request_id":12}`（新建 dump 请求行 ID），该行可在请求列表（「缓存补写」投递方式标签）与详情页查看，处理进度照常展示。
 
-错误：`404`（请求不存在）；`409 STORE_CONSTRAINT`（资格校验未通过：未终态或缓存频道已有该链接副本）；`503 SERVICE_UNAVAILABLE`（缓存频道未配置）；`503 QUEUE_FULL`（队列已满：新请求行标记 `QUEUE_FULL` 失败，可经现有重试入口重试，重试保留缓存补写投递方式）。
+错误：`404`（请求不存在）；`409 STORE_CONSTRAINT`（资格校验未通过：未终态或启用缓存频道已有该链接副本）；`503 SERVICE_UNAVAILABLE`（缓存频道未配置或全部停用）；`503 QUEUE_FULL`（队列已满：新请求行标记 `QUEUE_FULL` 失败，可经现有重试入口重试，重试保留缓存补写投递方式）。
 
 > 缓存补写任务与所有任务一致仅在 MTProto 用户会话就绪期间执行；服务离线期排队任务会被丢弃并标记 `INTERRUPTED`，可在 Web 侧重试。
 
@@ -718,8 +718,8 @@
 | --- | --- |
 | `not_found` | 请求不存在 |
 | `not_finished` | 请求未终态（排队或处理中） |
-| `already_dumped` | 缓存频道已有该链接的有效副本。有效性经试探复制判定（与同链接复用同源）：副本消息已被删除（如在缓存频道客户端手动删除）时自动放行重新补写，重写后按最新副本坐标生效 |
-| `dump_disabled` | 缓存频道未配置 |
+| `already_dumped` | 启用缓存频道已有该链接的有效副本（多缓存频道在全部启用频道范围内查命中）。有效性经试探复制判定（与同链接复用同源）：副本消息已被删除（如在缓存频道客户端手动删除）时自动放行重新补写，重写后按最新副本坐标生效 |
+| `dump_disabled` | 缓存频道未配置或全部停用 |
 
 错误：`400`（数量越界/ID 非法/请求体非法）。
 
@@ -1232,8 +1232,9 @@ cloud-drive.json.enc
 | `memory_budget_bytes` | int64 | 内存管道进程级预算（字节；即时生效，settings 值优先于环境变量 `MEMORY_BUDGET`） |
 | `channel_copy_enabled` | bool | 绑定频道投递总开关（任务成功后自动发副本到用户绑定频道；即时生效；缺省 `true`） |
 | `tg_reuse_enabled` | bool | 缓存频道复用总开关（即时生效；缺省 `true`） |
-| `dump_channel_id` | int64 | 缓存频道数字 ID（0 = 未配置；即时生效，settings 值优先于环境变量 `DUMP_CHANNEL_ID`） |
-| `dump_channel_title` | string | 缓存频道标题（展示用） |
+| `dump_channels` | array | 缓存频道列表，每项 `{channel_id, title, enabled}`：开启的频道在任务成功后各写一份干净副本（扇出），复用/补写/预热在全部启用频道范围内查命中；空数组 = 未配置（无复用）。最多 10 个，按 ID 去重（即时生效；列表键优先于旧单频道键与 `DUMP_CHANNEL_ID`） |
+| `dump_channel_id` | int64 | 首个启用缓存频道数字 ID（0 = 未配置或全部停用；兼容派生值） |
+| `dump_channel_title` | string | 首个启用缓存频道标题（展示用；兼容派生值） |
 | `join_enabled` | bool | 频道加入总开关（即时生效；缺省 `false`） |
 | `join_auto_leave_external` | bool | 自动退出外部拉入频道（惰性检测；缺省 `false`） |
 | `join_require_approval` | bool | 普通用户加入需号主审批（缺省 `true`） |
@@ -1264,7 +1265,7 @@ cloud-drive.json.enc
 | `max_links_per_message` | int | 1–50；缺省保持不变，保存后即时影响新输入 |
 | `channel_copy_enabled` | bool | 绑定频道投递总开关；缺省保持不变 |
 | `tg_reuse_enabled` | bool | 缓存频道复用总开关；缺省保持不变 |
-| `dump_channel` | string | 缓存频道目标：`@用户名` / `t.me` 链接 / `-100` 数字 ID；经 Bot 校验（频道存在且 Bot 可发帖）后保存数字 ID；空串清除配置（显式 `0` 覆盖环境变量） |
+| `dump_channels` | array | 缓存频道列表，**整体替换语义**（缺省不变更，空数组清空 = 复用关闭）：已配置频道传 `{id, enabled}`（按 ID 切换启用状态、保序，标题保持快照）；新增频道传 `{target}`（`@用户名` / `t.me` 链接 / `-100` 数字 ID，经 Bot 校验后保存数字 ID，默认启用；与已有监听源冲突时拒绝，防循环转发）。数量上限 10、按解析 ID 去重；首次修改即把旧单频道配置迁移到列表键 |
 | `join_enabled` / `join_auto_leave_external` / `join_require_approval` / `join_mute_enabled` / `join_archive_enabled` | bool | 频道加入配置，逐项可选 |
 | `join_max_channels` | int | 0–200（0 = 不限） |
 | `watch_apply_enabled` / `watch_require_approval` | bool | 监听源（/watch）申请配置，逐项可选 |
@@ -1360,7 +1361,7 @@ cloud-drive.json.enc
 
 ### GET /api/v1/notification/event-catalog
 
-返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error` / `critical`（封禁类：`mtproto.banned` / `bot.banned`，穿透静音计划与最低级别门槛）。源与缓存频道失效类：`source.channel_inaccessible`（error，提取源无法访问）、`watch.source_unavailable`（error，监听源探活不可用，支持自动恢复）、`dump.channel_write_failed`（warn，缓存频道写入失败，支持自动恢复）、`binding.channel_gone`（error，用户绑定频道失效已自动解绑）、`binding.channel_no_rights`（warn，Bot 失去绑定频道权限，支持自动恢复）。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
+返回认证用户可见的完整编译期事件目录，不依赖历史 `events` 表。响应为数组，每项固定字段：`type`、`category`、`type_label`、`severity`、`title`、`description`、`supports_recovery`。当前类别为 `system_alert` / `system_recovery` / `activity`，严重级别为 `info` / `warn` / `error` / `critical`（封禁类：`mtproto.banned` / `bot.banned`，穿透静音计划与最低级别门槛）。源与缓存频道失效类：`source.channel_inaccessible`（error，提取源无法访问）、`watch.source_unavailable`（error，监听源探活不可用，支持自动恢复）、`dump.channel_write_failed`（warn，缓存频道写入失败，支持自动恢复；事件数据含失败频道 ID，多缓存频道部署下仅该频道受影响）、`binding.channel_gone`（error，用户绑定频道失效已自动解绑）、`binding.channel_no_rights`（warn，Bot 失去绑定频道权限，支持自动恢复）。`activity` 为活动通知（`web.admin_login` 管理后台登录成功、`user.application` 新用户申请、`channel.join_request` 频道加入申请）：逐次即时推送、不写入事件中心、不受冷却与最低严重级别约束，仍可按类别/事件/渠道在策略中开关（默认开启）。
 
 ### GET /api/v1/notification/policy
 
@@ -1614,7 +1615,7 @@ MTProto 状态响应（`GET /api/v1/mtproto/status`）在 `state=offline` 时附
 
 ## 12b. 缓存频道迁移（v24）
 
-把旧缓存频道中仍可读的副本整批复制到当前缓存频道（免重新提取），供切换缓存频道或升级后重建秒级复用。业务核心在 `internal/dumpcache`：分批限速执行、后台运行、断点可续（重启后重新发起继续）；源频道不可读时中止（剩余条目由复用自愈重建）。
+把旧缓存频道中仍可读的副本整批复制到当前**全部启用**的缓存频道（免重新提取，逐频道落新消息坐标），供新增/切换缓存频道或升级后重建秒级复用。业务核心在 `internal/dumpcache`：分批限速执行、后台运行、断点可续（重启后重新发起继续）；目标频道已有现行条目自动跳过；源频道不可读时中止（剩余条目由复用自愈重建）。
 
 ### GET /api/v1/dumpcache/migrate
 
@@ -1622,14 +1623,14 @@ MTProto 状态响应（`GET /api/v1/mtproto/status`）在 `state=offline` 时附
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `configured` | bool | 当前是否已配置缓存频道 |
-| `channel_id` | int64 | 当前缓存频道 ID |
+| `configured` | bool | 当前是否存在启用的缓存频道 |
+| `channel_id` | int64 | 首个启用缓存频道 ID（兼容派生值；多频道以 `progress.to` 为准） |
 | `suggest_from` | int64 | 建议源频道：settings 键 `dump_channel_legacy_id`（首次查询时若存在 `dump_channel_id=0` 的升级前存量条目，按当时生效频道记录一次） |
-| `progress` | object | `{running, from, to, total, done, failed, skipped, started_at, finished_at?, last_error?}` |
+| `progress` | object | `{running, from, to, total, done, failed, skipped, started_at, finished_at?, last_error?}`；`to` 为目标启用缓存频道 ID 数组（发起时快照，源频道除外） |
 
 ### POST /api/v1/dumpcache/migrate
 
-发起迁移（认证 + CSRF）。请求体：`{"from_channel_id": -100…}`。拒绝条件（受控 400）：未配置缓存频道、源频道即当前频道、已有迁移进行中、ID 非法。响应 `{"ok":true,"progress":…}`。审计：`dumpcache.migrate`。
+发起迁移（认证 + CSRF）。请求体：`{"from_channel_id": -100…}`。目标为当前全部启用的缓存频道（源频道除外；源频道仍在启用集合时其条目保留有效）。拒绝条件（受控 400）：无启用缓存频道、源频道即全部启用频道、已有迁移进行中、ID 非法。响应 `{"ok":true,"progress":…}`。审计：`dumpcache.migrate`。
 
 ---
 

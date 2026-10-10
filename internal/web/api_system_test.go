@@ -167,7 +167,7 @@ func TestAPISettingsTGReuseSwitch(t *testing.T) {
 	}
 }
 
-func TestAPISettingsDumpChannel(t *testing.T) {
+func TestAPISettingsDumpChannels(t *testing.T) {
 	binder := &fakeChannelBinder{verifyID: -1001234567890, verifyTitle: "Spore Cache"}
 	e := newTestEnvOpts(t, func(_ *config.Config, o *Options) { o.Bindings = binder })
 	j := e.login(t)
@@ -176,63 +176,131 @@ func TestAPISettingsDumpChannel(t *testing.T) {
 
 	var before apiSettingsView
 	getAPIJSON(t, e, j, "/api/v1/settings", &before)
-	if before.DumpChannelID != 0 || before.DumpChannelTitle != "" {
+	if len(before.DumpChannels) != 0 || before.DumpChannelID != 0 || before.DumpChannelTitle != "" {
 		t.Fatalf("缺省应未配置缓存频道: %+v", before)
 	}
 
-	// 配置：目标经 binding 校验后保存数字 ID 与标题
-	resp := e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channel":"@sporecache"}`)
+	// 添加：目标经 binding 校验后写入列表（默认启用），兼容派生值同步
+	resp := e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"target":"@sporecache"}]}`)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("配置缓存频道应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+		t.Fatalf("添加缓存频道应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
 	}
 	if binder.verifyTarget != "@sporecache" {
 		t.Fatalf("应经 binding 校验目标，得到 %q", binder.verifyTarget)
 	}
-	if got := LoadDumpChannelID(ctx, e.st); got != -1001234567890 {
-		t.Fatalf("应保存数字 ID: %d", got)
+	saved := syscfg.LoadDumpChannels(ctx, e.st)
+	if len(saved) != 1 || saved[0].ChannelID != -1001234567890 ||
+		saved[0].Title != "Spore Cache" || !saved[0].Enabled {
+		t.Fatalf("应保存启用的频道项: %+v", saved)
 	}
-	if got := LoadDumpChannelTitle(ctx, e.st); got != "Spore Cache" {
-		t.Fatalf("应保存标题: %q", got)
+	if !e.containsAction("settings.dump_channels") {
+		t.Error("配置变更应写审计 settings.dump_channels")
 	}
-	if !e.containsAction("settings.dump_channel") {
-		t.Error("配置变更应写审计 settings.dump_channel")
+	var after apiSettingsView
+	getAPIJSON(t, e, j, "/api/v1/settings", &after)
+	if len(after.DumpChannels) != 1 || after.DumpChannelID != -1001234567890 || after.DumpChannelTitle != "Spore Cache" {
+		t.Fatalf("视图应含列表与派生值: %+v", after)
 	}
 
 	// 校验失败（非频道/无权限）：受控 400，配置不变
 	binder.verifyErr = errors.New("not postable")
-	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channel":"@bad"}`)
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"target":"@bad"}]}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("校验失败应 400，得到 %d", resp.StatusCode)
 	}
-	if got := LoadDumpChannelID(ctx, e.st); got != -1001234567890 {
-		t.Fatalf("校验失败不应改动配置: %d", got)
+	if got := syscfg.LoadDumpChannels(ctx, e.st); len(got) != 1 {
+		t.Fatalf("校验失败不应改动配置: %+v", got)
 	}
 
-	// 清除：空串 → 0
+	// 重复添加同一目标：400
 	binder.verifyErr = nil
-	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channel":""}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("清除应 200，得到 %d", resp.StatusCode)
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-1001234567890},{"target":"@sporecache"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("重复添加应 400，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
 	}
-	if got := LoadDumpChannelID(ctx, e.st); got != 0 {
-		t.Fatalf("清除后应为 0: %d", got)
+
+	// 停用：按 ID 传 enabled=false；派生值归零（无启用频道）
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-1001234567890,"enabled":false}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("停用应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	saved = syscfg.LoadDumpChannels(ctx, e.st)
+	if len(saved) != 1 || saved[0].Enabled {
+		t.Fatalf("应保存停用状态: %+v", saved)
+	}
+	getAPIJSON(t, e, j, "/api/v1/settings", &after)
+	if after.DumpChannelID != 0 || after.DumpChannelTitle != "" {
+		t.Fatalf("无启用频道时派生值应为零值: %+v", after)
+	}
+
+	// 追加第二个频道（整体替换语义：已有项按 ID 保序保留，新增项停用加入）
+	binder2 := &fakeChannelBinder{verifyID: -1001234567890, verifyTitle: "Cache A"}
+	e2 := newTestEnvOpts(t, func(_ *config.Config, o *Options) { o.Bindings = binder2 })
+	j2 := e2.login(t)
+	csrf2 := apiCSRFToken(t, e2, j2)
+	resp = e2.apiPost(j2, "/api/v1/settings", csrf2, `{"dump_channels":[{"target":"@cacheA"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("添加首个频道应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	binder2.verifyID, binder2.verifyTitle = -100777, "Cache B"
+	resp = e2.apiPost(j2, "/api/v1/settings", csrf2,
+		`{"dump_channels":[{"id":-1001234567890},{"target":"@cacheB","enabled":false}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("多频道添加应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	saved2 := syscfg.LoadDumpChannels(ctx, e2.st)
+	if len(saved2) != 2 || saved2[0].ChannelID != -1001234567890 || !saved2[0].Enabled ||
+		saved2[0].Title != "Cache A" || saved2[1].ChannelID != -100777 || saved2[1].Enabled {
+		t.Fatalf("应保存两频道（第二项停用，首项标题保持快照）: %+v", saved2)
+	}
+
+	// 移除：整体替换为不含该项的列表（空列表 = 全部清除）
+	resp = e2.apiPost(j2, "/api/v1/settings", csrf2, `{"dump_channels":[]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("清空应 200，得到 %d", resp.StatusCode)
+	}
+	if got := syscfg.LoadDumpChannels(ctx, e2.st); len(got) != 0 {
+		t.Fatalf("清空后列表应为空: %+v", got)
 	}
 }
 
-func TestEffectiveDumpChannelIDSettingsOverrideEnv(t *testing.T) {
+func TestEffectiveDumpChannelsFallbackChain(t *testing.T) {
 	e := newTestEnv(t, func(c *config.Config) { c.DumpChannelID = -1009999999999 })
 	ctx := context.Background()
 
-	// settings 缺失：回落 env
-	if got := LoadEffectiveDumpChannelID(ctx, e.st, e.srv.cfg.DumpChannelID); got != -1009999999999 {
-		t.Fatalf("settings 缺失应回落 env，得到 %d", got)
+	// settings 缺失：旧键与列表键都缺失 → 回落 env（折算为单条启用项）
+	channels := syscfg.LoadEffectiveDumpChannels(ctx, e.st, e.srv.cfg.DumpChannelID)
+	if len(channels) != 1 || channels[0].ChannelID != -1009999999999 || !channels[0].Enabled {
+		t.Fatalf("settings 缺失应回落 env: %+v", channels)
 	}
-	// Web 清除落显式 0：必须覆盖 env，不得重新启用
-	if err := e.st.SetSetting(ctx, settingKeyDumpChannelID, "0"); err != nil {
+	// 旧键显式 0（Web 端旧版「清除配置」的产物）：必须覆盖 env，不得重新启用
+	if err := e.st.SetSetting(ctx, "dump_channel_id", "0"); err != nil {
 		t.Fatalf("写显式关闭失败: %v", err)
 	}
-	if got := LoadEffectiveDumpChannelID(ctx, e.st, e.srv.cfg.DumpChannelID); got != 0 {
-		t.Fatalf("settings 显式 0 应覆盖 env，得到 %d", got)
+	channels = syscfg.LoadEffectiveDumpChannels(ctx, e.st, e.srv.cfg.DumpChannelID)
+	if len(channels) != 0 {
+		t.Fatalf("旧键显式 0 应覆盖 env: %+v", channels)
+	}
+	// 旧键配置了频道：折算为单条启用项（标题取旧标题键快照）
+	if err := e.st.SetSetting(ctx, "dump_channel_id", "-1001234567890"); err != nil {
+		t.Fatalf("写旧键失败: %v", err)
+	}
+	if err := e.st.SetSetting(ctx, "dump_channel_title", `"Spore Cache"`); err != nil {
+		t.Fatalf("写旧标题键失败: %v", err)
+	}
+	channels = syscfg.LoadEffectiveDumpChannels(ctx, e.st, e.srv.cfg.DumpChannelID)
+	if len(channels) != 1 || channels[0].ChannelID != -1001234567890 ||
+		channels[0].Title != "Spore Cache" || !channels[0].Enabled {
+		t.Fatalf("旧键应折算为单条启用项: %+v", channels)
+	}
+	// 列表键写入（含空列表）即完全接管，优先于旧键与 env
+	if err := syscfg.SaveDumpChannels(ctx, e.st, []syscfg.DumpChannel{
+		{ChannelID: -100555, Title: "New", Enabled: true}}); err != nil {
+		t.Fatalf("写列表键失败: %v", err)
+	}
+	channels = syscfg.LoadEffectiveDumpChannels(ctx, e.st, e.srv.cfg.DumpChannelID)
+	if len(channels) != 1 || channels[0].ChannelID != -100555 {
+		t.Fatalf("列表键应接管配置: %+v", channels)
 	}
 }
 

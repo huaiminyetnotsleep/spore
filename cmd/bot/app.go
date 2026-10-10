@@ -444,11 +444,11 @@ func (h *dumpCacheHolder) get() *dumpcache.Service {
 
 func (h *dumpCacheHolder) Enabled() bool { s := h.get(); return s != nil && s.Enabled() }
 
-func (h *dumpCacheHolder) Channel() (int64, bool) {
+func (h *dumpCacheHolder) Channels() ([]int64, bool) {
 	if s := h.get(); s != nil {
-		return s.Channel()
+		return s.Channels()
 	}
-	return 0, false
+	return nil, false
 }
 
 func (h *dumpCacheHolder) StartMigrate(ctx context.Context, from int64) error {
@@ -465,27 +465,29 @@ func (h *dumpCacheHolder) MigrateProgress() dumpcache.MigrateProgress {
 	return dumpcache.MigrateProgress{}
 }
 
-// dumpChannelClosure 返回缓存频道 ID 解析闭包：Web 端 settings 优先，
-// 环境变量 DUMP_CHANNEL_ID 兜底（均为 0 时复用关闭）。闭包读 settings，
-// 严禁在 store 事务视图内调用（单连接死锁）。
-func (a *app) dumpChannelClosure(ctx context.Context) func() int64 {
-	return func() int64 { return web.LoadEffectiveDumpChannelID(ctx, a.st, a.cfg.DumpChannelID) }
+// dumpChannelsClosure 返回启用缓存频道 ID 列表解析闭包（syscfg
+// dump_channels 单一来源，旧单频道键/env 自动折算）：空列表 = 复用关闭。
+// 闭包读 settings，严禁在 store 事务视图内调用（单连接死锁）。
+func (a *app) dumpChannelsClosure(ctx context.Context) func() []int64 {
+	return func() []int64 {
+		return syscfg.EnabledDumpChannelIDs(syscfg.LoadEffectiveDumpChannels(ctx, a.st, a.cfg.DumpChannelID))
+	}
 }
 
-// newDumpService 构建缓存频道服务（channelID 闭包实时读取，Web 端改配置
+// newDumpService 构建缓存频道服务（启用频道列表闭包实时读取，Web 端改配置
 // 无需重启）。每 MTProto 生命周期一份，队列与监听源共用；同时把副本有效
-// 性校验与频道解析注入 access（缓存补写资格判定与缓存频道同源过滤）。
+// 性校验与启用频道解析注入 access（缓存补写资格判定与缓存频道同源过滤）。
 func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
-	dumpChannel := a.dumpChannelClosure(ctx)
-	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannel, a.log)
+	dumpChannels := a.dumpChannelsClosure(ctx)
+	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannels, a.log)
 	// 写失败/恢复上报事件中心（dump.channel_write_failed）：缓存频道被封
 	// 不中断服务，写失败是唯一信号，不能只有进程日志。
 	dumpSvc.SetEvents(a.hub)
 	a.dumpHolder.Set(dumpSvc)
 	a.access.SetDumpLive(dumpSvc.EntryLive)
-	a.access.SetDumpChannelID(dumpChannel)
-	if dumpChannel() != 0 {
-		a.log.Info("缓存频道复用已启用", "channel_id", dumpChannel())
+	a.access.SetDumpChannels(dumpChannels)
+	if channels := dumpChannels(); len(channels) > 0 {
+		a.log.Info("缓存频道复用已启用", "channels", channels)
 	}
 	return dumpSvc
 }
@@ -519,10 +521,10 @@ func (m watchDumpMirror) AfterSourceDump(ctx context.Context, requestID, dumpCha
 	}
 	targets := make([]store.WatchEventTarget, 0, len(forwards)+1)
 	targets = append(targets, store.WatchEventTarget{ChannelID: dumpChannel,
-		Title: syscfg.LoadDumpChannelTitle(ctx, m.st)})
+		Title: dumpChannelTitle(syscfg.LoadEffectiveDumpChannels(ctx, m.st, 0), dumpChannel)})
 	okCount := 0
 	for _, f := range forwards {
-		if _, err := m.dump.CopyOut(ctx, 0, f.ChannelID, dumpIDs); err != nil {
+		if _, err := m.dump.CopyOutFrom(ctx, 0, f.ChannelID, dumpChannel, dumpIDs); err != nil {
 			m.log.Warn("监听转发频道镜像失败", "request_id", requestID,
 				"forward_channel", f.ChannelID, "source_event", ev.ID,
 				"messages", len(dumpIDs), "error", err.Error())
@@ -545,6 +547,17 @@ func (m watchDumpMirror) AfterSourceDump(ctx context.Context, requestID, dumpCha
 	}
 	m.log.Info("监听源回退内容已镜像转发频道", "request_id", requestID,
 		"messages", len(dumpIDs), "forward_ok", okCount, "forward_total", len(forwards))
+}
+
+// dumpChannelTitle 从缓存频道配置列表取指定频道的标题快照（事件目标展示
+// 用；未命中返回空串，展示层回退数字 ID）。
+func dumpChannelTitle(channels []syscfg.DumpChannel, id int64) string {
+	for _, c := range channels {
+		if c.ChannelID == id {
+			return c.Title
+		}
+	}
+	return ""
 }
 
 // queueDeps 组装队列消费依赖：Sender 回退主 bot（BotID=0 的存量任务/Web

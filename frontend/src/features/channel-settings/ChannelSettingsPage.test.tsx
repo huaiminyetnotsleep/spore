@@ -4,7 +4,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "antd";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +51,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     memory_budget_bytes: 1024 * 1024 * 1024,
     channel_copy_enabled: true,
     tg_reuse_enabled: true,
+    dump_channels: [],
     dump_channel_id: 0,
     dump_channel_title: "",
     join_enabled: false,
@@ -127,7 +128,7 @@ describe("频道设置页", () => {
     renderPage();
 
     expect(screen.queryByRole("switch", { name: "绑定频道投递总开关" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /清除配置|验证并保存/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /清除配置|验证并添加/ })).not.toBeInTheDocument();
     expect(saveSettingsMock).not.toHaveBeenCalled();
 
     resolveSettings(settingsView());
@@ -156,72 +157,120 @@ describe("频道设置页", () => {
     );
   });
 
-  it("缓存频道：显示当前配置并按输入保存 dump_channel", async () => {
+  it("缓存频道：多频道列表展示，新增频道整体替换保存", async () => {
     fetchSettingsMock.mockResolvedValue(
-      settingsView({ dump_channel_id: -1001234567890, dump_channel_title: "Spore Cache" }),
+      settingsView({
+        dump_channels: [
+          { channel_id: -1001234567890, title: "Spore Cache", enabled: true },
+          { channel_id: -100777, title: "备用缓存", enabled: false },
+        ],
+        dump_channel_id: -1001234567890,
+        dump_channel_title: "Spore Cache",
+      }),
     );
     saveSettingsMock.mockResolvedValue({
       ok: true,
-      settings: settingsView({ dump_channel_id: -1001234567890, dump_channel_title: "Spore Cache" }),
+      settings: settingsView({
+        dump_channels: [
+          { channel_id: -1001234567890, title: "Spore Cache", enabled: true },
+          { channel_id: -100777, title: "备用缓存", enabled: false },
+          { channel_id: -100555, title: "新缓存", enabled: true },
+        ],
+      }),
     });
 
     renderPage();
-    expect(await screen.findByText("Spore Cache")).toBeInTheDocument();
+    expect((await screen.findAllByText("Spore Cache")).length).toBeGreaterThan(0);
+    expect(screen.getByText("备用缓存")).toBeInTheDocument();
+    expect(screen.getByText("已停用")).toBeInTheDocument();
+    expect(screen.getByTestId("dump-channel-list")).toBeInTheDocument();
 
     const input = screen.getByRole("textbox", { name: "缓存频道目标" });
     fireEvent.change(input, { target: { value: "@sporecache" } });
-    fireEvent.click(screen.getByRole("button", { name: /验证并保存/ }));
+    fireEvent.click(screen.getByRole("button", { name: /验证并添加/ }));
 
-    await waitFor(() => expect(saveSettingsMock).toHaveBeenCalledWith({ dump_channel: "@sporecache" }));
+    await waitFor(() =>
+      expect(saveSettingsMock).toHaveBeenCalledWith({
+        dump_channels: [
+          { id: -1001234567890, enabled: true },
+          { id: -100777, enabled: false },
+          { target: "@sporecache" },
+        ],
+      }),
+    );
   });
 
-  it("缓存频道：未配置时展示提示，输入为空按钮禁用", async () => {
+  it("缓存频道：未配置时展示提示，添加按钮禁用", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
 
     renderPage();
 
     expect(await screen.findByText("未配置（无复用）")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "验证并保存" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /验证并添加/ })).toBeDisabled();
     expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 
-  it("缓存频道清除走 danger 二次确认，确认后才提交空载荷", async () => {
+  it("缓存频道启停：行内开关切换即保存，只翻转目标项", async () => {
     fetchSettingsMock.mockResolvedValue(
-      settingsView({ dump_channel_id: -1001234567890, dump_channel_title: "Cache" }),
+      settingsView({
+        dump_channels: [
+          { channel_id: -1001234567890, title: "Cache", enabled: true },
+          { channel_id: -100777, title: "B", enabled: true },
+        ],
+        dump_channel_id: -1001234567890,
+        dump_channel_title: "Cache",
+      }),
+    );
+    saveSettingsMock.mockResolvedValue({
+      ok: true,
+      settings: settingsView({
+        dump_channels: [
+          { channel_id: -1001234567890, title: "Cache", enabled: false },
+          { channel_id: -100777, title: "B", enabled: true },
+        ],
+      }),
+    });
+
+    renderPage();
+    const toggle = await screen.findByRole("switch", { name: "启用缓存频道 Cache" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(saveSettingsMock).toHaveBeenCalledWith({
+        dump_channels: [
+          { id: -1001234567890, enabled: false },
+          { id: -100777, enabled: true },
+        ],
+      }),
+    );
+  });
+
+  it("缓存频道移除走 danger 二次确认，确认后才提交替换列表", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      settingsView({
+        dump_channels: [{ channel_id: -1001234567890, title: "Cache", enabled: true }],
+        dump_channel_id: -1001234567890,
+        dump_channel_title: "Cache",
+      }),
     );
     saveSettingsMock.mockResolvedValue({ ok: true, settings: settingsView() });
 
     renderPage();
-    expect(await screen.findByText("Cache")).toBeInTheDocument();
+    expect((await screen.findAllByText("Cache")).length).toBeGreaterThan(0);
 
-    // 当前已配置且输入为空 → 按钮为「清除配置」，先弹 danger 确认
-    fireEvent.click(screen.getByRole("button", { name: "清除配置" }));
+    // 移除按钮先弹 danger 确认，确认后才提交
+    fireEvent.click(screen.getByRole("button", { name: "移 除" }));
     expect(saveSettingsMock).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText(/确定清除缓存频道配置？重复链接将回到完整下载上传/),
-    ).toBeInTheDocument();
-    const confirmButton = screen.getByRole("button", { name: "清 除" });
+    expect(await screen.findByText(/确定移除缓存频道「Cache」/)).toBeInTheDocument();
+    const dialog = within(screen.getByRole("dialog"));
+    const confirmButton = dialog.getByRole("button", { name: /移\s*除/ });
     expect(confirmButton).toHaveClass("ant-btn-dangerous");
 
     fireEvent.click(confirmButton);
-    await waitFor(() => expect(saveSettingsMock).toHaveBeenCalledWith({ dump_channel: "" }));
-  });
-
-  it("输入非空时按钮为「验证并保存」，不经过确认直接提交", async () => {
-    fetchSettingsMock.mockResolvedValue(
-      settingsView({ dump_channel_id: -1001234567890, dump_channel_title: "Cache" }),
+    await waitFor(() =>
+      expect(saveSettingsMock).toHaveBeenCalledWith({ dump_channels: [] }),
     );
-    saveSettingsMock.mockResolvedValue({ ok: true, settings: settingsView() });
-
-    renderPage();
-    expect(await screen.findByText("Cache")).toBeInTheDocument();
-
-    const input = screen.getByRole("textbox", { name: "缓存频道目标" });
-    fireEvent.change(input, { target: { value: "@sporecache" } });
-    fireEvent.click(screen.getByRole("button", { name: "验证并保存" }));
-
-    await waitFor(() => expect(saveSettingsMock).toHaveBeenCalledWith({ dump_channel: "@sporecache" }));
-    expect(screen.queryByText(/确定清除缓存频道配置/)).not.toBeInTheDocument();
   });
 
   it("复用开关切换即保存 tg_reuse_enabled", async () => {

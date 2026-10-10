@@ -68,6 +68,7 @@ function sampleSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     watch_forward_channels: [],
     dump_channel_id: 0,
     dump_channel_title: "",
+    dump_channels: [],
     ...overrides,
   } as SettingsView;
 }
@@ -145,6 +146,7 @@ describe("监听源管理页", () => {
       sampleSettings({
         dump_channel_id: -100777,
         dump_channel_title: "缓存频道",
+        dump_channels: [{ channel_id: -100777, title: "缓存频道", enabled: true }],
         watch_forward_channels: [
           { channel_id: -100888, title: "转发一" },
           { channel_id: -100999, title: "转发二" },

@@ -1,3 +1,4 @@
 🕐 时间：{{ .Time }}
-🧾 错误码：{{ display .Payload.Code }}
-📌 处置：检查缓存频道是否被封禁、bot 是否仍有发帖权限、DUMP_CHANNEL_ID 配置是否正确；用户投递不受影响，仅同链接复用暂失效
+{{ if .Payload.Channel }}📺 失效频道：{{ .Payload.Channel }}（多缓存频道部署下仅该频道写入失败，其余频道不受影响）
+{{ end }}🧾 错误码：{{ display .Payload.Code }}
+📌 处置：检查该缓存频道是否被封禁、bot 是否仍有发帖权限、频道设置中的频道配置是否正确；用户投递不受影响，仅同链接复用暂失效

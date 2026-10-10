@@ -38,7 +38,7 @@ func tryReuseFromDump(ctx context.Context, d Deps, j Job) (mediaMeta, []int, boo
 	if !ok {
 		return mediaMeta{}, nil, false
 	}
-	ids, err := d.Dump.CopyOut(ctx, j.BotID, j.ChatID, entry.DumpIDs)
+	ids, err := d.Dump.CopyOut(ctx, j.BotID, j.ChatID, entry)
 	if err != nil {
 		// 副本被删、频道不可访问等预期内失败：回落完整下载上传（成功后重写副本）
 		d.Log.Info("复制缓存频道副本失败，回落完整下载上传",

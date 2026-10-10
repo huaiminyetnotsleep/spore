@@ -120,9 +120,11 @@ function ForwardTargetCell({ settings }: { settings?: SettingsView }) {
       </Tooltip>
     );
   }
-  if (settings.dump_channel_id !== 0) {
+  // 多缓存频道：任一启用频道即可兜底（预热写入全部启用频道）
+  const hasEnabledDump = (settings.dump_channels ?? []).some((c) => c.enabled);
+  if (hasEnabledDump) {
     return (
-      <Tooltip title="未配置监听转发频道：监听消息仅预热缓存频道（供链接复用秒回）">
+      <Tooltip title="未配置监听转发频道：监听消息仅预热启用的缓存频道（供链接复用秒回）">
         <Text>缓存频道（兜底）</Text>
       </Tooltip>
     );

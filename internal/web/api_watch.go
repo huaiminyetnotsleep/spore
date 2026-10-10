@@ -87,6 +87,11 @@ func (s *Server) handleAPIWatchSourcesAdd(w http.ResponseWriter, r *http.Request
 	}
 	out, err := s.watch.AdminAdd(r.Context(), sess.idHash, in.Target, enabled)
 	if err != nil {
+		if errors.Is(err, watch.ErrDumpChannelConflict) {
+			// 循环转发防护的受控拒绝：完整中文文案直达管理员
+			s.apiBadRequest(w, r, op, err.Error())
+			return
+		}
 		s.writeAPIAppErr(w, r, op, err)
 		return
 	}

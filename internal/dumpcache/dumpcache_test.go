@@ -29,6 +29,7 @@ type fakeSender struct {
 	capEdits     []captionEdit // EditMessageCaption
 	txtEdits     []captionEdit // EditMessageText
 	failCopies   bool
+	failCopyTo   int64 // 非 0 时仅复制到该频道的调用失败（多频道扇出的选择性失败）
 }
 
 type singleCopy struct {
@@ -67,7 +68,7 @@ func (f *fakeSender) CopyMessages(_ context.Context, from, to int64, ids []int) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.copyMsgs = append(f.copyMsgs, [2]int64{from, to})
-	if f.failCopies {
+	if f.failCopies || (f.failCopyTo != 0 && to == f.failCopyTo) {
 		return nil, errBoom
 	}
 	out := make([]int, len(ids))
@@ -80,7 +81,7 @@ func (f *fakeSender) CopyMessage(_ context.Context, from, to int64, msgID int, c
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.singleCopies = append(f.singleCopies, singleCopy{from, to, msgID, caption})
-	if f.failCopies {
+	if f.failCopies || (f.failCopyTo != 0 && to == f.failCopyTo) {
 		return 0, errBoom
 	}
 	return 800 + len(f.singleCopies), nil
@@ -119,7 +120,7 @@ func TestEnabledRequiresChannel(t *testing.T) {
 	if nilSvc.Enabled() {
 		t.Fatal("nil 服务不应 Enabled")
 	}
-	s := New(&fakeSender{}, nil, openStore(t), func() int64 { return 0 }, testLog())
+	s := New(&fakeSender{}, nil, openStore(t), func() []int64 { return nil }, testLog())
 	if s.Enabled() {
 		t.Fatal("channelID=0 不应 Enabled")
 	}
@@ -131,7 +132,7 @@ func TestEnabledRequiresChannel(t *testing.T) {
 func TestWriteCleanSingleMedia(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "正文")}
@@ -159,7 +160,7 @@ func TestWriteCleanSingleMedia(t *testing.T) {
 func TestWriteCleanSingleText(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 
 	s.WriteClean(context.Background(), 0, 111, "example", 7,
 		[]message.Item{{ID: 7, Text: "纯文本"}}, [][]int{{66}}, "https://t.me/example/7", "")
@@ -175,7 +176,7 @@ func TestWriteCleanSingleText(t *testing.T) {
 func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "图一"), mediaItem(8, "图二"), {ID: 9, Text: "附言"}}
@@ -204,7 +205,7 @@ func TestWriteCleanAlbumBatchAndEdits(t *testing.T) {
 func TestWriteCleanFailureNoEntry(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{failCopies: true}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ctx := context.Background()
 
 	s.WriteClean(ctx, 0, 111, "example", 7,
@@ -214,7 +215,7 @@ func TestWriteCleanFailureNoEntry(t *testing.T) {
 	}
 
 	// 条目数与已发送数不一致同样跳过
-	s2 := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s2 := New(&fakeSender{}, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	s2.WriteClean(ctx, 0, 111, "example", 8, []message.Item{mediaItem(8, "x"), mediaItem(9, "y")}, [][]int{{55}}, "", "")
 	if _, err := st.LatestDumpEntry(ctx, "example", 8, -1001234567890); err == nil {
 		t.Fatal("数量不一致不应落条目")
@@ -224,7 +225,7 @@ func TestWriteCleanFailureNoEntry(t *testing.T) {
 func TestCopyOut(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701, 702},
 		DumpChannelID: -1001234567890}); err != nil {
@@ -234,7 +235,7 @@ func TestCopyOut(t *testing.T) {
 	if !ok || len(e.DumpIDs) != 2 {
 		t.Fatalf("应命中条目: %+v ok=%v", e, ok)
 	}
-	ids, err := s.CopyOut(context.Background(), 0, 222, e.DumpIDs)
+	ids, err := s.CopyOut(context.Background(), 0, 222, e)
 	if err != nil || len(ids) != 2 {
 		t.Fatalf("复制应成功: %v %v", ids, err)
 	}
@@ -273,7 +274,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("无条目可补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
+		s := New(snd, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("无条目应放行补写")
 		}
@@ -282,7 +283,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制成功判定有效并清理试探副本", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{}
-		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
+		s := New(snd, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); !live {
 			t.Fatal("试探复制成功应判定有效")
@@ -295,7 +296,7 @@ func TestEntryLive(t *testing.T) {
 	t.Run("试探复制失败判定失效放行补写", func(t *testing.T) {
 		st := openStore(t)
 		snd := &fakeSender{failCopies: true}
-		s := New(snd, nil, st, func() int64 { return -1001234567890 }, testLog())
+		s := New(snd, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 		seedEntry(t, st)
 		if live := s.EntryLive(ctx, "example", 7); live {
 			t.Fatal("试探复制失败（消息已删）应放行补写")
@@ -316,7 +317,7 @@ func seedEntry(t *testing.T, st *store.Store) {
 func TestWriteCleanSplitSpan(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ctx := context.Background()
 
 	// 拆分投递：1 个源条目展开为 2 条分段消息（首条带脚注 caption，次条为空）
@@ -341,7 +342,7 @@ func TestWriteCleanSplitSpan(t *testing.T) {
 func TestWriteCleanAlbumCanonicalPlan(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ctx := context.Background()
 
 	items := []message.Item{mediaItem(7, "图注"), mediaItem(8, "大文件")}
@@ -374,7 +375,7 @@ func TestWriteCleanAlbumCanonicalPlan(t *testing.T) {
 func TestWriteCleanAlbumPlanFailureNoEntry(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{failCopies: true}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 
 	s.WriteClean(context.Background(), 0, 111, "example", 7,
 		[]message.Item{mediaItem(7, "x"), mediaItem(8, "y")},
@@ -391,7 +392,7 @@ func TestEntryMissSilent(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 	var buf bytes.Buffer
-	s := New(&fakeSender{}, nil, st, func() int64 { return -100777 },
+	s := New(&fakeSender{}, nil, st, func() []int64 { return []int64{-100777} },
 		slog.New(slog.NewTextHandler(&buf, nil)))
 	if _, ok := s.Entry(ctx, "-1001234", 57); ok {
 		t.Fatal("无条目应返回 false")
@@ -407,13 +408,15 @@ func TestEntryMissSilent(t *testing.T) {
 type recordingEvents struct {
 	mu       sync.Mutex
 	failures []string // DumpChannelWriteFailed 的 code 序列
+	failedCh []int64  // 与 failures 对应的失败频道 ID 序列
 	recovers int      // DumpChannelRecovered 次数
 }
 
-func (r *recordingEvents) DumpChannelWriteFailed(_ context.Context, code string) {
+func (r *recordingEvents) DumpChannelWriteFailed(_ context.Context, code string, channel int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failures = append(r.failures, code)
+	r.failedCh = append(r.failedCh, channel)
 }
 
 func (r *recordingEvents) DumpChannelRecovered(context.Context) {
@@ -425,7 +428,7 @@ func (r *recordingEvents) DumpChannelRecovered(context.Context) {
 func TestWriteCleanFailureRaisesEvent(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{failCopies: true}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ev := &recordingEvents{}
 	s.SetEvents(ev)
 	ctx := context.Background()
@@ -449,7 +452,7 @@ func TestWriteCleanFailureRaisesEvent(t *testing.T) {
 
 func TestWriteCleanSuccessRecoversEvent(t *testing.T) {
 	st := openStore(t)
-	s := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(&fakeSender{}, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ev := &recordingEvents{}
 	s.SetEvents(ev)
 	ctx := context.Background()
@@ -467,13 +470,13 @@ func TestWriteCleanSuccessRecoversEvent(t *testing.T) {
 // ctx 已取消（任务收尾窗口）不产生事件——取消不算配置/封禁问题。
 func TestFailHintSkipsCanceledContext(t *testing.T) {
 	st := openStore(t)
-	s := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(&fakeSender{}, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 	ev := &recordingEvents{}
 	s.SetEvents(ev)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	s.failHint(ctx, errBoom)
+	s.failHint(ctx, errBoom, -1001234567890)
 
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
@@ -486,8 +489,131 @@ func TestFailHintSkipsCanceledContext(t *testing.T) {
 func TestWriteCleanFailureWithoutEventsSink(t *testing.T) {
 	st := openStore(t)
 	fs := &fakeSender{failCopies: true}
-	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	s := New(fs, nil, st, func() []int64 { return []int64{-1001234567890} }, testLog())
 
 	s.WriteClean(context.Background(), 0, 111, "example", 7,
 		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "", "") // 不 panic 即通过
+}
+
+// ---- 多缓存频道扇出 ----
+
+// TestWriteCleanFanoutMultiChannel：多启用频道扇出——每个启用频道各写一份
+// 副本并逐频道落条目；全部成功时上报恢复信号。
+func TestWriteCleanFanoutMultiChannel(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{}
+	s := New(fs, nil, st,
+		func() []int64 { return []int64{-100111, -100222} }, testLog())
+	ev := &recordingEvents{}
+	s.SetEvents(ev)
+	ctx := context.Background()
+
+	s.WriteClean(ctx, 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
+
+	if len(fs.singleCopies) != 2 {
+		t.Fatalf("两个启用频道应各复制一份: %+v", fs.singleCopies)
+	}
+	targets := []int64{fs.singleCopies[0].To, fs.singleCopies[1].To}
+	if targets[0] != -100111 || targets[1] != -100222 {
+		t.Fatalf("复制目标应为全部启用频道: %+v", targets)
+	}
+	for _, ch := range []int64{-100111, -100222} {
+		if _, err := st.LatestDumpEntry(ctx, "example", 7, ch); err != nil {
+			t.Fatalf("频道 %d 应落条目: %v", ch, err)
+		}
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if ev.recovers != 1 || len(ev.failures) != 0 {
+		t.Fatalf("全部成功应只上报恢复: failures=%v recovers=%d", ev.failures, ev.recovers)
+	}
+}
+
+// TestWriteCleanFanoutPartialFailure：单频道失败不阻断其余频道——失败频道
+// 不落条目并携带频道 ID 告警，成功频道正常落条目；部分失败不上报恢复。
+func TestWriteCleanFanoutPartialFailure(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{failCopyTo: -100222}
+	s := New(fs, nil, st,
+		func() []int64 { return []int64{-100111, -100222} }, testLog())
+	ev := &recordingEvents{}
+	s.SetEvents(ev)
+	ctx := context.Background()
+
+	s.WriteClean(ctx, 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
+
+	if _, err := st.LatestDumpEntry(ctx, "example", 7, -100111); err != nil {
+		t.Fatalf("成功频道应落条目: %v", err)
+	}
+	if _, err := st.LatestDumpEntry(ctx, "example", 7, -100222); err == nil {
+		t.Fatal("失败频道不应落条目")
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if len(ev.failures) != 1 || ev.failedCh[0] != -100222 {
+		t.Fatalf("应仅失败频道告警且携带频道 ID: failures=%v failedCh=%v", ev.failures, ev.failedCh)
+	}
+	if ev.recovers != 0 {
+		t.Fatalf("部分失败不应上报恢复: %d", ev.recovers)
+	}
+}
+
+// TestEntryAmongEnabledChannels：条目命中限定在启用频道集合——关闭频道的
+// 条目不命中，任一启用频道的条目都命中且自带所属频道（复用从该频道复制）。
+func TestEntryAmongEnabledChannels(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	// 条目只在第二个启用频道（命中应跨频道搜索）
+	if _, err := st.InsertDumpEntry(ctx, store.DumpEntry{
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701},
+		DumpChannelID: -100222}); err != nil {
+		t.Fatalf("落条目失败: %v", err)
+	}
+	// 关闭频道里的条目（不应命中）
+	if _, err := st.InsertDumpEntry(ctx, store.DumpEntry{
+		ChannelKey: "example", MessageID: 8, DumpIDs: []int{801},
+		DumpChannelID: -100333}); err != nil {
+		t.Fatalf("落条目失败: %v", err)
+	}
+	s := New(&fakeSender{}, nil, st,
+		func() []int64 { return []int64{-100111, -100222} }, testLog())
+
+	e, ok := s.Entry(ctx, "example", 7)
+	if !ok || e.DumpChannelID != -100222 {
+		t.Fatalf("任一启用频道的条目都应命中: %+v ok=%v", e, ok)
+	}
+	if _, ok := s.Entry(ctx, "example", 8); ok {
+		t.Fatal("关闭频道的条目不应命中")
+	}
+	// CopyOut 按条目所属频道复制
+	fs := &fakeSender{}
+	s2 := New(fs, nil, st, func() []int64 { return []int64{-100111, -100222} }, testLog())
+	if _, err := s2.CopyOut(ctx, 0, 999, e); err != nil {
+		t.Fatalf("CopyOut 应成功: %v", err)
+	}
+	if len(fs.copyMsgs) != 1 || fs.copyMsgs[0] != [2]int64{-100222, 999} {
+		t.Fatalf("应从条目所属频道复制: %+v", fs.copyMsgs)
+	}
+}
+
+// TestEntryInPerChannel：扇出预热逐频道查重——指定频道有条目即 true，
+// 其他频道的条目不影响本频道的判定。
+func TestEntryInPerChannel(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	if _, err := st.InsertDumpEntry(ctx, store.DumpEntry{
+		ChannelKey: "example", MessageID: 7, DumpIDs: []int{701},
+		DumpChannelID: -100111}); err != nil {
+		t.Fatalf("落条目失败: %v", err)
+	}
+	s := New(&fakeSender{}, nil, st,
+		func() []int64 { return []int64{-100111, -100222} }, testLog())
+	if !s.EntryIn(ctx, -100111, "example", 7) {
+		t.Fatal("已有条目的频道应命中")
+	}
+	if s.EntryIn(ctx, -100222, "example", 7) {
+		t.Fatal("尚无条目的启用频道不应命中（需补写收敛）")
+	}
 }

@@ -94,6 +94,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
     dump_channel_id: -1001234567890,
     dump_channel_title: "缓存频道",
+    dump_channels: [{ channel_id: -1001234567890, title: "缓存频道", enabled: true }],
     ...overrides,
   } as SettingsView;
 }
@@ -707,7 +708,7 @@ describe("请求记录列表页", () => {
   });
 
   it("缓存频道未配置时转存模式整列禁用并提示配置位置", async () => {
-    fetchSettingsMock.mockResolvedValue(settingsView({ dump_channel_id: 0, dump_channel_title: "" }));
+    fetchSettingsMock.mockResolvedValue(settingsView({ dump_channels: [], dump_channel_id: 0, dump_channel_title: "" }));
     fetchRequestsMock.mockResolvedValue(
       envelope([requestRow({ id: 11, status: "succeeded", delivery_mode: "upload" })]),
     );

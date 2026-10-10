@@ -644,6 +644,13 @@ export interface WatchForwardTarget {
   title: string;
 }
 
+/** 缓存频道配置项：解析校验后的数字 ID + 标题快照 + 独立启用开关。 */
+export interface DumpChannelView {
+  channel_id: number;
+  title: string;
+  enabled: boolean;
+}
+
 /**
  * 可编辑运营设置及其生效状态（GET /api/v1/settings）。
  * 字节值与重启语义由服务端维护；媒体大小输入沿用 SSR 的"数值 + MB/GB 单位"。
@@ -679,9 +686,14 @@ export interface SettingsView {
 
   /** TG 链接复用总开关（即时生效；缺省 true）。 */
   tg_reuse_enabled: boolean;
-  /** 缓存频道（重复链接复用的干净副本来源）；0 = 未配置。 */
+  /**
+   * 缓存频道列表（每项独立启用开关）：开启的频道在任务成功后各写一份干净
+   * 副本（扇出），复用在全部启用频道范围内查命中；空 = 未配置（无复用）。
+   */
+  dump_channels: DumpChannelView[];
+  /** 首个启用缓存频道数字 ID（0 = 未配置或全部停用；兼容派生值）。 */
   dump_channel_id: number;
-  /** 缓存频道标题（展示用）。 */
+  /** 首个启用缓存频道标题（展示用；兼容派生值）。 */
   dump_channel_title: string;
 
   /** 频道加入（/join）配置（即时生效；join_enabled 缺省 false）。 */
@@ -984,7 +996,8 @@ export function fetchMTProtoStatus(): Promise<MTProtoStatus> {
 export interface DumpMigrateProgress {
   running: boolean;
   from: number;
-  to: number;
+  /** 目标启用缓存频道（发起时快照，源频道除外）。 */
+  to: number[];
   total: number;
   done: number;
   failed: number;

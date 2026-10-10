@@ -62,7 +62,8 @@ type SourceInaccessibleData struct {
 
 // DumpWriteData 缓存频道写入失败（dump.channel_write_failed）。
 type DumpWriteData struct {
-	Code string // apperr 错误码（受控码名，不含错误原文）
+	Code    string // apperr 错误码（受控码名，不含错误原文）
+	Channel int64  `json:"channel,omitempty"` // 写入失败的缓存频道 ID（0 = 未指明；多缓存频道部署下仅该频道受影响）
 }
 
 // WatchSourceUnavailableData 监听源探活不可用（watch.source_unavailable）。

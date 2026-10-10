@@ -105,7 +105,7 @@ func TestDumpBackfillSkipMatrix(t *testing.T) {
 	// already_dumped：缓存频道已有同链接条目
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 13, store.DeliveryModeUpload)
-	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
+	svc.SetDumpChannels(func() []int64 { return []int64{testDumpChannelID} })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
 		DumpChannelID: testDumpChannelID,
@@ -194,7 +194,7 @@ func TestDumpBackfillSkipMatrixLiveEntry(t *testing.T) {
 	mustEnabledUser(t, st, 1)
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 41, store.DeliveryModeUpload)
-	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
+	svc.SetDumpChannels(func() []int64 { return []int64{testDumpChannelID} })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
 		DumpChannelID: testDumpChannelID,
@@ -245,7 +245,7 @@ func TestDumpBackfillProbeOutsideTx(t *testing.T) {
 	mustEnabledUser(t, st, 1)
 	clock.Advance(time.Minute)
 	src := newTerminalRequest(t, svc, st, 51, store.DeliveryModeUpload)
-	svc.SetDumpChannelID(func() int64 { return testDumpChannelID })
+	svc.SetDumpChannels(func() []int64 { return []int64{testDumpChannelID} })
 	if _, err := st.InsertDumpEntry(context.Background(), store.DumpEntry{
 		ChannelKey: src.ChannelKey, MessageID: src.MessageID, DumpIDs: []int{501},
 		DumpChannelID: testDumpChannelID,

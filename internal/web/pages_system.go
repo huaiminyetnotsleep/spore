@@ -36,12 +36,9 @@ const (
 	settingKeyMaxLinksPerMessage = "max_links_per_message" // 单条 Bot 输入最大有效链接数（JSON 数字；即时生效）
 	settingKeyChannelCopyEnable  = "channel_copy_enabled"  // 绑定频道投递总开关（JSON 布尔；即时生效）
 	settingKeyTGReuseEnable      = "tg_reuse_enabled"      // TG 链接复用总开关（JSON 布尔；即时生效）
-	// 缓存频道（重复链接复用的干净副本来源）：数字频道 ID 与标题。Web 端
-	// 配置（输入 @username / t.me 链接 / -100 数字 ID，经 bot 解析校验后
-	// 存数字 ID）；环境变量 DUMP_CHANNEL_ID 仅作 settings 为空时的兜底。
-	// ID 键保留在本包；标题键单一来源在 syscfg（监听事件目标快照共用），
-	// LoadDumpChannelTitle 委托读取。
-	settingKeyDumpChannelID = "dump_channel_id"
+	// 缓存频道（重复链接复用的干净副本来源）键单一来源在 syscfg
+	//（dump_channels 列表键 + 旧单频道键折算回退，环境变量 DUMP_CHANNEL_ID
+	// 仅作 settings 为空时的兜底）；本包只经 syscfg 读写，不再定义键。
 )
 
 // worker 数的 Web 可调范围：上限与传输线程一致，约束多任务并发的内存/连接放大。
@@ -129,30 +126,6 @@ func LoadTGReuseEnabled(ctx context.Context, st *store.Store) bool {
 	return loadJSONSetting(ctx, st, settingKeyTGReuseEnable, true, nil)
 }
 
-// LoadDumpChannelID 读取缓存频道数字 ID（settings）：0 表示未配置。
-func LoadDumpChannelID(ctx context.Context, st *store.Store) int64 {
-	if st == nil {
-		return 0
-	}
-	return loadJSONSetting(ctx, st, settingKeyDumpChannelID, int64(0), nil)
-}
-
-// LoadEffectiveDumpChannelID 读取缓存频道的运行时有效值：settings 键存在时
-// （包括显式 0=关闭）优先；键缺失/非法时回落环境变量。显式 0 必须覆盖
-// env，否则 Web 端「清除配置」无法关闭环境变量预置的频道。
-func LoadEffectiveDumpChannelID(ctx context.Context, st *store.Store, envDefault int64) int64 {
-	if st == nil {
-		return envDefault
-	}
-	return loadJSONSetting(ctx, st, settingKeyDumpChannelID, envDefault, nil)
-}
-
-// LoadDumpChannelTitle 读取缓存频道标题（展示用；未配置为空）。键单一
-// 来源在 syscfg（监听事件目标快照共用同一读取实现）。
-func LoadDumpChannelTitle(ctx context.Context, st *store.Store) string {
-	return syscfg.LoadDumpChannelTitle(ctx, st)
-}
-
 // sameForwardChannels 比较监听转发频道列表是否等价（逐项比数字 ID 与
 // 标题快照；标题变化也视为变更，触发重写让展示保持最新）。
 func sameForwardChannels(a, b []syscfg.WatchForwardChannel) bool {
@@ -172,6 +145,30 @@ func forwardChannelIDs(channels []syscfg.WatchForwardChannel) []int64 {
 	out := make([]int64, 0, len(channels))
 	for _, c := range channels {
 		out = append(out, c.ChannelID)
+	}
+	return out
+}
+
+// sameDumpChannels 比较缓存频道列表是否等价（逐项比数字 ID、标题与启用
+// 状态；标题变化也视为变更，触发重写让展示保持最新）。
+func sameDumpChannels(a, b []syscfg.DumpChannel) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// dumpChannelsForAudit 把缓存频道列表折算为审计载荷（ID/标题/启用状态）。
+func dumpChannelsForAudit(channels []syscfg.DumpChannel) []map[string]any {
+	out := make([]map[string]any, 0, len(channels))
+	for _, c := range channels {
+		out = append(out, map[string]any{
+			"channel_id": c.ChannelID, "title": c.Title, "enabled": c.Enabled})
 	}
 	return out
 }
@@ -258,9 +255,9 @@ type settingsUpdateInput struct {
 	// TGReuseEnabled 为 TG 链接复用总开关（copyMessages 直拷跳过重复
 	// 下载上传）；nil 表示不变更。
 	TGReuseEnabled *bool
-	// DumpChannel 为缓存频道目标（@username / t.me 链接 / -100 数字 ID）；
-	// nil 表示不变更；空串清除配置（复用关闭）。
-	DumpChannel *string
+	// DumpChannels 为缓存频道列表（整体替换语义；nil 表示不变更，空列表
+	// 清空配置=复用关闭）。单项见 DumpChannelInput。
+	DumpChannels *[]DumpChannelInput
 	// 频道加入（/join）配置；nil 表示不变更，合并当前值后整体写入
 	// （syscfg.JoinConfig 单一来源）。
 	JoinEnabled           *bool
@@ -299,6 +296,16 @@ type settingsUpdateInput struct {
 // settingsParamError 表示设置变更的参数拒绝：msg 是受控中文文案
 // （API 回 400 JSON），不含底层错误细节。
 type settingsParamError struct{ msg string }
+
+// DumpChannelInput 是缓存频道列表单项（POST /api/v1/settings 的
+// dump_channels 字段，整体替换语义）：ID 指向已配置频道（启停切换/保序，
+// 标题保持快照），Target 为新增目标（@用户名 / t.me 链接 / -100 数字 ID，
+// 服务端校验解析）；Enabled 缺省 true（已配置项缺省保持原启用状态）。
+type DumpChannelInput struct {
+	ID      int64  `json:"id"`
+	Target  string `json:"target"`
+	Enabled *bool  `json:"enabled"`
+}
 
 func (e *settingsParamError) Error() string { return e.msg }
 
@@ -418,43 +425,80 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 	}
 
-	// 缓存频道（即时生效）：非空目标经 bot 解析校验（频道存在且 bot 可
-	// 发帖）后保存数字 ID 与标题（保存的是数字 ID，频道随后公开转私有
-	// 不影响使用）；空串清除配置（复用关闭）。settings 优先于环境变量
-	// DUMP_CHANNEL_ID 兜底。
-	if in.DumpChannel != nil {
-		target := strings.TrimSpace(*in.DumpChannel)
-		before := LoadEffectiveDumpChannelID(ctx, s.st, s.cfg.DumpChannelID)
-		if target == "" {
-			if before != 0 {
-				if err := s.st.SetSetting(ctx, settingKeyDumpChannelID, "0"); err != nil {
-					return res, &settingsStoreError{op: "清除缓存频道", err: err}
+	// 缓存频道列表（即时生效）：整体替换语义——已配置项按 ID 更新启用
+	// 状态（标题保持快照），新增项经 bot 解析校验（频道存在且 bot 可发帖）
+	// 后追加；空列表清空（复用关闭）。保存到 syscfg dump_channels 键（列表
+	// 单一来源），旧单频道键仅作存量折算回退、不再回写——首次修改列表即
+	// 完成到新键的迁移。settings 优先于环境变量 DUMP_CHANNEL_ID 兜底。
+	if in.DumpChannels != nil {
+		if s.bindings == nil {
+			return res, &settingsParamError{"频道服务未接入，无法校验缓存频道。"}
+		}
+		before := syscfg.LoadEffectiveDumpChannels(ctx, s.st, s.cfg.DumpChannelID)
+		byID := make(map[int64]syscfg.DumpChannel, len(before))
+		for _, c := range before {
+			byID[c.ChannelID] = c
+		}
+		resolved := make([]syscfg.DumpChannel, 0, len(*in.DumpChannels))
+		seen := make(map[int64]bool, len(*in.DumpChannels))
+		for i, item := range *in.DumpChannels {
+			switch {
+			case item.ID != 0:
+				cur, ok := byID[item.ID]
+				if !ok {
+					return res, &settingsParamError{fmt.Sprintf("缓存频道 %d 不存在，请刷新页面后重试。", item.ID)}
 				}
-				_ = s.st.SetSetting(ctx, syscfg.KeyDumpChannelTitle, `""`)
-				s.audit(ctx, "settings.dump_channel", "settings", map[string]any{
-					"before": before, "after": int64(0), "effect": "即时生效"})
-			}
-		} else {
-			if s.bindings == nil {
-				return res, &settingsParamError{"频道服务未接入，无法校验缓存频道。"}
-			}
-			id, title, err := s.bindings.VerifyChannel(ctx, target)
-			if err != nil {
-				if apperr.From(err).Code == apperr.CodeChannelNotPostable {
-					return res, &settingsParamError{"缓存频道校验失败：请确认频道存在且机器人已被设为管理员（多机器人部署时需把全部机器人都设为该频道的管理员；公开频道填 @用户名 或 t.me 链接，私有频道填 -100 数字 ID）。"}
+				if seen[item.ID] {
+					return res, &settingsParamError{fmt.Sprintf("缓存频道列表包含重复项（%d）。", item.ID)}
 				}
-				return res, &settingsParamError{"缓存频道校验失败：" + apperr.UserText(apperr.From(err).Code)}
-			}
-			if id != before {
-				if err := s.saveSettingValue(ctx, settingKeyDumpChannelID, "保存缓存频道", id); err != nil {
-					return res, err
+				seen[item.ID] = true
+				enabled := cur.Enabled
+				if item.Enabled != nil {
+					enabled = *item.Enabled
 				}
-				if err := s.saveSettingValue(ctx, syscfg.KeyDumpChannelTitle, "保存缓存频道标题", title); err != nil {
-					return res, err
+				resolved = append(resolved, syscfg.DumpChannel{
+					ChannelID: cur.ChannelID, Title: cur.Title, Enabled: enabled})
+			case strings.TrimSpace(item.Target) != "":
+				target := strings.TrimSpace(item.Target)
+				id, title, err := s.bindings.VerifyChannel(ctx, target)
+				if err != nil {
+					if apperr.From(err).Code == apperr.CodeChannelNotPostable {
+						return res, &settingsParamError{"缓存频道校验失败：请确认频道存在且机器人已被设为管理员（多机器人部署时需把全部机器人都设为该频道的管理员；公开频道填 @用户名 或 t.me 链接，私有频道填 -100 数字 ID）。"}
+					}
+					return res, &settingsParamError{"缓存频道校验失败：" + apperr.UserText(apperr.From(err).Code)}
 				}
-				s.audit(ctx, "settings.dump_channel", "settings", map[string]any{
-					"before": before, "after": id, "title": title, "effect": "即时生效"})
+				if seen[id] {
+					return res, &settingsParamError{fmt.Sprintf("缓存频道已存在（%s），无需重复添加。", title)}
+				}
+				// 循环转发防护：缓存频道与监听源互斥——监听预热副本写回
+				// 缓存频道会再次触发该"源"的 channel_post，监听再次预热
+				// 形成循环转发（监听源注册侧有对称校验，此处兜底反向配置）
+				if _, err := s.st.GetWatchSource(ctx, id); err == nil {
+					return res, &settingsParamError{fmt.Sprintf(
+						"%s（%d）已配置为监听源，不能同时作为缓存频道（预热副本写回会循环转发）；请先在监听源页移除该源，或换一个频道。", title, id)}
+				} else if !errors.Is(err, store.ErrNotFound) {
+					return res, &settingsStoreError{op: "校验缓存频道", err: err}
+				}
+				seen[id] = true
+				enabled := true
+				if item.Enabled != nil {
+					enabled = *item.Enabled
+				}
+				resolved = append(resolved, syscfg.DumpChannel{ChannelID: id, Title: title, Enabled: enabled})
+			default:
+				return res, &settingsParamError{fmt.Sprintf("缓存频道列表第 %d 项无效：已配置频道请携带 ID，新增频道请填写频道目标。", i+1)}
 			}
+		}
+		if len(resolved) > syscfg.DumpChannelsUpper() {
+			return res, &settingsParamError{fmt.Sprintf("缓存频道最多 %d 个。", syscfg.DumpChannelsUpper())}
+		}
+		if !sameDumpChannels(before, resolved) {
+			if err := syscfg.SaveDumpChannels(ctx, s.st, resolved); err != nil {
+				return res, &settingsStoreError{op: "保存缓存频道", err: err}
+			}
+			s.audit(ctx, "settings.dump_channels", "settings", map[string]any{
+				"before": dumpChannelsForAudit(before), "after": dumpChannelsForAudit(resolved),
+				"effect": "即时生效"})
 		}
 	}
 

@@ -45,25 +45,26 @@ type dumpLiveFunc func(ctx context.Context, channelKey string, messageID int) bo
 // SetSender 同款模式；重复注册以最后一次为准）。
 func (s *Service) SetDumpLive(fn dumpLiveFunc) { s.dumpLive = fn }
 
-// SetDumpChannelID 注入缓存频道 ID 解析闭包（Web settings 优先、env 兜底，
-// 与 dumpcache.Service 同源）。条目命中判定按当前频道过滤：切换频道后
-// 旧频道条目自动视为"未缓存"，放行补写。nil 或返回 0（未配置）时任何
-// 条目都不命中——未配置缓存频道本就无从谈起"已缓存"。
+// SetDumpChannels 注入启用缓存频道 ID 列表解析闭包（syscfg dump_channels
+// 单一来源，与 dumpcache.Service 同源）。条目命中判定按启用频道集合过滤：
+// 关闭的频道条目自动视为"未缓存"，放行补写。nil 或空列表（未配置/全部
+// 停用）时任何条目都不命中——未配置缓存频道本就无从谈起"已缓存"。
 // 注意：闭包内部读 settings（DB 读），单连接下严禁在事务视图内调用。
-func (s *Service) SetDumpChannelID(fn func() int64) { s.dumpChannelID = fn }
+func (s *Service) SetDumpChannels(fn func() []int64) { s.dumpChannels = fn }
 
-// dumpChannel 解析当前缓存频道 ID；未注入闭包时返回 0（条目永不命中）。
-func (s *Service) dumpChannel() int64 {
-	if s.dumpChannelID == nil {
-		return 0
+// dumpChannelIDs 解析当前启用缓存频道 ID 列表；未注入闭包时返回 nil（条目
+// 永不命中）。
+func (s *Service) dumpChannelIDs() []int64 {
+	if s.dumpChannels == nil {
+		return nil
 	}
-	return s.dumpChannelID()
+	return s.dumpChannels()
 }
 
 // DumpBackfillEligibility 只读预检请求级资格，返回跳过原因（空串 = 可补写）。
 // 供 Web 层在缓存频道全局判定前先分流。
 func (s *Service) DumpBackfillEligibility(ctx context.Context, requestID int64) (string, error) {
-	return dumpBackfillSkip(ctx, s.store, requestID, s.dumpLive, s.dumpChannel())
+	return dumpBackfillSkip(ctx, s.store, requestID, s.dumpLive, s.dumpChannelIDs())
 }
 
 // DumpBackfill 对终态请求执行缓存补写：事务内复核资格（单连接下事务即
@@ -92,11 +93,11 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 	// 副本有效性试探（EntryLive = Bot API 网络调用）必须在事务外完成：
 	// store 是单连接（SQLite 单写者），事务持连接期间的网络 IO 会拖住
 	// 全站 DB 操作。试探结论（stale）传入事务内做纯 DB 复核。
-	// 缓存频道 ID 同样在事务外解析（闭包读 settings，严禁入事务）。
-	channel := s.dumpChannel()
+	// 启用缓存频道列表同样在事务外解析（闭包读 settings，严禁入事务）。
+	channels := s.dumpChannelIDs()
 	stale := false
 	if s.dumpLive != nil {
-		if _, err := s.store.LatestDumpEntry(ctx, req.ChannelKey, req.MessageID, channel); err == nil {
+		if _, err := s.store.LatestDumpEntryAmong(ctx, req.ChannelKey, req.MessageID, channels); err == nil {
 			stale = !s.dumpLive(ctx, req.ChannelKey, req.MessageID)
 		}
 	}
@@ -107,7 +108,7 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 	err = s.store.Tx(ctx, func(tx *store.Store) error {
 		// 事务内复核仅限纯 DB 判定：请求存在 + 终态 + 条目存在性；
 		// 副本有效性以事务外试探结论为准（网络试探严禁入事务）
-		skip, err := dumpBackfillSkipInTx(ctx, tx, requestID, s.dumpLive != nil, stale, channel)
+		skip, err := dumpBackfillSkipInTx(ctx, tx, requestID, s.dumpLive != nil, stale, channels)
 		if err != nil {
 			return err
 		}
@@ -186,11 +187,11 @@ func (s *Service) DumpBackfill(ctx context.Context, actor string, requestID int6
 }
 
 // dumpBackfillSkip 判定请求级补写资格（供事务外预检调用；内含 EntryLive
-// 试探复制的网络调用，严禁传入事务视图）。判定：请求存在、已终态、缓存
-// 频道无同链接的有效副本——副本消息可能被管理员在客户端删除，条目坐标
-// 不感知删除，以试探复制结论为准（live 为 nil 时条目存在即视为有效，
+// 试探复制的网络调用，严禁传入事务视图）。判定：请求存在、已终态、启用
+// 缓存频道均无同链接的有效副本——副本消息可能被管理员在客户端删除，条目
+// 坐标不感知删除，以试探复制结论为准（live 为 nil 时条目存在即视为有效，
 // 保守旧行为）。返回跳过原因（空串 = 通过）；error 仅存储故障。
-func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, live dumpLiveFunc, channelID int64) (string, error) {
+func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, live dumpLiveFunc, channelIDs []int64) (string, error) {
 	r, err := st.GetRequest(ctx, requestID)
 	if errors.Is(err, store.ErrNotFound) {
 		return DumpBackfillSkipNotFound, nil
@@ -203,7 +204,7 @@ func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, liv
 	default:
 		return DumpBackfillSkipNotFinished, nil
 	}
-	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID, channelID); err == nil {
+	if _, err := st.LatestDumpEntryAmong(ctx, r.ChannelKey, r.MessageID, channelIDs); err == nil {
 		if live != nil && !live(ctx, r.ChannelKey, r.MessageID) {
 			return "", nil // 副本消息已被删除：放行补写自愈
 		}
@@ -218,7 +219,7 @@ func dumpBackfillSkip(ctx context.Context, st *store.Store, requestID int64, liv
 // 单连接下事务持连接期间的 IO 会拖住全站）：请求存在 + 终态 + 条目存在性。
 // 副本有效性以事务外试探结论为准：stale=true（试探判定已失效）时放行
 // 建行自愈；hasLive=false（未注入试探通道）时条目存在即视为有效。
-func dumpBackfillSkipInTx(ctx context.Context, st *store.Store, requestID int64, hasLive, stale bool, channelID int64) (string, error) {
+func dumpBackfillSkipInTx(ctx context.Context, st *store.Store, requestID int64, hasLive, stale bool, channelIDs []int64) (string, error) {
 	r, err := st.GetRequest(ctx, requestID)
 	if errors.Is(err, store.ErrNotFound) {
 		return DumpBackfillSkipNotFound, nil
@@ -231,7 +232,7 @@ func dumpBackfillSkipInTx(ctx context.Context, st *store.Store, requestID int64,
 	default:
 		return DumpBackfillSkipNotFinished, nil
 	}
-	if _, err := st.LatestDumpEntry(ctx, r.ChannelKey, r.MessageID, channelID); err == nil {
+	if _, err := st.LatestDumpEntryAmong(ctx, r.ChannelKey, r.MessageID, channelIDs); err == nil {
 		if hasLive && stale {
 			return "", nil // 副本已失效（事务外试探结论）：放行补写自愈
 		}

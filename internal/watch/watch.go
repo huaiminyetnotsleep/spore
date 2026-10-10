@@ -147,7 +147,14 @@ const (
 	SubmitInviteWaitingBot      SubmitOutcomeKind = "invite_waiting_bot"      // 读取账号已加入，等待 Bot 被人工设为管理员
 	SubmitInviteInvalid         SubmitOutcomeKind = "invite_invalid"          // 邀请无效/过期/指向普通群组
 	SubmitReaderUnavailable     SubmitOutcomeKind = "reader_unavailable"      // MTProto 读取账号暂不可用
+	SubmitDumpChannelConflict   SubmitOutcomeKind = "dump_channel_conflict"   // 目标是缓存频道（监听源与缓存频道互斥，防循环转发）
 )
+
+// ErrDumpChannelConflict 是「目标是缓存频道」的哨兵错误（AdminAdd 返回，
+// Web 端据此转受控 400 文案；Bot 提交路径走 SubmitDumpChannelConflict 结果）。
+// 缓存频道与监听源必须互斥：预热副本写入缓存频道会再次触发该"源"的
+// channel_post，监听再次预热形成循环转发。
+var ErrDumpChannelConflict = errors.New("缓存频道不能同时作为监听源")
 
 // Membership 是私有邀请流程所需的最小 MTProto 能力（生产为
 // mtproto.MembershipBridge；离线时返回 mtproto.ErrMembershipUnavailable）。
@@ -203,6 +210,11 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 			return SubmitOutcome{Kind: SubmitNotAdmin}, nil
 		}
 		return SubmitOutcome{}, err
+	}
+	// 循环转发防护：缓存频道不能同时作为监听源（副本写回会再次触发本
+	// "源"的 channel_post，监听再次预热形成死循环）
+	if title, conflict := s.dumpChannelConflict(ctx, chat.ID); conflict {
+		return SubmitOutcome{Kind: SubmitDumpChannelConflict, Title: title}, nil
 	}
 	// 查重：本人幂等刷新；他人（含管理员）已添加则拒绝。
 	existing, err := s.st.GetWatchSource(ctx, chat.ID)
@@ -278,6 +290,12 @@ func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bo
 	if err != nil {
 		return AdminAddResult{}, err
 	}
+	// 循环转发防护：缓存频道不能同时作为监听源（同 Submit）
+	if title, conflict := s.dumpChannelConflict(ctx, chat.ID); conflict {
+		return AdminAddResult{}, fmt.Errorf(
+			"%w：频道「%s」（%d）已配置为缓存频道，预热副本写回会触发循环转发；请换一个频道，或先在「频道设置」移除该缓存频道。",
+			ErrDumpChannelConflict, title, chat.ID)
+	}
 	row, err := s.st.UpsertWatchSource(ctx, store.WatchSource{
 		ChannelID:  chat.ID,
 		Kind:       string(chat.Type),
@@ -293,6 +311,22 @@ func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bo
 	}
 	s.log.Info("监听源已由管理员添加", "channel_id", chat.ID, "actor", actor)
 	return AdminAddResult{Source: &row}, nil
+}
+
+// dumpChannelConflict 判定频道是否为已配置的缓存频道（列表内任一项，
+// 含停用——停用后重新启用同样会成环，注册侧一刀切最简明）。命中返回
+// 缓存频道展示标题与 true。
+func (s *Service) dumpChannelConflict(ctx context.Context, channelID int64) (string, bool) {
+	for _, c := range syscfg.LoadEffectiveDumpChannels(ctx, s.st, 0) {
+		if c.ChannelID == channelID {
+			title := c.Title
+			if title == "" {
+				title = strconv.FormatInt(c.ChannelID, 10)
+			}
+			return title, true
+		}
+	}
+	return "", false
 }
 
 // verifyTarget 解析并校验源目标：频道或超级群组，且 bot（主 bot 校验）

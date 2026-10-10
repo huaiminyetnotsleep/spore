@@ -4,18 +4,20 @@
  * 配置可继续归入本页分区。
  * 绑定频道投递总开关（channel_copy_enabled）：切换即保存、即时生效；
  * 关闭只暂停任务成功后的副本投递，用户绑定关系保留（「频道绑定」页维护）。
- * 缓存频道（dump_channel）：输入 @用户名 / t.me 链接 / -100 数字 ID，保存时
- * 经服务端解析并校验 bot 已是频道管理员，存数字 ID（频道之后公开转私有不
- * 影响）；清空即关闭复用——清除走 danger 二次确认防误触。复用总开关
- * （tg_reuse_enabled）保留在缓存频道分区；重复链接检测窗口
+ * 缓存频道（dump_channels）：多频道列表，每项独立启用开关（切换即保存），
+ * 新增输入 @用户名 / t.me 链接 / -100 数字 ID，保存时经服务端解析并校验
+ * bot 已是频道管理员，存数字 ID（频道之后公开转私有不影响）；移除走 danger
+ * 二次确认防误触。开启的频道在任务成功后各写一份干净副本（扇出），重复
+ * 链接复用在全部启用频道范围内查命中；全部停用/清空即关闭复用。复用总
+ * 开关（tg_reuse_enabled）保留在缓存频道分区；重复链接检测窗口
  * （dedup_window_min）使用显式保存按钮，输入与保存按钮分区排列（FormActions）。
  */
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
 
-import { fetchDumpMigrate, fetchSettings } from "../../api/admin";
-import { saveSettings, startDumpMigrate } from "../../api/mutations";
+import { fetchDumpMigrate, fetchSettings, DumpChannelView } from "../../api/admin";
+import { DumpChannelInput, saveSettings, startDumpMigrate } from "../../api/mutations";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
 import { FormActions } from "../shared/FormActions";
 import { PageScaffold, PageSection } from "../shared/PageLayout";
@@ -23,6 +25,10 @@ import { PageQueryState } from "../shared/QueryStates";
 import { SettingItem } from "../shared/SettingItem";
 
 const { Text } = Typography;
+
+/** 视图列表 → 保存载荷（整体替换语义：已配置项按 ID 保序携带启用状态）。 */
+const toPayload = (channels: DumpChannelView[]): DumpChannelInput[] =>
+  channels.map((c) => ({ id: c.channel_id, enabled: c.enabled }));
 
 export function ChannelSettingsPage() {
   const { data, isPending, isError, refetch } = useQuery({
@@ -48,7 +54,7 @@ export function ChannelSettingsPage() {
     }
   }, [migrate.data?.suggest_from, migrateFrom]);
 
-  // 发起迁移：把旧缓存频道的副本整批复制到当前频道（不重新提取）
+  // 发起迁移：把旧缓存频道的副本整批复制到当前全部启用频道（不重新提取）
   const startMigrate = useAdminAction({
     action: (from: number) => startDumpMigrate(from),
     invalidate: [["dumpcache", "migrate"]],
@@ -74,15 +80,47 @@ export function ChannelSettingsPage() {
         : "绑定频道投递已关闭，绑定关系保留；重新打开即恢复。",
   });
 
-  // 缓存频道：保存（非空=解析校验后配置；空串=清除）。服务端校验失败回受控 400。
-  const saveDumpChannel = useAdminAction({
-    action: (value: string) => saveSettings({ dump_channel: value.trim() }),
+  // 缓存频道列表（整体替换）：新增走服务端校验解析，启停/移除按 ID 替换。
+  // 服务端校验失败回受控 400。
+  const saveDumpChannels = useAdminAction({
+    action: (list: DumpChannelInput[]) => saveSettings({ dump_channels: list }),
     invalidate: [["settings"]],
-    successText: (result) =>
-      result.settings.dump_channel_id !== 0
-        ? `缓存频道已配置（${result.settings.dump_channel_title || result.settings.dump_channel_id}），重复链接复用即时生效。`
-        : "缓存频道已清除，重复链接回到完整下载上传。",
+    successText: () => "缓存频道配置已更新，即时生效。",
+  });
+
+  // 新增频道：追加到当前列表末尾（默认启用），服务端校验通过后生效
+  const addDumpChannel = useAdminAction({
+    action: (target: string) =>
+      saveSettings({
+        dump_channels: [...toPayload(data?.dump_channels ?? []), { target }],
+      }),
+    invalidate: [["settings"]],
+    successText: (result) => {
+      const channels = result.settings.dump_channels;
+      const added = channels[channels.length - 1];
+      return `缓存频道已添加（${added?.title || added?.channel_id}），重复链接复用即时生效。`;
+    },
     onDone: () => setDumpTarget(""),
+  });
+
+  // 启用开关：切换即保存（只翻转目标项，其余保序保留）
+  const toggleDumpChannel = useAdminAction({
+    action: (input: { item: DumpChannelView; enabled: boolean }) =>
+      saveSettings({
+        dump_channels: (data?.dump_channels ?? []).map((c) => ({
+          id: c.channel_id,
+          enabled: c.channel_id === input.item.channel_id ? input.enabled : c.enabled,
+        })),
+      }),
+    invalidate: [["settings"]],
+    successText: (result, input) => {
+      const channels = result.settings.dump_channels;
+      const matched = channels.find((c) => c.channel_id === input.item.channel_id);
+      if (!matched) return "缓存频道配置已更新，即时生效。";
+      return matched.enabled
+        ? `缓存频道「${matched.title || matched.channel_id}」已启用，任务成功后将写入该频道。`
+        : `缓存频道「${matched.title || matched.channel_id}」已停用：不再写入，历史副本暂不用于复用。`;
+    },
   });
 
   // 复用总开关：切换即保存，即时生效；关闭回到完整下载上传，副本保留。
@@ -102,9 +140,9 @@ export function ChannelSettingsPage() {
     successText: () => "重复链接检测窗口已更新，即时生效。",
   });
 
-  const dumpConfigured = (data?.dump_channel_id ?? 0) !== 0;
-  // 输入为空且当前已配置 → 按钮进入「清除配置」语义（danger 二次确认）
-  const clearDumpMode = dumpTarget.trim() === "" && dumpConfigured;
+  const channels = data?.dump_channels ?? [];
+  const enabledChannels = channels.filter((c) => c.enabled);
+  const hasEnabledDump = enabledChannels.length > 0;
   const dedupDirty =
     dedupMin != null && data != null && dedupMin !== data.dedup_window_min;
 
@@ -142,47 +180,92 @@ export function ChannelSettingsPage() {
             <Space direction="vertical" size="small" className="field-width-full">
               <Text>
                 当前：
-                {data && data.dump_channel_id !== 0 ? (
+                {channels.length === 0 ? (
+                  <Tag>未配置（无复用）</Tag>
+                ) : hasEnabledDump ? (
                   <>
-                    <Tag color="cyan">{data.dump_channel_title || "已配置"}</Tag>
-                    <Text code>{data.dump_channel_id}</Text>
+                    {enabledChannels.map((c) => (
+                      <Tag key={c.channel_id} color="cyan">
+                        {c.title || "已配置"}
+                      </Tag>
+                    ))}
+                    <Text code>{enabledChannels.map((c) => c.channel_id).join("、")}</Text>
                   </>
                 ) : (
-                  <Tag>未配置（无复用）</Tag>
+                  <Tag>已全部停用（无复用）</Tag>
                 )}
               </Text>
-              <Input
-                value={dumpTarget}
-                onChange={(e) => setDumpTarget(e.target.value)}
-                placeholder="@用户名 / https://t.me/链接 / -100 数字 ID"
-                aria-label="缓存频道目标"
-                className="field-width-full"
-              />
-              <FormActions>
+              {channels.length > 0 ? (
+                <div className="dump-channel-list" data-testid="dump-channel-list">
+                  {channels.map((c) => (
+                    <div key={c.channel_id} className="dump-channel-row">
+                      <span className="dump-channel-row__main">
+                        <Tag color={c.enabled ? "cyan" : undefined}>
+                          {c.title || "已配置"}
+                        </Tag>
+                        <Text code>{c.channel_id}</Text>
+                        {!c.enabled ? <Tag>已停用</Tag> : null}
+                      </span>
+                      <span className="dump-channel-row__actions">
+                        <Switch
+                          checked={c.enabled}
+                          disabled={toggleDumpChannel.pending}
+                          onChange={(enabled) =>
+                            void toggleDumpChannel.run({ item: c, enabled })
+                          }
+                          checkedChildren="启用"
+                          unCheckedChildren="停用"
+                          aria-label={`启用缓存频道 ${c.title || c.channel_id}`}
+                        />
+                        <Button
+                          danger
+                          size="small"
+                          disabled={saveDumpChannels.pending}
+                          onClick={() =>
+                            confirm({
+                              intent: "danger",
+                              title: "确认移除缓存频道",
+                              content: `确定移除缓存频道「${c.title || c.channel_id}」？该频道中的历史副本保留但不再用于复用；重新添加即可恢复。`,
+                              okText: "移除",
+                              action: () =>
+                                saveDumpChannels.run(
+                                  toPayload(channels.filter((x) => x.channel_id !== c.channel_id)),
+                                ),
+                            })
+                          }
+                        >
+                          移除
+                        </Button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <Space.Compact className="field-width-full">
+                <Input
+                  value={dumpTarget}
+                  onChange={(e) => setDumpTarget(e.target.value)}
+                  placeholder="@用户名 / https://t.me/链接 / -100 数字 ID"
+                  aria-label="缓存频道目标"
+                  onPressEnter={() => {
+                    if (dumpTarget.trim() !== "") void addDumpChannel.run(dumpTarget.trim());
+                  }}
+                />
                 <Button
                   type="primary"
-                  loading={saveDumpChannel.pending}
-                  disabled={dumpTarget.trim() === "" && !dumpConfigured}
-                  onClick={() =>
-                    clearDumpMode
-                      ? confirm({
-                          intent: "danger",
-                          title: "确认清除缓存频道",
-                          content: "确定清除缓存频道配置？重复链接将回到完整下载上传；重新配置即可恢复复用。",
-                          okText: "清除",
-                          action: () => saveDumpChannel.run(dumpTarget),
-                        })
-                      : void saveDumpChannel.run(dumpTarget)
-                  }
+                  loading={addDumpChannel.pending}
+                  disabled={dumpTarget.trim() === ""}
+                  onClick={() => void addDumpChannel.run(dumpTarget.trim())}
                 >
-                  {clearDumpMode ? "清除配置" : "验证并保存"}
+                  验证并添加
                 </Button>
-              </FormActions>
+              </Space.Compact>
               <Text type="secondary">
-                新建一个私有频道并把机器人设为管理员后，在此填入频道即可启用重复链接复用：同一链接任何人再次提交都直接从缓存频道整条复制，秒级送达（不限媒体大小、相册保组）。公开频道可直接填用户名或链接；私有频道填数字
+                可配置多个缓存频道（最多 10 个），每个频道有独立启用开关：开启的频道在任务成功后各写一份干净副本（多一份冗余，Bot
+                API 写入量按频道数增加），重复链接复用在全部启用频道内命中。新建一个私有频道并把机器人设为管理员后，在此填入频道即可启用复用：同一链接任何人再次提交都直接从缓存频道整条复制，秒级送达（不限媒体大小、相册保组）。公开频道可直接填用户名或链接；私有频道填数字
                 ID（频道列表页可复制）。保存的是数字
                 ID，频道之后由公开转为私有不影响使用；注意频道<strong>不能开启「限制保存内容」（限制转发）</strong>——Telegram
-                会拒绝机器人从该类频道复制消息，复用将失效并自动回落完整下载上传。清空频道配置即关闭。
+                会拒绝机器人从该类频道复制消息，复用将失效并自动回落完整下载上传。停用的频道不读不写（历史副本保留，重新开启即恢复）；移除全部频道或全部停用即关闭复用。
               </Text>
               <SettingItem
                 control={
@@ -197,12 +280,12 @@ export function ChannelSettingsPage() {
                 description="关闭后重复链接回到完整下载上传；缓存频道中的副本保留，重新打开即恢复。"
               />
 
-              {/* 缓存迁移：切换频道或升级后，把旧频道可读的副本搬到当前频道 */}
+              {/* 缓存迁移：切换频道或新增频道后，把旧频道可读的副本搬到全部启用频道 */}
               <div className="settings-field-grid" data-testid="dump-migrate-section">
                 <div>
                   <Text strong>迁移旧缓存</Text>
                   <Text type="secondary" className="settings-note">
-                    把旧缓存频道中仍可读的副本整批复制到当前频道（免重新提取，回写新消息
+                    把旧缓存频道中仍可读的副本整批复制到当前全部启用的缓存频道（免重新提取，逐频道落新消息
                     ID）；源频道不可读时中止，剩余条目由复用自愈重建。后台执行、可断点续跑。
                   </Text>
                 </div>
@@ -216,12 +299,12 @@ export function ChannelSettingsPage() {
                     />
                     <Button
                       loading={startMigrate.pending}
-                      disabled={!dumpConfigured || migrateFrom.trim() === "" || migrate.data?.progress.running}
+                      disabled={!hasEnabledDump || migrateFrom.trim() === "" || migrate.data?.progress.running}
                       onClick={() =>
                         confirm({
                           intent: "warning",
                           title: "确认迁移旧缓存",
-                          content: "将把源缓存频道的副本批量复制到当前缓存频道，期间占用 Bot API 配额（分批限速）。确定开始？",
+                          content: "将把源缓存频道的副本批量复制到当前全部启用的缓存频道，期间占用 Bot API 配额（分批限速）。确定开始？",
                           action: () => startMigrate.run(Number(migrateFrom.trim())),
                         })
                       }

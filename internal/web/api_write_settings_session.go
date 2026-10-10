@@ -33,8 +33,9 @@ type apiSettingsView struct {
 	MediaSame                     bool                         `json:"media_same"`
 	ChannelCopyEnabled            bool                         `json:"channel_copy_enabled"`     // 绑定频道投递总开关（即时生效）
 	TGReuseEnabled                bool                         `json:"tg_reuse_enabled"`         // TG 链接复用总开关（即时生效；默认开）
-	DumpChannelID                 int64                        `json:"dump_channel_id"`          // 缓存频道数字 ID（0 = 未配置）
-	DumpChannelTitle              string                       `json:"dump_channel_title"`       // 缓存频道标题（展示用）
+	DumpChannels                  []syscfg.DumpChannel         `json:"dump_channels"`            // 缓存频道列表（每项独立启用开关；空 = 未配置）
+	DumpChannelID                 int64                        `json:"dump_channel_id"`          // 首个启用缓存频道数字 ID（0 = 未配置/全部停用；兼容派生值）
+	DumpChannelTitle              string                       `json:"dump_channel_title"`       // 首个启用缓存频道标题（展示用；兼容派生值）
 	JoinEnabled                   bool                         `json:"join_enabled"`             // 频道加入总开关（即时生效；默认关）
 	JoinAutoLeaveExternal         bool                         `json:"join_auto_leave_external"` // 自动退出外部拉入频道（惰性检测；默认关）
 	JoinRequireApproval           bool                         `json:"join_require_approval"`
@@ -102,8 +103,17 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 	view.MemoryBudgetBytes = LoadMemoryBudget(ctx, s.st, s.cfg.MemoryBudget)
 	view.ChannelCopyEnabled = LoadChannelCopyEnabled(ctx, s.st)
 	view.TGReuseEnabled = LoadTGReuseEnabled(ctx, s.st)
-	view.DumpChannelID = LoadEffectiveDumpChannelID(ctx, s.st, s.cfg.DumpChannelID)
-	view.DumpChannelTitle = LoadDumpChannelTitle(ctx, s.st)
+	// 缓存频道列表 + 兼容派生值（首个启用频道的 ID/标题，供只关心
+	// 「是否可复用」的既有消费方零改动过渡）
+	dumpChannels := syscfg.LoadEffectiveDumpChannels(ctx, s.st, s.cfg.DumpChannelID)
+	view.DumpChannels = dumpChannels
+	for _, c := range dumpChannels {
+		if c.Enabled {
+			view.DumpChannelID = c.ChannelID
+			view.DumpChannelTitle = c.Title
+			break
+		}
+	}
 	joinCfg := syscfg.LoadJoinConfig(ctx, s.st)
 	view.JoinEnabled = joinCfg.Enabled
 	view.JoinAutoLeaveExternal = joinCfg.AutoLeaveExternal
@@ -158,42 +168,42 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	var in struct {
-		Timezone               string    `json:"timezone"`
-		DedupWindowMin         *int      `json:"dedup_window_min"`
-		MaxLinksPerMessage     *int      `json:"max_links_per_message"`
-		QueueCapacity          *int      `json:"queue_capacity"`
-		WorkerCount            *int      `json:"worker_count"`
-		MaxFileSize            string    `json:"max_file_size"`
-		MaxFileSizeUnit        string    `json:"max_file_unit"`
-		StreamLimit            string    `json:"stream_limit"`
-		StreamLimitUnit        string    `json:"stream_limit_unit"`
-		TempDirMaxSize         string    `json:"temp_dir_max_size"`
-		TempDirMaxSizeUnit     string    `json:"temp_dir_max_size_unit"`
-		MemoryBudget           string    `json:"memory_budget"`
-		MemoryBudgetUnit       string    `json:"memory_budget_unit"`
-		ChannelCopyEnabled     *bool     `json:"channel_copy_enabled"`
-		TGReuseEnabled         *bool     `json:"tg_reuse_enabled"`
-		DumpChannel            *string   `json:"dump_channel"`
-		JoinEnabled            *bool     `json:"join_enabled"`
-		JoinAutoLeaveExternal  *bool     `json:"join_auto_leave_external"`
-		JoinRequireApproval    *bool     `json:"join_require_approval"`
-		JoinMaxChannels        *int      `json:"join_max_channels"`
-		JoinMuteEnabled        *bool     `json:"join_mute_enabled"`
-		JoinArchiveEnabled     *bool     `json:"join_archive_enabled"`
-		WatchApplyEnabled      *bool     `json:"watch_apply_enabled"`
-		WatchRequireApproval   *bool     `json:"watch_require_approval"`
-		WatchMaxSources        *int      `json:"watch_max_sources"`
-		WatchPerUserLimit      *int      `json:"watch_per_user_limit"`
-		WatchForwardChannels   *[]string `json:"watch_forward_channels"`
-		MaxRequestAttempts     *int      `json:"max_request_attempts"`
-		BackupIntervalHours    *int      `json:"backup_interval_hours"`
-		BackupKeepCount        *int      `json:"backup_keep_count"`
-		ErrorLogRetentionDays  *int      `json:"error_log_retention_days"`
-		DownloadThreads        *int      `json:"download_threads"`
-		UploadThreads          *int      `json:"upload_threads"`
-		DownloadConnections    *int      `json:"download_connections"`
-		UploadConnections      *int      `json:"upload_connections"`
-		ClearTransferOverrides []string  `json:"clear_transfer_overrides"`
+		Timezone               string              `json:"timezone"`
+		DedupWindowMin         *int                `json:"dedup_window_min"`
+		MaxLinksPerMessage     *int                `json:"max_links_per_message"`
+		QueueCapacity          *int                `json:"queue_capacity"`
+		WorkerCount            *int                `json:"worker_count"`
+		MaxFileSize            string              `json:"max_file_size"`
+		MaxFileSizeUnit        string              `json:"max_file_unit"`
+		StreamLimit            string              `json:"stream_limit"`
+		StreamLimitUnit        string              `json:"stream_limit_unit"`
+		TempDirMaxSize         string              `json:"temp_dir_max_size"`
+		TempDirMaxSizeUnit     string              `json:"temp_dir_max_size_unit"`
+		MemoryBudget           string              `json:"memory_budget"`
+		MemoryBudgetUnit       string              `json:"memory_budget_unit"`
+		ChannelCopyEnabled     *bool               `json:"channel_copy_enabled"`
+		TGReuseEnabled         *bool               `json:"tg_reuse_enabled"`
+		DumpChannels           *[]DumpChannelInput `json:"dump_channels"`
+		JoinEnabled            *bool               `json:"join_enabled"`
+		JoinAutoLeaveExternal  *bool               `json:"join_auto_leave_external"`
+		JoinRequireApproval    *bool               `json:"join_require_approval"`
+		JoinMaxChannels        *int                `json:"join_max_channels"`
+		JoinMuteEnabled        *bool               `json:"join_mute_enabled"`
+		JoinArchiveEnabled     *bool               `json:"join_archive_enabled"`
+		WatchApplyEnabled      *bool               `json:"watch_apply_enabled"`
+		WatchRequireApproval   *bool               `json:"watch_require_approval"`
+		WatchMaxSources        *int                `json:"watch_max_sources"`
+		WatchPerUserLimit      *int                `json:"watch_per_user_limit"`
+		WatchForwardChannels   *[]string           `json:"watch_forward_channels"`
+		MaxRequestAttempts     *int                `json:"max_request_attempts"`
+		BackupIntervalHours    *int                `json:"backup_interval_hours"`
+		BackupKeepCount        *int                `json:"backup_keep_count"`
+		ErrorLogRetentionDays  *int                `json:"error_log_retention_days"`
+		DownloadThreads        *int                `json:"download_threads"`
+		UploadThreads          *int                `json:"upload_threads"`
+		DownloadConnections    *int                `json:"download_connections"`
+		UploadConnections      *int                `json:"upload_connections"`
+		ClearTransferOverrides []string            `json:"clear_transfer_overrides"`
 	}
 	if !s.apiReadJSON(w, r, op, &in) {
 		return
@@ -212,7 +222,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		MemoryBudgetUnit:       in.MemoryBudgetUnit,
 		ChannelCopyEnabled:     in.ChannelCopyEnabled,
 		TGReuseEnabled:         in.TGReuseEnabled,
-		DumpChannel:            in.DumpChannel,
+		DumpChannels:           in.DumpChannels,
 		JoinEnabled:            in.JoinEnabled,
 		JoinAutoLeaveExternal:  in.JoinAutoLeaveExternal,
 		JoinRequireApproval:    in.JoinRequireApproval,

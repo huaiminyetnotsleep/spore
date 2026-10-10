@@ -213,7 +213,7 @@ export function RequestsListPage() {
   const cloudDrive = useQuery({ queryKey: ["cloud-drive"], queryFn: fetchCloudDrive });
   // 缓存频道配置只用于缓存补写入口的可用性判断；查询失败不阻塞列表。
   const settings = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
-  const dumpChannelReady = (settings.data?.dump_channel_id ?? 0) !== 0;
+  const dumpChannelReady = (settings.data?.dump_channels ?? []).some((c) => c.enabled);
   // 机器人池列表：机器人筛选下拉选项；查询失败不阻塞列表。
   const bots = useQuery({ queryKey: ["bots"], queryFn: fetchBots });
   const botOptions = (bots.data?.bots ?? []).map((bot) => ({

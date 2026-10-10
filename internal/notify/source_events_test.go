@@ -43,7 +43,7 @@ func TestDumpChannelWriteFailedRaisesAndRecovers(t *testing.T) {
 	h, st, _ := newSourceTestHub(t)
 	ctx := context.Background()
 
-	h.DumpChannelWriteFailed(ctx, "SEND_TARGET_INVALID")
+	h.DumpChannelWriteFailed(ctx, "SEND_TARGET_INVALID", -1001234567890)
 	e := mustEvent(t, st, KeyDumpChannelWriteFailed)
 	if e.Status != store.EventOpen || e.Severity != SeverityWarn {
 		t.Fatalf("写失败事件应为 open/warn: %+v", e)

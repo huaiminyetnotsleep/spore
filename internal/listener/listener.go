@@ -2,30 +2,32 @@
 // 与超级群组消息（bot 为管理员的源）交给本包；本包按 watch_sources 配置
 // 过滤、聚合同一相册（media_group_id 防抖窗口）、然后两级转储：
 //
-//   - 快路径（源未开"禁止转发"）：受理 bot copyMessages 服务端复制进缓存
-//     频道——不下载不上传、无大小限制、相册保组；成功后按每个成员消息
-//     ID 落 dump_entries（公开源记 username 与 -100 双键，t.me 两种链接
-//     形态都命中复用）。
+//   - 快路径（源未开"禁止转发"）：受理 bot copyMessages 服务端复制进每个
+//     启用的缓存频道（多缓存频道扇出，逐频道查重：已有副本的频道跳过，
+//     尚无副本的频道补写，向全量收敛）——不下载不上传、无大小限制、相册
+//     保组；成功后按每个成员消息 ID 逐频道落 dump_entries（公开源记
+//     username 与 -100 双键，t.me 两种链接形态都命中复用）。
 //   - 回退路径（has_protected_content 预判或复制被拒）：经 access.
 //     EnqueueSourceDump 特权入队 DumpOnly 任务，走现有 worker 管线
-//     （系统账号 fetch → 下载 → 重传进缓存频道 → 落条目，>2GB 自动分段）。
-//     回退只入队相册首条消息的定位符（fetch 会取回整组，整组重传一次），
-//     条目只落单键——受保护的公开源是小众路径，键覆盖缺口由下次正常
-//     投递自愈。
+//     （系统账号 fetch → 下载 → 重传进启用缓存频道 → 其余频道从副本
+//     服务端复制 → 落条目，>2GB 自动分段）。回退只入队相册首条消息的
+//     定位符（fetch 会取回整组，整组重传一次），条目只落单键——受保护的
+//     公开源是小众路径，键覆盖缺口由下次正常投递自愈。
 //
 // 一切尽力而为：任何失败只记日志，不影响监听后续消息。多机器人池下同
-// 一源可能多个 bot 都收到帖：转储前查 dump_entries 去重，漏网的并发重复
-// 副本无害（复用按最新条目命中）。
+// 一源可能多个 bot 都收到帖：转储前逐频道查 dump_entries 去重，漏网的
+// 并发重复副本无害（复用按最新条目命中）。
 //
 // 缓存频道之外可配置监听转发频道（syscfg watch_forward_channels，独立于
 // 缓存频道）：非保护源在缓存复制成功后从源直接镜像；保护源由重传管线
 // 进缓存后从缓存中转镜像（queue DumpMirror，按 request_id 回写事件目标）。
-// 镜像逐目标尽力而为，事件只记实际成功写入的目标。
+// 镜像逐目标尽力而为，事件只记实际成功写入的目标（含各启用缓存频道）。
 package listener
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -244,24 +246,41 @@ func (s *Service) activeSource(channelID int64) (store.WatchSource, bool, string
 	return src, active, reason
 }
 
-// process 转储一个已聚齐的批次：查重 → 受保护分流 → 快路径复制 → 落条目。
+// process 转储一个已聚齐的批次：逐启用缓存频道查重 → 受保护分流 → 快路径
+// 扇出复制 → 逐频道落条目。
 func (s *Service) process(ctx context.Context, g *aggGroup) {
 	if s.dump == nil || !s.dump.Enabled() {
 		s.log.Info("监听消息跳过：缓存频道未配置",
 			"chat_id", g.chat.ID, "message_id", g.msgs[0].ID, "reason", "缓存频道未配置")
 		return
 	}
-	channel, ok := s.dump.Channel()
+	channels, ok := s.dump.Channels()
 	if !ok {
 		s.log.Info("监听消息跳过：缓存频道不可用",
 			"chat_id", g.chat.ID, "message_id", g.msgs[0].ID, "reason", "缓存频道不可用")
 		return
 	}
-	// 缓存频道始终是首个目标（预热 + 兜底语义）；监听转发频道是独立于
-	// 缓存频道的额外镜像目标，随批读取最新配置并过滤与缓存重复的 ID。
-	cacheTarget := store.WatchEventTarget{ChannelID: channel,
-		Title: syscfg.LoadDumpChannelTitle(ctx, s.st)}
-	forwards := forwardTargets(ctx, s.st, channel)
+	// 循环转发防护：缓存频道不能同时是监听源——预热副本写入缓存频道会
+	// 再次触发该"源"的 channel_post，监听再次预热形成死循环。注册侧
+	//（watch Submit/AdminAdd 与 Web 缓存频道添加）已双向校验，此处兜底
+	// 防御配置改动的中间态与历史脏数据。
+	if containsChannel(channels, g.chat.ID) {
+		s.log.Info("监听消息跳过：目标聊天是启用的缓存频道（循环转发防护）",
+			"chat_id", g.chat.ID, "message_id", g.msgs[0].ID, "reason", "缓存频道与监听源互斥")
+		return
+	}
+	// 启用缓存频道即预热目标（配置顺序，标题取配置快照：settings 驱动的
+	// 标题，env 兜底部署无标题快照则展示回退数字 ID）；监听转发频道是
+	// 独立于缓存频道的额外镜像目标，随批读取最新配置并过滤与缓存频道
+	// 重复的 ID。
+	cfg := syscfg.LoadEffectiveDumpChannels(ctx, s.st, 0)
+	titles := make(map[int64]string, len(cfg))
+	for _, c := range cfg {
+		if c.Enabled {
+			titles[c.ChannelID] = c.Title
+		}
+	}
+	forwards := forwardTargets(ctx, s.st, channels)
 	media := make([]*models.Message, 0, len(g.msgs))
 	for _, m := range g.msgs {
 		if hasMedia(m) {
@@ -287,16 +306,27 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 	numericKey := strconv.FormatInt(g.chat.ID, 10)
 	usernameKey := strings.ToLower(g.src.Username)
 
-	// 查重：任一键（公开源双键形态）已有条目即整批跳过——相册整体命中，
-	// 也是多 bot 池重复投递的主要防线；并发窗口漏过的重复副本无害，
-	// 复用按最新条目命中。
-	if _, ok := s.dump.Entry(ctx, numericKey, first.ID); ok {
+	// 逐启用频道查重（公开源双键形态任一命中即该频道已缓存）：已有副本的
+	// 频道跳过本批复制（也是多 bot 池重复投递的主要防线），尚无副本的频道
+	// 补写，向全量收敛；并发窗口漏过的重复副本无害，复用按最新条目命中。
+	need := make([]int64, 0, len(channels))
+	for _, channel := range channels {
+		if s.dump.EntryIn(ctx, channel, numericKey, first.ID) {
+			continue
+		}
+		if usernameKey != "" && s.dump.EntryIn(ctx, channel, usernameKey, first.ID) {
+			continue
+		}
+		need = append(need, channel)
+	}
+	if len(need) == 0 {
 		return
 	}
-	if usernameKey != "" {
-		if _, ok := s.dump.Entry(ctx, usernameKey, first.ID); ok {
-			return
-		}
+	// 全部启用频道的展示目标（事件 Targets 快照的缓存部分，无论单频道复制
+	// 成败先按配置记，复制结果再逐频道确认——尽力而为，失败频道不记）。
+	dumpTargets := make([]store.WatchEventTarget, 0, len(channels))
+	for _, channel := range channels {
+		dumpTargets = append(dumpTargets, store.WatchEventTarget{ChannelID: channel, Title: titles[channel]})
 	}
 
 	// 受保护源：服务端复制必被拒，直接走重传管线（相册整组只入队首条）。
@@ -309,7 +339,7 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 		}
 	}
 	if protected {
-		s.fallback(ctx, g, cacheTarget, usernameKey, numericKey, first.ID, "源开启禁止转发")
+		s.fallback(ctx, g, dumpTargets, usernameKey, numericKey, first.ID, "源开启禁止转发")
 		return
 	}
 
@@ -317,40 +347,65 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 	for _, m := range media {
 		ids = append(ids, m.ID)
 	}
-	dumpIDs, err := g.snd.CopyMessages(ctx, g.chat.ID, channel, ids)
-	if err != nil {
-		if isForwardsRestricted(err) {
-			s.fallback(ctx, g, cacheTarget, usernameKey, numericKey, first.ID, "复制被拒（禁止转发）")
-			return
+	// 逐启用频道扇出复制（原样完整副本）：单频道失败只记日志与错误日志并
+	// 继续其余频道；全部频道都因「禁止转发」被拒时回落重传管线。
+	var firstDumpIDs []int
+	written := make(map[int64]bool, len(need))
+	restricted := 0
+	for _, channel := range need {
+		dumpIDs, err := g.snd.CopyMessages(ctx, g.chat.ID, channel, ids)
+		if err != nil {
+			if isForwardsRestricted(err) {
+				restricted++
+				continue
+			}
+			s.log.Warn("监听源转储复制失败（跳过该频道，下一条消息自愈）",
+				"channel_id", g.chat.ID, "dump_channel", channel, "messages", len(ids),
+				"bot_id", g.botID, "bot_username", g.botUsername,
+				"hint", "请确认受理 bot 在该缓存频道有发帖权限", "error", err.Error())
+			s.errLog.Record(ctx, errlog.Record{
+				Source:  store.ErrorSourceWatch,
+				Code:    string(apperr.From(err).Code),
+				Stage:   "copy",
+				Detail:  err.Error(),
+				Message: "监听源转储复制失败（跳过该频道）：" + keyOf(usernameKey, numericKey),
+				Context: map[string]any{"channel_id": g.chat.ID, "dump_channel": channel,
+					"messages": len(ids), "bot_id": g.botID, "bot_username": g.botUsername},
+			})
+			continue
 		}
-		s.log.Warn("监听源转储复制失败（跳过本批，下一条消息自愈）",
-			"channel_id", g.chat.ID, "dump_channel", channel, "messages", len(ids),
-			"bot_id", g.botID, "bot_username", g.botUsername,
-			"hint", "请确认受理 bot 在缓存频道有发帖权限", "error", err.Error())
-		s.errLog.Record(ctx, errlog.Record{
-			Source:  store.ErrorSourceWatch,
-			Code:    string(apperr.From(err).Code),
-			Stage:   "copy",
-			Detail:  err.Error(),
-			Message: "监听源转储复制失败（跳过本批）：" + keyOf(usernameKey, numericKey),
-			Context: map[string]any{"channel_id": g.chat.ID, "dump_channel": channel,
-				"messages": len(ids), "bot_id": g.botID, "bot_username": g.botUsername},
-		})
+		// 每个成员消息 ID 都逐频道落条目（用户可能链接相册任意成员）；公开
+		// 源双键，username 归一小写（t.me 链接通常小写；混合大小写链接走
+		// -100 键兜底）。
+		for _, m := range media {
+			s.dump.RecordEntryFor(ctx, channel, numericKey, m.ID, dumpIDs)
+			if usernameKey != "" {
+				s.dump.RecordEntryFor(ctx, channel, usernameKey, m.ID, dumpIDs)
+			}
+		}
+		if firstDumpIDs == nil {
+			firstDumpIDs = dumpIDs
+		}
+		written[channel] = true
+	}
+	if len(written) == 0 && restricted == len(need) {
+		// 所有待补频道都被「禁止转发」拒绝：源侧保护，整组回落重传管线
+		s.fallback(ctx, g, dumpTargets, usernameKey, numericKey, first.ID, "复制被拒（禁止转发）")
 		return
 	}
-	// 每个成员消息 ID 都落条目（用户可能链接相册任意成员）；公开源双键，
-	// username 归一小写（t.me 链接通常小写；混合大小写链接走 -100 键兜底）。
-	for _, m := range media {
-		s.dump.RecordEntry(ctx, numericKey, m.ID, dumpIDs)
-		if usernameKey != "" {
-			s.dump.RecordEntry(ctx, usernameKey, m.ID, dumpIDs)
-		}
+	if len(written) > 0 {
+		s.dump.WriteRecovered(ctx)
 	}
 	// 转发频道镜像：缓存复制成功后从源逐个服务端复制（原样完整副本），
 	// 逐目标尽力而为——单目标失败只记日志与错误日志，不影响缓存结果与
-	// 其他目标；事件 targets 只记实际成功写入的目标（缓存频道优先）。
-	eventTargets := make([]store.WatchEventTarget, 0, len(forwards)+1)
-	eventTargets = append(eventTargets, cacheTarget)
+	// 其他目标；事件 targets 只记实际成功写入的目标（启用缓存频道优先：
+	// 本批跳过的频道本就已有副本，复制成功的按 written 记）。
+	eventTargets := make([]store.WatchEventTarget, 0, len(dumpTargets)+len(forwards))
+	for _, t := range dumpTargets {
+		if !containsChannel(need, t.ChannelID) || written[t.ChannelID] {
+			eventTargets = append(eventTargets, t)
+		}
+	}
 	for _, f := range forwards {
 		if _, err := g.snd.CopyMessages(ctx, g.chat.ID, f.ChannelID, ids); err != nil {
 			s.log.Warn("监听转发频道复制失败", "channel_id", g.chat.ID,
@@ -371,17 +426,19 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 	}
 	s.recordEvent(ctx, store.WatchEvent{
 		ChannelID: g.chat.ID, Username: g.src.Username, Title: g.src.Title,
-		MessageID: first.ID, MemberIDs: ids, DumpIDs: dumpIDs,
+		MessageID: first.ID, MemberIDs: ids, DumpIDs: firstDumpIDs,
 		Targets: eventTargets,
 		BotID:   g.botID, BotUsername: g.botUsername, Path: store.WatchPathCopy,
 	})
 	s.log.Info("监听源已预热缓存频道", "channel_id", g.chat.ID,
-		"channel_key", keyOf(usernameKey, numericKey), "messages", len(dumpIDs),
-		"forward_channels", len(eventTargets)-1)
+		"channel_key", keyOf(usernameKey, numericKey), "messages", len(ids),
+		"dump_channels", fmt.Sprintf("%d/%d", len(written), len(need)),
+		"forward_channels", len(forwards))
 }
 
-// fallback 走特权入队重传管线（受保护内容；相册整组一次）。
-func (s *Service) fallback(ctx context.Context, g *aggGroup, cacheTarget store.WatchEventTarget,
+// fallback 走特权入队重传管线（受保护内容；相册整组一次）。targets 为全部
+// 启用缓存频道的展示目标（重传管线内部扇出写入，事件快照按配置记）。
+func (s *Service) fallback(ctx context.Context, g *aggGroup, targets []store.WatchEventTarget,
 	usernameKey, numericKey string, messageID int, reason string) {
 	if s.enqueueDump == nil {
 		s.log.Warn("监听源回退入队未装配", "channel_id", g.src.ChannelID, "reason", reason)
@@ -408,9 +465,9 @@ func (s *Service) fallback(ctx context.Context, g *aggGroup, cacheTarget store.W
 	s.recordEvent(ctx, store.WatchEvent{
 		ChannelID: g.src.ChannelID, Username: g.src.Username, Title: g.src.Title,
 		MessageID: messageID, RequestID: requestID,
-		// 目标快照先记缓存频道；重传镜像完成后由 queue DumpMirror 按
+		// 目标快照先记启用缓存频道；重传镜像完成后由 queue DumpMirror 按
 		// request_id 回写实际成功的转发频道。
-		Targets: []store.WatchEventTarget{cacheTarget},
+		Targets: targets,
 		BotID:   g.botID, BotUsername: g.botUsername,
 		Path: store.WatchPathFallback,
 	})
@@ -429,17 +486,31 @@ func keyOf(usernameKey, numericKey string) string {
 	return numericKey
 }
 
-// forwardTargets 读取监听转发频道配置（随批取最新值），过滤与缓存频道
-// 重复的项——缓存频道始终单独作为首个目标，不重复复制。
-func forwardTargets(ctx context.Context, st *store.Store, cacheChannel int64) []syscfg.WatchForwardChannel {
+// forwardTargets 读取监听转发频道配置（随批取最新值），过滤与任一启用
+// 缓存频道重复的项——启用缓存频道始终单独作为预热目标，不重复复制。
+func forwardTargets(ctx context.Context, st *store.Store, cacheChannels []int64) []syscfg.WatchForwardChannel {
+	cache := make(map[int64]bool, len(cacheChannels))
+	for _, c := range cacheChannels {
+		cache[c] = true
+	}
 	all := syscfg.LoadWatchForwardChannels(ctx, st)
 	out := make([]syscfg.WatchForwardChannel, 0, len(all))
 	for _, f := range all {
-		if f.ChannelID != cacheChannel {
+		if !cache[f.ChannelID] {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// containsChannel 报告频道是否在列表中（预热事件目标确认用）。
+func containsChannel(channels []int64, id int64) bool {
+	for _, c := range channels {
+		if c == id {
+			return true
+		}
+	}
+	return false
 }
 
 // hasMedia 判断消息是否携带可预热的媒体。贴纸/实况照片按图片内容对待

@@ -153,7 +153,7 @@ export function RequestDetailPage() {
     queryFn: fetchSettings,
     staleTime: 30_000,
   });
-  const dumpChannelReady = (settings.data?.dump_channel_id ?? 0) !== 0;
+  const dumpChannelReady = (settings.data?.dump_channels ?? []).some((c) => c.enabled);
 
   // 可重试入口与 SSR 一致：仅 failed 且未达尝试上限（用户启用由服务端复核，
   // 拒绝时展示服务端受控文案，不误报成功）。

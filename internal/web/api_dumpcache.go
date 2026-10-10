@@ -30,13 +30,18 @@ func (s *Server) apiRequireDumpCache(w http.ResponseWriter, r *http.Request, op 
 const settingKeyDumpChannelLegacy = "dump_channel_legacy_id"
 
 // handleAPIDumpCacheMigrateGet 返回迁移进度与建议源频道（legacy 键存在、
-// 或存在 dump_channel_id=0 存量条目时给出）。
+// 或存在 dump_channel_id=0 存量条目时给出）。channel_id 为首个启用缓存
+// 频道（多缓存频道部署下 configured 表示存在任一启用频道）。
 func (s *Server) handleAPIDumpCacheMigrateGet(w http.ResponseWriter, r *http.Request, _ session) {
 	const op = "api.dumpcache.migrate.get"
 	if !s.apiRequireDumpCache(w, r, op) {
 		return
 	}
-	channel, _ := s.dumpCache.Channel()
+	channels, _ := s.dumpCache.Channels()
+	channel := int64(0)
+	if len(channels) > 0 {
+		channel = channels[0]
+	}
 	resp := map[string]any{
 		"configured":   channel != 0,
 		"channel_id":   channel,

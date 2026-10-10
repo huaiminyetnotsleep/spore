@@ -49,7 +49,7 @@ Spore 的配置有三个来源：
 | `ALLOWED_USER_IDS` | 默认空；逗号分隔的正整数 | 仅首次启动 | 只在 `users` 表为空时导入为已启用用户；此后白名单以数据库为准，修改该变量不会同步 |
 | `MAX_LINKS_PER_MESSAGE` | 默认 10；1–50 | 环境默认；数据库覆盖即时生效 | 一条普通消息或 `/download` 命令允许的有效链接数；超过上限整批拒绝，不创建任务或扣额度 |
 | `BOT_API_URL` | 默认空（官方 Bot API）；非空必须是 `http`/`https` 且含 host | 启动 | 配置后（本地 Bot API 模式）上传上限放宽到 `MAX_FILE_SIZE`，并停用 Bot 身份 MTProto 大文件直传；Compose bigfile 路线设为 `http://bot-api:<BOT_API_PORT>`（默认 8081） |
-| `DUMP_CHANNEL_ID` | 默认 0（关闭）；非空解析为整数频道 ID | 见第 3 节 | 数据库设置存在时优先（包括显式 0）；管理端保存后即时影响新任务与复用 |
+| `DUMP_CHANNEL_ID` | 默认 0（关闭）；非空解析为整数频道 ID | 见第 3 节 | 仅作 Web 配置为空时的兜底：数据库缓存频道列表或旧单频道键存在时优先（旧键显式 0 = 关闭，覆盖本变量）；管理端保存后即时影响新任务与复用。多缓存频道在管理端「频道设置」配置（每频道独立启用开关） |
 
 ### 2.4 目录、媒体与日志
 
@@ -126,7 +126,7 @@ openssl rand -hex 32
    - `backup_interval_hours` / `backup_keep_count` / `backup_local_enabled`（自动备份间隔、保留份数与本地保留开关；管理端备份页「定时备份与云端同步」修改后即时生效，定时循环每轮重读）；
    - 媒体三项 `max_file_size` / `stream_limit` / `temp_dir_max_size`：三项**整体校验**，任一非法则整套回退环境配置并产生 `media.config_invalid` 事件；
    - 传输四项 `download_threads` / `upload_threads` / `download_connections` / `upload_connections`：逐键覆盖，非法、越界或损坏的值被忽略并回退环境默认；
-   - `dump_channel_id`：数据库键存在即优先，**包括显式 0（关闭）**；键缺失或非法时回落 `DUMP_CHANNEL_ID`；
+   - 缓存频道列表 `dump_channels`：列表键存在即优先（含空数组 = 显式关闭）；键缺失时折算旧键 `dump_channel_id`（**包括显式 0（关闭）**），旧键也缺失或非法时回落 `DUMP_CHANNEL_ID`；
    - GitHub OAuth：存在合法数据库配置时优先于 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`。
 2. `queue_capacity` 没有环境变量：数据库合法值（1–4096）覆盖默认 64。
 3. `IN_MEMORY_LIMIT` 没有数据库覆盖，只能通过环境变量设置。`MEMORY_BUDGET` 有数据库覆盖（`memory_budget`，管理端改后即时生效，非法/越界值回退环境默认）。
@@ -141,7 +141,7 @@ openssl rand -hex 32
 | `queue_capacity`、`worker_count` | 重启生效 |
 | 媒体三项（`max_file_size` / `stream_limit` / `temp_dir_max_size`） | 重启生效；当前进程的媒体配置不会在线替换 |
 | `timezone`、`dedup_window_min`、`max_links_per_message`、`max_request_attempts`、`system_name`、`backup_interval_hours`、`backup_keep_count`、`error_log_retention_days` | 即时（每次提交、查询或文案渲染时读取；备份项由定时循环每轮重读；错误日志保留由 errlog 清理循环每轮重读） |
-| `channel_copy_enabled`、`tg_reuse_enabled`、缓存频道 ID | 即时（每次任务成功副本、复用前读取，影响新任务） |
+| `channel_copy_enabled`、`tg_reuse_enabled`、缓存频道列表 | 即时（每次任务成功副本、复用前读取，影响新任务） |
 | 受邀频道 `join_*` 六项 | 即时 |
 | 传输四项 | 即时发布；细节见下 |
 | 云盘配置经管理端恢复 / 回滚 | 在线生效；已在途任务沿用旧目的地快照，新任务读取新配置 |
@@ -170,7 +170,7 @@ openssl rand -hex 32
 | `max_file_size` / `stream_limit` / `temp_dir_max_size` | 回退环境默认（2000 MiB / 20 MiB / 5 GiB） | 重启生效；无效覆盖回退环境配置并产生事件 |
 | `channel_copy_enabled` | `true` | 每次任务成功副本投递前读取，即时生效；关闭后绑定关系保留 |
 | `tg_reuse_enabled` | `true` | 每次任务复用前读取，即时生效 |
-| `dump_channel_id` / `dump_channel_title` | 0 / 空 | 即时生效；显式 0 可覆盖环境变量；标题仅展示 |
+| `dump_channels` | 空数组 | 即时生效；列表键存在即优先（空数组 = 关闭），缺失时折算旧键 `dump_channel_id`/`dump_channel_title`，再回落 `DUMP_CHANNEL_ID`；每项 `{channel_id, title, enabled}`，上限 10 |
 | `system_name` | `Spore` | 不缓存，每次读取；Bot 文案、事件标题、页面标题即时生效 |
 | `max_request_attempts` | 3；合法 1–10（累计含首次） | 即时生效（重试校验与详情展示直查）；已达上限的失败请求可在消息记录详情页重置尝试计数（attempt 清回 1，不入队） |
 | `join_enabled` 等 `join_*` 六项 | 关 / 关 / 需审核 / 20 / 开 / 开 | 即时生效（语义见[使用指南](../guide/usage.md)第 11 节） |
@@ -198,7 +198,7 @@ openssl rand -hex 32
 | 数据备份（`/admin/backup`） | `backup_interval_hours`、`backup_keep_count`、`backup_local_enabled` 与 R2 上云连接配置（`data/r2-backup.json`，见第 6b 节）：定时备份间隔/份数、本地保留与 Cloudflare R2 异地直传的单一配置入口 |
 | 系统设置（`/admin/settings/system`） | `system_name` |
 | GitHub 登录（`/admin/settings/oauth`） | `github_oauth_config`、`github_binding` |
-| 频道设置（`/admin/channel-settings`） | `channel_copy_enabled`、缓存频道（ID 与标题）、`tg_reuse_enabled`、`dedup_window_min`、缓存迁移工具（旧频道副本整批搬到当前频道） |
+| 频道设置（`/admin/channel-settings`） | `channel_copy_enabled`、缓存频道列表（多频道，逐频道启用开关；单键 `dump_channels`）、`tg_reuse_enabled`、`dedup_window_min`、缓存迁移工具（旧频道副本整批搬到全部启用频道） |
 | 受邀设置（`/admin/join-settings`） | `join_*` 六项 |
 | 云盘下载（`/admin/cloud-drive`） | `cloud-drive.json`：全局开关、默认目的地、目的地列表与凭据（见第 6 节） |
 | 数据备份（`/admin/backup`） | 数据库导出/导入；展示 `last_backup_at` 与待应用的导入候选 |

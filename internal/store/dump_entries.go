@@ -81,6 +81,36 @@ func (s *Store) LatestDumpEntry(ctx context.Context, channelKey string, messageI
 		FROM dump_entries WHERE channel_key = ? AND message_id = ? AND format_version = ? AND dump_channel_id = ?
 		ORDER BY id DESC LIMIT 1`, channelKey, messageID, DumpFormatVersion, dumpChannelID).
 		Scan(&e.ID, &e.ChannelKey, &e.MessageID, &idsJSON, &e.DumpChannelID, &e.FormatVersion, &e.CreatedAt)
+	return scanLatestDumpEntry(err, &e, idsJSON)
+}
+
+// LatestDumpEntryAmong 取同链接最新一条**当前格式**且属于任一指定缓存频道
+// 的干净副本坐标（多缓存频道部署：复用/补写资格在全部启用频道范围内查
+// 命中，返回行自带 DumpChannelID 供后续复制定位来源频道）。列表为空或无
+// 匹配返回 ErrNotFound。
+func (s *Store) LatestDumpEntryAmong(ctx context.Context, channelKey string, messageID int, dumpChannelIDs []int64) (DumpEntry, error) {
+	if len(dumpChannelIDs) == 0 {
+		return DumpEntry{}, ErrNotFound
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(dumpChannelIDs)), ",")
+	args := make([]any, 0, len(dumpChannelIDs)+3)
+	args = append(args, channelKey, messageID, DumpFormatVersion)
+	for _, id := range dumpChannelIDs {
+		args = append(args, id)
+	}
+	var e DumpEntry
+	var idsJSON string
+	err := s.ex.QueryRowContext(ctx,
+		`SELECT id, channel_key, message_id, dump_ids_json, dump_channel_id, format_version, created_at
+		FROM dump_entries WHERE channel_key = ? AND message_id = ? AND format_version = ? AND dump_channel_id IN (`+placeholders+`)
+		ORDER BY id DESC LIMIT 1`, args...).
+		Scan(&e.ID, &e.ChannelKey, &e.MessageID, &idsJSON, &e.DumpChannelID, &e.FormatVersion, &e.CreatedAt)
+	return scanLatestDumpEntry(err, &e, idsJSON)
+}
+
+// scanLatestDumpEntry 收敛 LatestDumpEntry / LatestDumpEntryAmong 共用的
+// 行扫描后处理：无行 → ErrNotFound；空/坏 dump_ids_json → 受控错误。
+func scanLatestDumpEntry(err error, e *DumpEntry, idsJSON string) (DumpEntry, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return DumpEntry{}, ErrNotFound
 	}
@@ -93,7 +123,7 @@ func (s *Store) LatestDumpEntry(ctx context.Context, channelKey string, messageI
 	if err := json.Unmarshal([]byte(idsJSON), &e.DumpIDs); err != nil {
 		return DumpEntry{}, wrapDB("解析缓存频道条目", fmt.Errorf("无效消息 ID 数组: %w", err))
 	}
-	return e, nil
+	return *e, nil
 }
 
 // CountDumpEntriesByChannel 统计指定缓存频道的条目数（含格式历史行）。

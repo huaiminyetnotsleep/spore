@@ -116,7 +116,8 @@ type BotIdentityProvider interface {
 // 的 Service 实现；跨 MTProto 生命周期由装配层持有器委托当前实例）。
 type DumpCacheMigrator interface {
 	Enabled() bool
-	Channel() (int64, bool)
+	// Channels 返回当前启用的缓存频道 ID 列表（多缓存频道；未配置时 false）。
+	Channels() ([]int64, bool)
 	StartMigrate(ctx context.Context, fromChannelID int64) error
 	MigrateProgress() dumpcache.MigrateProgress
 }

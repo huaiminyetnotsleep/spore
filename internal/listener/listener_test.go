@@ -96,7 +96,7 @@ func newFixture(t *testing.T) (*Service, *fakeCopySender, *store.Store, *enqueue
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	const dumpChannel int64 = -100777
-	dump := dumpcache.New(nil, nil, st, func() int64 { return dumpChannel }, testLog())
+	dump := dumpcache.New(nil, nil, st, func() []int64 { return []int64{dumpChannel} }, testLog())
 	snd := &fakeCopySender{}
 	enqueued := &enqueueLog{}
 	l := New(ctx, Options{
@@ -328,7 +328,7 @@ func TestSkipReasonsLogged(t *testing.T) {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	dump := dumpcache.New(nil, nil, st, func() int64 { return -100777 }, testLog())
+	dump := dumpcache.New(nil, nil, st, func() []int64 { return []int64{-100777} }, testLog())
 	l := New(ctx, Options{Log: slog.New(capture), Store: st, Dump: dump})
 	const chatID int64 = -1001234
 	seedSource(t, st, store.WatchSource{
@@ -379,7 +379,7 @@ func TestBasicGroupRoutingSkipLogged(t *testing.T) {
 		t.Fatalf("打开测试库失败: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	dump := dumpcache.New(nil, nil, st, func() int64 { return -100777 }, testLog())
+	dump := dumpcache.New(nil, nil, st, func() []int64 { return []int64{-100777} }, testLog())
 	l := New(ctx, Options{Log: slog.New(capture), Store: st, Dump: dump})
 
 	basic := &models.Message{ID: 61, Chat: models.Chat{ID: -99, Type: models.ChatTypeGroup},
@@ -512,5 +512,78 @@ func TestDuplicateInterleavedDeliveryCopiesOnce(t *testing.T) {
 	}
 	if calls := enqueued.snapshot(); len(calls) != 0 {
 		t.Fatalf("不应触发回退: %+v", calls)
+	}
+}
+
+// 多缓存频道扇出预热：逐启用频道复制并落条目；单频道失败只跳过该频道
+// （不落条目、不阻断其他频道），其余频道正常收敛。
+func TestMultiDumpChannelFanoutPreheat(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir()+"/test.db", testLog())
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	const chA, chB int64 = -100777, -100888
+	if err := syscfg.SaveDumpChannels(ctx, st, []syscfg.DumpChannel{
+		{ChannelID: chA, Title: "缓存A", Enabled: true},
+		{ChannelID: chB, Title: "缓存B", Enabled: true},
+	}); err != nil {
+		t.Fatalf("写入缓存频道配置失败: %v", err)
+	}
+	dump := dumpcache.New(nil, nil, st, func() []int64 { return []int64{chA, chB} }, testLog())
+	snd := &fakeCopySender{failTo: map[int64]error{chB: errors.New("chat not found")}}
+	l := New(ctx, Options{Log: testLog(), Store: st, Dump: dump})
+
+	const chatID int64 = -1001234
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "mychan", Status: store.WatchApproved, Enabled: true,
+	})
+	l.OnMessage(mediaMsg(chatID, 61, ""), snd, 42, "watcher_bot")
+
+	// 成功频道落条目（双键），失败频道不落
+	waitFor(t, func() bool {
+		_, ok := dump.Entry(ctx, "mychan", 61)
+		return ok
+	})
+	if !dump.EntryIn(ctx, chA, "mychan", 61) {
+		t.Fatal("成功频道应落条目")
+	}
+	if dump.EntryIn(ctx, chB, "mychan", 61) {
+		t.Fatal("失败频道不应落条目")
+	}
+	copies := snd.snapshot()
+	if len(copies) != 2 {
+		t.Fatalf("两个启用频道都应尝试复制: %+v", copies)
+	}
+	if copies[0].to != chA || copies[1].to != chB {
+		t.Fatalf("复制目标应为启用频道列表顺序: %+v", copies)
+	}
+
+	// 重复投递（多 bot 池）：逐频道查重后无待补频道，不再复制
+	l.OnMessage(mediaMsg(chatID, 61, ""), snd, 42, "watcher_bot")
+	time.Sleep(500 * time.Millisecond)
+	if got := len(snd.snapshot()); got != 2 {
+		t.Fatalf("重复投递不应再复制: %+v", snd.snapshot())
+	}
+}
+
+// 循环转发防护：聊天本身是启用的缓存频道时整批跳过（即使被注册为监听
+// 源），防止预热副本写回再次触发 channel_post 形成死循环。
+func TestDumpChannelAsSourceSkipped(t *testing.T) {
+	l, snd, st, enqueued := newFixture(t)
+	const dumpChannel int64 = -100777
+	// 缓存频道被（错误地/历史脏数据）注册为生效监听源
+	seedSource(t, st, store.WatchSource{
+		ChannelID: dumpChannel, Title: "缓存频道",
+		Status: store.WatchApproved, Enabled: true,
+	})
+	l.OnMessage(mediaMsg(dumpChannel, 71, ""), snd, 42, "watcher_bot")
+	time.Sleep(2 * time.Second)
+	if got := snd.snapshot(); len(got) != 0 {
+		t.Fatalf("缓存频道的消息不应预热（循环防护）: %+v", got)
+	}
+	if calls := enqueued.snapshot(); len(calls) != 0 {
+		t.Fatalf("缓存频道的消息不应回退入队: %+v", calls)
 	}
 }

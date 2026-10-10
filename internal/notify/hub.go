@@ -500,9 +500,10 @@ func (h *Hub) SourceInaccessible(ctx context.Context, ref string) {
 }
 
 // DumpChannelWriteFailed 记录一次缓存频道写入失败（code 为 apperr 错误码，
-// 不含错误原文）。写失败不影响任务结果，事件只承担管理员侧感知。
-func (h *Hub) DumpChannelWriteFailed(ctx context.Context, code string) {
-	h.Raise(ctx, KeyDumpChannelWriteFailed, SeverityWarn, DumpWriteData{Code: code})
+// 不含错误原文；channel 为失败频道 ID，多缓存频道部署下管理员可精确定位）。
+// 写失败不影响任务结果，事件只承担管理员侧感知。
+func (h *Hub) DumpChannelWriteFailed(ctx context.Context, code string, channel int64) {
+	h.Raise(ctx, KeyDumpChannelWriteFailed, SeverityWarn, DumpWriteData{Code: code, Channel: channel})
 }
 
 // DumpChannelRecovered 在缓存频道写入恢复成功后自动解决对应事件

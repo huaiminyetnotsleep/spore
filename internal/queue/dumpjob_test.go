@@ -58,7 +58,7 @@ func dumpDeps(t *testing.T, s *store.Store, fetcher Fetcher, sender *chatRecordi
 		Media:   mediaOptionsForTest(t),
 		Store:   s,
 		Log:     testLog(),
-		Dump:    dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()),
+		Dump:    dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog()),
 	}
 }
 
@@ -357,4 +357,93 @@ func TestDumpJobFailureNoMirror(t *testing.T) {
 	if len(mirror.calls) != 0 {
 		t.Fatalf("失败补写不应触发镜像: %+v", mirror.calls)
 	}
+}
+
+// 多缓存频道补写扇出：基准频道（首个启用频道）完整重传一次，其余启用
+// 频道从基准副本服务端复制（零下载零重传），逐频道落条目。
+func TestDumpJobMultiChannelFanout(t *testing.T) {
+	s := openStore(t)
+	job := dumpJob(t, s, 7)
+	const chB int64 = -100888
+	sender := &chatRecordingSender{fakeSender: &fakeSender{}}
+	fetcher := fetcherWith(errInvoker{}, docMsg(7, 1201))
+	d := dumpDeps(t, s, fetcher, sender)
+	d.Dump = dumpcache.New(sender, nil, s,
+		func() []int64 { return []int64{testDumpChannel, chB} }, testLog())
+
+	runProcess(t, d, job)
+
+	if len(sender.mediaChats) != 1 || sender.mediaChats[0] != testDumpChannel {
+		t.Fatalf("仅基准频道应重传媒体: %v", sender.mediaChats)
+	}
+	if len(sender.copyCalls) != 1 || sender.copyCalls[0].FromChatID != testDumpChannel ||
+		sender.copyCalls[0].ChatID != chB {
+		t.Fatalf("第二频道应从基准副本服务端复制: %+v", sender.copyCalls)
+	}
+	e := dumpEntryOf(t, s, 7)
+	if len(e.DumpIDs) != 1 {
+		t.Fatalf("基准频道条目坐标异常: %+v", e)
+	}
+	if _, err := s.LatestDumpEntry(context.Background(), "example", 7, chB); err != nil {
+		t.Fatalf("第二频道应落条目: %v", err)
+	}
+	r, err := s.GetRequest(context.Background(), job.RequestID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
+	}
+	if r.Status != store.RequestSucceeded {
+		t.Errorf("扇出成功终态应为 succeeded: %+v", r)
+	}
+}
+
+// 基准频道发送失败自动切换：按启用频道顺序首个发送成功者成为基准，
+// 全部成功时任务仍成功（部分频道失败只告警不阻断）。
+func TestDumpJobBaseChannelFailover(t *testing.T) {
+	s := openStore(t)
+	job := dumpJob(t, s, 7)
+	const chB int64 = -100888
+	base := &chatRecordingSender{fakeSender: &fakeSender{}}
+	// 首次媒体发送失败（按调用计数）：模拟首个启用频道发送失败
+	wrapped := &firstCallFailSender{chatRecordingSender: base}
+	fetcher := fetcherWith(errInvoker{}, docMsg(7, 1201))
+	d := dumpDeps(t, s, fetcher, base)
+	d.Sender = wrapped // 任务发送通道：首次 SendMedia 失败
+	d.Dump = dumpcache.New(base, nil, s,
+		func() []int64 { return []int64{testDumpChannel, chB} }, testLog())
+
+	runProcess(t, d, job)
+
+	if len(base.mediaChats) != 1 || base.mediaChats[0] != chB {
+		t.Fatalf("失败后应尝试下一启用频道: %v", base.mediaChats)
+	}
+	// 基准为 chB：其条目存在；原候选频道重传失败但会从基准副本服务端复制
+	// 补齐（扇出收敛），两频道各有一份条目
+	if _, err := s.LatestDumpEntry(context.Background(), "example", 7, chB); err != nil {
+		t.Fatalf("第二频道应成为基准并落条目: %v", err)
+	}
+	if _, err := s.LatestDumpEntry(context.Background(), "example", 7, testDumpChannel); err != nil {
+		t.Fatalf("原候选频道应从基准副本复制补齐: %v", err)
+	}
+	r, err := s.GetRequest(context.Background(), job.RequestID)
+	if err != nil {
+		t.Fatalf("读取请求失败: %v", err)
+	}
+	if r.Status != store.RequestSucceeded {
+		t.Errorf("基准切换后任务应成功: %+v", r)
+	}
+}
+
+// firstCallFailSender 首次 SendMedia 注入失败（基准切换测试用；
+// fakeSender.mediaErr 命中时恒返回 ID 0，会让成功路径拿不到坐标）。
+type firstCallFailSender struct {
+	*chatRecordingSender
+	calls int
+}
+
+func (c *firstCallFailSender) SendMedia(ctx context.Context, chatID int64, m message.Media, caption message.Caption, reader io.Reader) (int, error) {
+	c.calls++
+	if c.calls == 1 {
+		return 0, errFakeSend
+	}
+	return c.chatRecordingSender.SendMedia(ctx, chatID, m, caption, reader)
 }

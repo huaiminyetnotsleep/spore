@@ -533,6 +533,37 @@ body {
   width: 100%;
 }
 
+/* 缓存频道列表：每行标题/ID + 启用开关 + 删除，纵向紧凑排列 */
+.dump-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.dump-channel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.dump-channel-row__main {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dump-channel-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* 消息记录来源列的完整消息链接：长 URL 在表格内自动换行不撑破布局 */
 .source-link {
   display: inline-block;

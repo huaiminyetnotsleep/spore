@@ -6,6 +6,12 @@ package dumpcache
 // 聊天——服务端复制不受媒体大小限制（2GB 同路径）、相册保组、caption
 // 天然无脚注泄露，且副本不因原用户删除消息而失效。
 //
+// 多缓存频道：配置是启用频道列表（syscfg dump_channels，每项独立开关），
+// 扇出语义——成功任务的干净副本对每个启用频道各写一份（逐频道尽力而为，
+// 单频道失败只告警不阻断其他频道）；复用/补写资格在全部启用频道范围内查
+// 命中，命中条目自带所属频道，后续复制/试探都以条目自身频道为准。关闭的
+// 频道不读不写，历史条目保留（重新开启即恢复命中）。
+//
 // 干净副本构造（给用户的投递 caption 织有脚注，副本必须剥离）：
 //   - 单媒体：copyMessage 带 caption 覆盖（干净 caption：引用正文+原链接）；
 //   - 单文本：SendMessage 干净渲染（无脚注）；
@@ -21,8 +27,8 @@ package dumpcache
 // 全部步骤尽力而为：任一失败记日志、向事件中心上报管理员告警
 //（dump.channel_write_failed，缓存频道被封/失去权限/配置有误的唯一主动
 // 感知渠道）、不落条目（下次成功投递自愈），不影响任务结果。首次失败
-// 以 Warn 提示检查 DUMP_CHANNEL_ID 与 bot 频道管理员权限（替代启动期
-// 预校验：写失败本身就是最准确的校验）。
+// 以 Warn 提示检查缓存频道配置与 bot 频道管理员权限（替代启动期预校验：
+// 写失败本身就是最准确的校验）。
 
 import (
 	"context"
@@ -42,25 +48,27 @@ import (
 // 直接依赖 notify 包。
 type Events interface {
 	// DumpChannelWriteFailed 上报一次缓存频道写入失败（code 为 apperr 错误码，
-	// 不含错误原文）。事件中心按 key 合并并受冷却窗口约束，逐任务失败不会刷屏。
-	DumpChannelWriteFailed(ctx context.Context, code string)
+	// 不含错误原文；channel 为写入失败的缓存频道 ID，0 表示未指明）。
+	// 事件中心按 key 合并并受冷却窗口约束，逐任务失败不会刷屏。
+	DumpChannelWriteFailed(ctx context.Context, code string, channel int64)
 	// DumpChannelRecovered 在写入恢复成功后自动解决对应事件
-	// （事件从未发生时为静默 no-op）。
+	// （事件从未发生时为静默 no-op）。恢复信号仅在全部启用频道都写入成功
+	// 时发出——部分频道仍失败时保持告警打开，避免事件反复开关刷屏。
 	DumpChannelRecovered(ctx context.Context)
 }
 
-// Service 是缓存频道读写通道；channelID 闭包实时读取当前配置（Web 端
-// settings 优先，环境变量兜底，main 注入），返回 0 表示未配置（功能关闭）。
+// Service 是缓存频道读写通道；channels 闭包实时读取当前启用的缓存频道
+// 列表（syscfg 单一来源，main 注入），返回空表示未配置（功能关闭）。
 // 多机器人池：已投递消息的坐标是受理 bot 私有的（用户私聊内消息 ID 按 bot
 // 隔离），写干净副本与复用投递都必须由受理 bot 执行——sndFor 按任务 bot
 // 解析通道，nil 或未命中回退 snd（主 bot，兼容单 bot 部署与 Web 触发路径）。
 type Service struct {
-	snd       delivery.Sender
-	sndFor    func(botID int64) delivery.Sender
-	st        *store.Store
-	channelID func() int64
-	log       *slog.Logger
-	events    Events // 写入失败/恢复事件上报；nil 跳过（SetEvents 在服务发布前调用）
+	snd      delivery.Sender
+	sndFor   func(botID int64) delivery.Sender
+	st       *store.Store
+	channels func() []int64
+	log      *slog.Logger
+	events   Events // 写入失败/恢复事件上报；nil 跳过（SetEvents 在服务发布前调用）
 
 	hintOnce sync.Once // 首次写失败的配置提示只打一次
 
@@ -69,11 +77,11 @@ type Service struct {
 	migrate   *MigrateProgress
 }
 
-// New 创建缓存频道服务；channelID 闭包返回 0 时 Enabled() 恒为 false。
+// New 创建缓存频道服务；channels 闭包返回空时 Enabled() 恒为 false。
 // sndFor 可空（单 bot 部署）。
 func New(snd delivery.Sender, sndFor func(botID int64) delivery.Sender, st *store.Store,
-	channelID func() int64, log *slog.Logger) *Service {
-	return &Service{snd: snd, sndFor: sndFor, st: st, channelID: channelID, log: log}
+	channels func() []int64, log *slog.Logger) *Service {
+	return &Service{snd: snd, sndFor: sndFor, st: st, channels: channels, log: log}
 }
 
 // SetEvents 注入写入失败/恢复事件出口（装配层在服务对外发布前调用一次，
@@ -92,45 +100,56 @@ func (s *Service) senderFor(botID int64) delivery.Sender {
 	return s.snd
 }
 
-// Enabled 报告缓存频道是否已配置（配置读取失败按未配置处理）。
-func (s *Service) Enabled() bool { return s != nil && s.channelID != nil && s.channelID() != 0 }
+// Enabled 报告是否有启用的缓存频道（配置读取失败按未配置处理）。
+func (s *Service) Enabled() bool { return s != nil && s.channels != nil && len(s.channels()) > 0 }
 
-// Channel 返回当前配置的缓存频道数字 ID（未配置时 false）。仅缓存补写任务
-// 用它作为直接发送目标；一次任务的发送与落条目应使用同一次调用返回值，
-// 与 WriteClean 的"一次写入同一频道"一致性语义相同。
-func (s *Service) Channel() (int64, bool) {
+// Channels 返回当前启用的缓存频道 ID 列表（未配置时 false）。多频道扇出
+// 写入、逐频道落条目与预热都以本列表为准；调用方应在一次批量写入开始时
+// 取一次快照，保证同一批各步骤使用同一频道集合（中途改配置不影响本批）。
+func (s *Service) Channels() ([]int64, bool) {
 	if !s.Enabled() {
-		return 0, false
+		return nil, false
 	}
-	channel := s.channelID()
-	return channel, channel != 0
+	channels := s.channels()
+	return channels, len(channels) > 0
 }
 
-// RecordEntry 落缓存频道条目（缓存补写任务在直接发送成功后调用，坐标供
-// 同链接复用）；写失败只记日志——下次成功投递自愈，不影响任务结果。
-// 条目归属当前配置的缓存频道（切换频道后旧条目因频道不匹配自动不命中）。
-func (s *Service) RecordEntry(ctx context.Context, channelKey string, messageID int, dumpIDs []int) {
-	channel, ok := s.Channel()
-	if !ok || len(dumpIDs) == 0 {
+// RecordEntryFor 落指定缓存频道条目（扇出写入成功后逐频道调用；dumpChannel
+// 必须来自同批 Channels() 快照，坐标供同链接复用）。写失败只记日志——
+// 下次成功投递自愈，不影响任务结果。
+func (s *Service) RecordEntryFor(ctx context.Context, dumpChannel int64, channelKey string, messageID int, dumpIDs []int) {
+	if s == nil || dumpChannel == 0 || len(dumpIDs) == 0 {
 		return
 	}
-	s.recovered(ctx) // 能走到落条目，说明副本发送已成功——视为写入恢复信号
 	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
 		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
-		DumpChannelID: channel,
+		DumpChannelID: dumpChannel,
 	}); err != nil {
-		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
+		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID,
+			"dump_channel", dumpChannel, "error", err.Error())
 	}
 }
 
-// Entry 取同链接最新干净副本坐标（限当前配置的缓存频道——他频道与升级前
-// 存量条目不命中）；未配置或无条目返回 false。
+// WriteRecovered 上报一次"写入恢复"信号：扇出写入路径（监听预热/补写任务）
+// 在全部启用频道都写入成功后调用（与 WriteClean 的恢复语义一致）。
+func (s *Service) WriteRecovered(ctx context.Context) { s.recovered(ctx) }
+
+// ReportWriteFailure 供扇出写入路径（补写任务多频道复制、监听预热）上报
+// 单频道写入失败：逐频道告警，与 WriteClean 的失败语义同源。
+func (s *Service) ReportWriteFailure(ctx context.Context, err error, channel int64) {
+	s.failHint(ctx, err, channel)
+}
+
+// Entry 取同链接最新干净副本坐标（限当前启用的缓存频道集合——他频道与
+// 升级前存量条目不命中）；未配置或无条目返回 false。命中条目自带所属
+// 频道（DumpChannelID），后续复用复制与有效性试探都以该频道为准。
 // 无条目（ErrNotFound）是查重/复用预检的正常未命中，静默返回。
 func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (store.DumpEntry, bool) {
-	if !s.Enabled() {
+	channels, ok := s.Channels()
+	if !ok {
 		return store.DumpEntry{}, false
 	}
-	e, err := s.st.LatestDumpEntry(ctx, channelKey, messageID, s.channelID())
+	e, err := s.st.LatestDumpEntryAmong(ctx, channelKey, messageID, channels)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.DumpEntry{}, false
 	}
@@ -139,6 +158,24 @@ func (s *Service) Entry(ctx context.Context, channelKey string, messageID int) (
 		return store.DumpEntry{}, false
 	}
 	return e, true
+}
+
+// EntryIn 报告指定缓存频道是否已有同链接最新条目（多频道扇出预热逐频道
+// 查重用：已有副本的频道跳过本批复制，尚无副本的频道补写，向全量收敛）。
+func (s *Service) EntryIn(ctx context.Context, dumpChannel int64, channelKey string, messageID int) bool {
+	if !s.Enabled() || dumpChannel == 0 {
+		return false
+	}
+	_, err := s.st.LatestDumpEntry(ctx, channelKey, messageID, dumpChannel)
+	if errors.Is(err, store.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		s.log.Warn("查询缓存频道条目失败", "channel_key", channelKey, "message_id", messageID,
+			"dump_channel", dumpChannel, "error", err.Error())
+		return false
+	}
+	return true
 }
 
 // probeTimeout 是试探复制（copyMessage + deleteMessage 两次 Bot API 调用）
@@ -154,8 +191,8 @@ const probeTimeout = 20 * time.Second
 // 判定走"试探复制"，与私聊复用（tryReuseFromDump 的 CopyOut 回落）同源，
 // 用生产已验证的 Bot API copyMessage 而非 MTProto 读消息（后者依赖频道
 // access_hash 反查，对 Bot 会话不可靠且故障时静默）：把条目首条消息复制
-// 到缓存频道自身——消息已被删除时该调用以明确错误失败；成功即删除试探
-// 副本（删除失败只留一条无害的重复副本，记日志）。
+// 到条目所属缓存频道自身——消息已被删除时该调用以明确错误失败；成功即
+// 删除试探副本（删除失败只留一条无害的重复副本，记日志）。
 //
 // 返回值：无条目或试探失败（副本已删，或 Bot API 瞬时故障——放行后无非
 // 是重复补写，无害）返回 false 放行补写自愈；试探成功返回 true 跳过补写。
@@ -164,17 +201,14 @@ func (s *Service) EntryLive(ctx context.Context, channelKey string, messageID in
 	if !ok {
 		return false
 	}
-	if !s.Enabled() {
-		return false
-	}
 	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	channel := s.channelID()
+	channel := e.DumpChannelID
 	id, err := s.snd.CopyMessage(tctx, channel, channel, e.DumpIDs[0], "")
 	if err != nil {
 		s.log.Info("缓存副本试探复制失败，判定条目失效（放行补写自愈）",
 			"channel_key", channelKey, "message_id", messageID,
-			"dump_id", e.DumpIDs[0], "error", err.Error())
+			"dump_channel", channel, "dump_id", e.DumpIDs[0], "error", err.Error())
 		return false
 	}
 	if derr := s.snd.DeleteMessage(tctx, channel, id); derr != nil {
@@ -184,10 +218,17 @@ func (s *Service) EntryLive(ctx context.Context, channelKey string, messageID in
 	return true
 }
 
-// CopyOut 把缓存频道副本整条复制到目标聊天，返回按序新消息 ID。botID 为
-// 任务的受理 bot：复制落到用户私聊即以该 bot 身份投递。
-func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, dumpIDs []int) ([]int, error) {
-	return s.senderFor(botID).CopyMessages(ctx, s.channelID(), chatID, dumpIDs)
+// CopyOut 把缓存频道副本整条复制到目标聊天，返回按序新消息 ID。条目自带
+// 所属频道（多频道部署下各频道坐标独立），从该频道复制。botID 为任务的
+// 受理 bot：复制落到用户私聊即以该 bot 身份投递。
+func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, e store.DumpEntry) ([]int, error) {
+	return s.CopyOutFrom(ctx, botID, chatID, e.DumpChannelID, e.DumpIDs)
+}
+
+// CopyOutFrom 从指定缓存频道把副本整条复制到目标聊天（监听转发频道的
+// 缓存中转镜像用：源频道为重传落地的基准频道）。
+func (s *Service) CopyOutFrom(ctx context.Context, botID, chatID, sourceChannel int64, dumpIDs []int) ([]int, error) {
+	return s.senderFor(botID).CopyMessages(ctx, sourceChannel, chatID, dumpIDs)
 }
 
 // WriteClean 在任务成功投递后写干净副本并落 dump_entries（尽力而为）。
@@ -201,9 +242,14 @@ func (s *Service) CopyOut(ctx context.Context, botID, chatID int64, dumpIDs []in
 // span 逐条清洗首条 caption（各成员独立消息，逐成员 caption 历史行为不变）。
 // 复用命中（Reused）的任务不再重写（条目即复制来源）。sourceURL 为原消息
 // 链接（首条织入）。
+//
+// 多缓存频道扇出：对每个启用频道独立执行上述写入并逐频道落条目；单频道
+// 失败只告警（事件携带频道 ID）并继续其余频道，不互相阻断。频道集合取
+// 一次快照：中途经 Web 改配置不影响本批一致性。
 func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKey string, messageID int,
 	items []message.Item, sentSpans [][]int, sourceURL, albumCleanCaptionHTML string) {
-	if !s.Enabled() {
+	channels, ok := s.Channels()
+	if !ok {
 		return
 	}
 	snd := s.senderFor(botID)
@@ -220,15 +266,29 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 	if total == 0 {
 		return
 	}
-	// 一次写入全程使用同一频道 ID：中途经 Web 改配置不影响本批一致性
-	channel := s.channelID()
 
+	wrote := 0
+	for _, channel := range channels {
+		if s.writeCleanTo(ctx, snd, channel, chatID, channelKey, messageID,
+			items, sentSpans, total, sourceURL, albumCleanCaptionHTML) {
+			wrote++
+		}
+	}
+	if wrote == len(channels) {
+		s.recovered(ctx) // 全部启用频道写入成功：缓存频道写入恢复
+	}
+}
+
+// writeCleanTo 向单个缓存频道写干净副本并落条目；返回是否全部成功。
+func (s *Service) writeCleanTo(ctx context.Context, snd delivery.Sender, channel, chatID int64,
+	channelKey string, messageID int, items []message.Item, sentSpans [][]int,
+	total int, sourceURL, albumCleanCaptionHTML string) bool {
 	var dumpIDs []int
 	if total == 1 {
 		id, err := s.writeSingle(ctx, snd, channel, chatID, items[0], sentSpans[0][0], sourceURL, true)
 		if err != nil {
-			s.failHint(ctx, err)
-			return
+			s.failHint(ctx, err, channel)
+			return false
 		}
 		dumpIDs = []int{id}
 	} else {
@@ -238,16 +298,16 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 		}
 		ids, err := snd.CopyMessages(ctx, chatID, channel, flat)
 		if err != nil {
-			s.failHint(ctx, err)
-			return
+			s.failHint(ctx, err, channel)
+			return false
 		}
 		// 相册：只重写组首为 canonical 合并 caption（含全部成员正文与切段
 		// 说明、无频道脚注）；其余成员 caption 随复制继承（为空），不需要也
 		// 不应再编辑——避免空串清空的序列化不确定性。
 		if albumCleanCaptionHTML != "" {
 			if cerr := snd.EditMessageCaption(ctx, channel, ids[0], albumCleanCaptionHTML); cerr != nil {
-				s.failHint(ctx, cerr)
-				return
+				s.failHint(ctx, cerr, channel)
+				return false
 			}
 		} else {
 			// 非相册逐条投递：按 span 清洗首条 caption。来源链接只织入首条目。
@@ -261,8 +321,8 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 					cerr = snd.EditMessageText(ctx, channel, ids[pos], items[i].RenderHTMLWithSource(sourceURL, nil))
 				}
 				if cerr != nil {
-					s.failHint(ctx, cerr)
-					return
+					s.failHint(ctx, cerr, channel)
+					return false
 				}
 				pos += len(span)
 			}
@@ -270,15 +330,10 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 		dumpIDs = ids
 	}
 
-	s.recovered(ctx) // 复制与 caption 清洗全部成功：缓存频道写入恢复
-	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
-		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
-		DumpChannelID: channel,
-	}); err != nil {
-		s.log.Warn("落缓存频道条目失败", "channel_key", channelKey, "message_id", messageID, "error", err.Error())
-	}
+	s.RecordEntryFor(ctx, channel, channelKey, messageID, dumpIDs)
 	s.log.Info("缓存频道干净副本已写入", "channel_key", channelKey,
-		"message_id", messageID, "messages", len(dumpIDs))
+		"message_id", messageID, "dump_channel", channel, "messages", len(dumpIDs))
+	return true
 }
 
 // writeSingle 写单条副本：媒体走 copyMessage 带 caption 覆盖（一步到位），
@@ -304,19 +359,20 @@ func CleanCaption(it message.Item, first bool, sourceURL string, links []message
 	return caption.RenderHTML()
 }
 
-// failHint 记录写入失败；首次附带配置检查提示（频道 ID 是否正确、bot 是否
-// 为频道管理员）。同时向事件中心上报管理员告警——缓存频道被封不会中断
-// 服务，若无事件管理员只能靠日志巡检发现；code 为受控错误码，不含错误原文。
-func (s *Service) failHint(ctx context.Context, err error) {
+// failHint 记录单频道写入失败；首次附带配置检查提示（频道 ID 是否正确、
+// bot 是否为频道管理员）。同时向事件中心上报管理员告警——缓存频道被封不会
+// 中断服务，若无事件管理员只能靠日志巡检发现；code 为受控错误码，不含错误
+// 原文；channel 为失败频道（多频道部署下管理员可精确定位）。
+func (s *Service) failHint(ctx context.Context, err error, channel int64) {
 	if ctx.Err() != nil {
 		return // 任务收尾窗口取消不算配置问题
 	}
-	s.log.Warn("缓存频道副本写入失败", "error", err.Error())
+	s.log.Warn("缓存频道副本写入失败", "dump_channel", channel, "error", err.Error())
 	s.hintOnce.Do(func() {
-		s.log.Warn("缓存频道首次写入失败：请检查 DUMP_CHANNEL_ID 是否正确、bot 是否为该频道管理员（复制仍会回落，不影响任务）")
+		s.log.Warn("缓存频道首次写入失败：请检查缓存频道配置是否正确、bot 是否为该频道管理员（复制仍会回落，不影响任务）")
 	})
 	if s.events != nil {
-		s.events.DumpChannelWriteFailed(ctx, string(apperr.From(err).Code))
+		s.events.DumpChannelWriteFailed(ctx, string(apperr.From(err).Code), channel)
 	}
 }
 

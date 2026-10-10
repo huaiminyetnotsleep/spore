@@ -105,7 +105,7 @@ func TestReuseFromDumpHit(t *testing.T) {
 		msgs: []*tg.Message{{ID: 7, Message: "hello"}}}} // 命中则不会被调用
 	copier := &fakeCopier{}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Copier: copier}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog()), Copier: copier}
 
 	runProcess(t, d, job)
 
@@ -154,7 +154,7 @@ func TestReuseFromDumpFootnote(t *testing.T) {
 		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
 	}}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Channels: ch}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog()), Channels: ch}
 
 	runProcess(t, d, job)
 
@@ -187,7 +187,7 @@ func TestReuseAlbumFootnoteMergesAllBodies(t *testing.T) {
 		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
 	}}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Channels: ch}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog()), Channels: ch}
 
 	runProcess(t, d, job)
 
@@ -222,7 +222,7 @@ func TestReuseSplitExpandedSkipsFootnote(t *testing.T) {
 		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
 	}}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog()), Channels: ch}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog()), Channels: ch}
 
 	runProcess(t, d, job)
 
@@ -250,7 +250,7 @@ func TestReuseFromDumpCopyFailureSelfHeals(t *testing.T) {
 	fetcher := &countingFetcher{fakeFetcher: &fakeFetcher{
 		msgs: []*tg.Message{{ID: 7, Message: "hello"}}}}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog())}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog())}
 
 	runProcess(t, d, job)
 
@@ -280,7 +280,7 @@ func TestReuseDisabledBySwitch(t *testing.T) {
 	fetcher := &countingFetcher{fakeFetcher: &fakeFetcher{
 		msgs: []*tg.Message{{ID: 7, Message: "hello"}}}}
 	d := Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog())}
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog())}
 	d.ReuseEnabled = func() bool { return false }
 
 	runProcess(t, d, job)
@@ -327,7 +327,7 @@ func TestWriteCleanAfterFullRun(t *testing.T) {
 		msgs: []*tg.Message{{ID: 7, Message: "hello"}}}}
 
 	runProcess(t, Deps{Fetcher: fetcher, Sender: sender, Store: s, Log: testLog(),
-		Dump: dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog())}, job)
+		Dump: dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog())}, job)
 
 	if len(sender.sent) != 2 { // 用户投递 1 条 + 缓存频道干净副本 1 条
 		t.Fatalf("文本投递与干净副本应各一次 SendMessage: %d 条", len(sender.sent))
@@ -350,7 +350,7 @@ func TestWriteCleanAlbumCanonicalPlanAfterFullRun(t *testing.T) {
 	msgs[1].SetGroupedID(42)
 	sender := &fakeSender{groupable: func(message.Media) bool { return true }}
 	d := uploadDeps(t, s, fetcherWith(errInvoker{}, msgs...), sender)
-	d.Dump = dumpcache.New(sender, nil, s, func() int64 { return testDumpChannel }, testLog())
+	d.Dump = dumpcache.New(sender, nil, s, func() []int64 { return []int64{testDumpChannel} }, testLog())
 	d.Channels = &fakeChannels{links: map[int64][]message.ChannelLink{
 		1: {{Label: "用户频道", URL: "https://t.me/userchan"}},
 	}}

@@ -5,8 +5,8 @@ package web
 //   - POST /api/v1/requests/dump-backfill-batch：批量补写（1–100 条），
 //     公共逻辑见 dumpBackfill——请求级资格与特权入队在
 //     internal/access.DumpBackfill（绕过用户配额/频率/去重），缓存频道
-//     全局配置（是否配置）在本层判定（dump_disabled），判定与 worker 侧
-//     dumpcache 的 channelID 闭包同源（LoadEffectiveDumpChannelID）。
+//     全局配置（是否有启用频道）在本层判定（dump_disabled），判定与 worker
+//     侧 dumpcache 的 channels 闭包同源（syscfg.LoadEffectiveDumpChannels）。
 // 补写任务不向用户发送任何消息，仅写缓存频道副本并落 dump_entries。
 // 全部走 apiAuth/apiCSRF 与统一 JSON 信封；错误文案受控。
 
@@ -17,6 +17,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/access"
 	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
 // dumpSkipDisabled 是缓存频道全局状态类跳过原因（与
@@ -28,7 +29,7 @@ const (
 )
 
 // dumpBackfill 是单条与批量端点的公共补写逻辑。检查顺序与 skip_reason
-// 语义一致：请求存在 → 终态 → 缓存频道已配置 → 无已有副本。返回 error
+// 语义一致：请求存在 → 终态 → 有启用的缓存频道 → 无已有副本。返回 error
 // 仅表示存储故障（批量端点此时中止并返回 503，已建行不回滚）。
 func (s *Server) dumpBackfill(ctx context.Context, requestID int64) (dumpBackfillOutcome, error) {
 	skip, err := s.access.DumpBackfillEligibility(ctx, requestID)
@@ -38,9 +39,9 @@ func (s *Server) dumpBackfill(ctx context.Context, requestID int64) (dumpBackfil
 	if skip != "" {
 		return dumpBackfillOutcome{SkipReason: skip}, nil
 	}
-	// 配置读取失败回落环境变量（LoadEffectiveDumpChannelID 语义），不会
-	// 把存储故障误判成"未配置"
-	if LoadEffectiveDumpChannelID(ctx, s.st, s.cfg.DumpChannelID) == 0 {
+	// 配置读取失败回落环境变量（syscfg.LoadEffectiveDumpChannels 语义），
+	// 不会把存储故障误判成"未配置"；多缓存频道部署下全部停用同样视为关闭
+	if len(syscfg.EnabledDumpChannelIDs(syscfg.LoadEffectiveDumpChannels(ctx, s.st, s.cfg.DumpChannelID))) == 0 {
 		return dumpBackfillOutcome{SkipReason: dumpSkipDisabled}, nil
 	}
 	out, err := s.access.DumpBackfill(ctx, "admin", requestID)
@@ -80,7 +81,7 @@ func (s *Server) writeDumpBackfillSkipErr(w http.ResponseWriter, r *http.Request
 			"缓存频道已有该链接的副本，无需重复转存。")
 	case dumpSkipDisabled:
 		writeAPIError(w, http.StatusServiceUnavailable, apiCodeUnavailable,
-			"缓存频道未配置，请先在系统设置中配置缓存频道。")
+			"缓存频道未配置或已全部停用，请先在频道设置中添加并启用缓存频道。")
 	default:
 		s.writeAPIAppErr(w, r, op, apperr.New(apperr.CodeInternal, "未知缓存补写跳过原因: "+skip))
 	}

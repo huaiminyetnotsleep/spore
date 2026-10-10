@@ -298,7 +298,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `message_id` | INTEGER | NOT NULL | 源消息 ID |
 | `dump_ids_json` | TEXT | NOT NULL | 缓存频道内的消息 ID 数组（相册保组，按发送顺序） |
 | `format_version` | INTEGER | NOT NULL DEFAULT 0 | 副本布局格式版本（v16）：0 = 历史行（相册多 caption 旧形态），1 = "恰好组首一条合并 caption"；查询只命中当前版本，历史坐标保留供审计，复用回落完整投递后自愈重写 |
-| `dump_channel_id` | INTEGER | NOT NULL DEFAULT 0 | 副本所在缓存频道（v24）：0 = 升级前存量/未知频道，查询永不命中（不做回填）；切换缓存频道后旧频道条目因不匹配自动失效，由复用自愈或管理端迁移工具重建 |
+| `dump_channel_id` | INTEGER | NOT NULL DEFAULT 0 | 副本所在缓存频道（v24）：0 = 升级前存量/未知频道，查询永不命中（不做回填）。多缓存频道部署下各启用频道的条目按频道共存；查询按启用频道集合过滤，停用/移除频道的条目自动不命中，由复用自愈或管理端迁移工具重建 |
 | `created_at` | INTEGER | NOT NULL | 写入时间 |
 
 ### 3.14 watch_sources
@@ -511,7 +511,8 @@ API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skippe
 | 运行设置 | `memory_budget` | 字节数值 | 内存管道进程级预算（即时生效） |
 | 运行设置 | `max_links_per_message` | 数值 | 单条消息最大有效链接数 |
 | 运行设置 | `channel_copy_enabled` / `tg_reuse_enabled` | 布尔 | 绑定频道投递 / 缓存频道复用总开关 |
-| 运行设置 | `dump_channel_id` / `dump_channel_title` | 数值 / 字符串 | 缓存频道（settings 优先于 `DUMP_CHANNEL_ID` 环境变量） |
+| 运行设置 | `dump_channels` | JSON 数组 | 缓存频道列表（每项 `{channel_id, title, enabled}`，上限 10；键存在即完全接管，缺失时折算旧键 `dump_channel_id`/`dump_channel_title`，再缺失回退 `DUMP_CHANNEL_ID` 环境变量） |
+| 运行设置 | `dump_channel_id` / `dump_channel_title` | 数值 / 字符串 | 旧单频道键（多频道改造起只作折算回退读取，不再回写；显式 `0` = 关闭，覆盖环境变量） |
 | 运行设置 | `last_backup_at` | 毫秒时间戳 | 最近备份时间 |
 | 运行设置 | `error_log_retention_days` | 数值 | 错误日志保留天数（1–365，缺省 30；即时生效） |
 | 系统 | `system_name` | 字符串 | 系统名称（缺省 `Spore`） |

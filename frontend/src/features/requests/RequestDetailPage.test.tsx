@@ -99,7 +99,7 @@ describe("请求记录详情页", () => {
     fetchRequestDetailMock.mockReset();
     fetchSettingsMock
       .mockReset()
-      .mockResolvedValue({ dump_channel_id: -1001234567890 } as never);
+      .mockResolvedValue({ dump_channels: [{ channel_id: -1001234567890, title: "缓存频道", enabled: true }] } as never);
     dumpBackfillRequestMock.mockReset();
     retryRequestMock.mockReset();
     cancelRequestMock.mockReset();
@@ -248,7 +248,7 @@ describe("请求记录详情页", () => {
   });
 
   it("缓存频道未配置时转存入口禁用", async () => {
-    fetchSettingsMock.mockResolvedValue({ dump_channel_id: 0 } as never);
+    fetchSettingsMock.mockResolvedValue({ dump_channels: [] } as never);
     fetchRequestDetailMock.mockResolvedValue(detail({ status: "succeeded" }));
 
     renderPage();
