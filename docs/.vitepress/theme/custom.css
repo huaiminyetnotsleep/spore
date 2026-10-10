@@ -1,0 +1,82 @@
+/* mermaid 图默认整图缩放适配正文列宽；
+   点击图弹出全屏查看器（.vitepress/theme/index.mts）：＋/－/滚轮缩放、
+   适应窗口、1:1、拖拽平移、Esc 关闭 */
+.mermaid {
+  padding: 4px 0;
+  cursor: zoom-in;
+}
+
+/* 全屏查看层 */
+.mermaid-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.mermaid-viewer-body {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
+  /* 底部给悬浮工具条留出空间，避免盖住流程图 */
+  padding: 12px 12px 72px;
+  background: var(--vp-c-bg);
+  cursor: grab;
+  user-select: none;
+}
+
+.mermaid-viewer-body:active {
+  cursor: grabbing;
+}
+
+.mermaid-viewer-body svg {
+  display: block;
+  /* 防止 flex 容器把放大的图压缩回容器宽度 */
+  flex-shrink: 0;
+}
+
+/* 悬浮工具条：底部居中胶囊 */
+.mermaid-viewer-bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--vp-c-bg) 82%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 999px;
+  box-shadow: var(--vp-shadow-3);
+  user-select: none;
+  z-index: 1;
+}
+
+.mermaid-viewer-bar button {
+  border: none;
+  background: transparent;
+  color: var(--vp-c-text-1);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.mermaid-viewer-bar button:hover {
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-brand-1);
+}
+
+.mermaid-viewer-pct {
+  min-width: 48px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+  font-variant-numeric: tabular-nums;
+}

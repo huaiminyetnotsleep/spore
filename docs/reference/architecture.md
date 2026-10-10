@@ -1,7 +1,7 @@
 # Spore 技术设计文档（Go 版）
 
 > 本文是 Go 重写后的技术设计，替代旧的 TypeScript + grammY + copyMessage 方案。
-> §11 为按当前代码整理的执行顺序与运行时流程。
+> §11 为按当前代码整理的执行顺序与运行时流程；§12 为业务全景流程图（唯一权威版本，链路变更时同步更新）。
 
 ## 1. 架构总览
 
@@ -13,34 +13,29 @@ Spore 是一个 Telegram 受保护消息提取机器人。用户把频道消息�
 
 ### 1.1 双通道架构（两个 MTProto 会话）
 
-```text
-                          Telegram
-                       ┌─────┴─────────┐
-                       │               │
-                   Bot API          MTProto
-                       │          ┌────┴─────────┐
-                       │      用户号会话      Bot 会话
-                       │    （读源频道）  （BOT_TOKEN 登录）
-              ┌────────▼───┐  ┌────▼─────┐ ┌────▼──────────┐
-              │ go-telegram │  │ gotd/td  │ │ gotd/td       │
-              │   /bot      │  │ 用户账号  │ │ Bot 身份       │
-              └────────┬────┘  └────┬─────┘ └────┬──────────┘
-                       │            │            │
-                       ▼            ▼            ▼
-        ┌─────────────────────────────────────────────┐
-        │                  Go 进程                     │
-        │                                              │
-        │  botapi     长轮询接收消息、白名单、状态回复      │
-        │  tmeurl    t.me 链接解析（links.ts 移植）        │
-        │  queue     内存 Job 队列 + worker               │
-        │  mtproto   用户号：登录、Peer 解析、取消息         │
-        │            Bot 会话：大文件直传（MTProto 上传）   │
-        │  message   源消息标准化 + 实体渲染（HTML/透传）    │
-        │  media     流式下载 / 临时文件 fallback          │
-        │  delivery  路由：Bot API 上传 / 大文件直传（新消息）│
-        │  store     SQLite 持久化（用户/请求/用量等）      │
-        │  config / apperr   配置与错误模型                │
-        └─────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    TG["Telegram"]
+    TG -->|"Bot API"| GTB["go-telegram/bot"]
+    TG -->|"MTProto 用户号会话（读源频道）"| GTDU["gotd/td 用户账号"]
+    TG -->|"MTProto Bot 会话（BOT_TOKEN 登录）"| GTDB["gotd/td Bot 身份"]
+
+    subgraph GO["Go 进程"]
+        direction TB
+        BOT["botapi：长轮询接收消息、白名单、状态回复"]
+        TME["tmeurl：t.me 链接解析（links.ts 移植）"]
+        QUE["queue：内存 Job 队列 + worker"]
+        MTP["mtproto 用户号：登录、Peer 解析、取消息<br/>Bot 会话：大文件直传（MTProto 上传）"]
+        MSG["message：源消息标准化 + 实体渲染（HTML/透传）"]
+        MED["media：流式下载 / 临时文件 fallback"]
+        DLV["delivery 路由：Bot API 上传 / 大文件直传（新消息）"]
+        STO["store：SQLite 持久化（用户/请求/用量等）"]
+        CFG["config / apperr：配置与错误模型"]
+    end
+
+    GTB --> BOT
+    GTDU --> MTP
+    GTDB --> MTP
 ```
 
 Bot 会话（`data/bot-session.json`，`internal/mtproto/bot.go`）复用 `BOT_TOKEN` 登录、
@@ -51,21 +46,24 @@ Bot API 上限的媒体以 `LARGE_CHANNEL_UNAVAILABLE` 确定性失败，小文�
 
 ### 1.2 一次请求的完整数据流
 
-```text
-用户发链接 "https://t.me/example/123"
-   ↓ botapi：私聊限定 + access 访问控制校验（数据库白名单/额度）
-   ↓ tmeurl.Parse → SourceRef{Username, MessageID}
-   ↓ 回复"正在获取消息..."（记下 StatusMsgID）→ queue.Enqueue(Job)
-   ↓ worker 出队（单 worker）
-   ↓ mtproto.ResolveInputPeer → tg.InputPeerClass
-   ↓ mtproto.Fetch → []*tg.Message（Album 时按 GroupedID 聚合相邻消息）
-   ↓ message.Convert → []Item（内部标准模型）
-   ↓ 文本：message.RenderHTML → delivery.SendMessage
-   ↓ 媒体统一"下载 → 上传"：media.Open（流式/内存管道/临时文件）→ delivery.SendMedia / SendAlbum
-     （routerSender 按大小路由：≤ Bot API 上限（官方服务器 50MB）走 Bot API 上传；
-       超限媒体经 Bot 身份会话 MTProto 直传，上限 2000MB）
-   ↓ 删除"正在获取消息..."，Job 完成
-用户收到全新消息 → 可正常转发 ✅
+```mermaid
+flowchart TB
+    U["用户发链接 https://t.me/example/123"]
+    S1["botapi：私聊限定 + access 访问控制校验（数据库白名单/额度）"]
+    S2["tmeurl.Parse → SourceRef{Username, MessageID}"]
+    S3["回复「正在获取消息...」（记下 StatusMsgID）→ queue.Enqueue(Job)"]
+    S4["worker 出队（单 worker）"]
+    S5["mtproto.ResolveInputPeer → tg.InputPeerClass"]
+    S6["mtproto.Fetch → []*tg.Message（Album 时按 GroupedID 聚合相邻消息）"]
+    S7["message.Convert → []Item（内部标准模型）"]
+    S8["文本：message.RenderHTML → delivery.SendMessage"]
+    S9["媒体统一「下载 → 上传」：media.Open（流式/内存管道/临时文件）<br/>→ delivery.SendMedia / SendAlbum"]
+    S10["routerSender 按大小路由：≤ Bot API 上限（官方服务器 50MB）走 Bot API 上传；<br/>超限媒体经 Bot 身份会话 MTProto 直传，上限 2000MB"]
+    S11["删除「正在获取消息...」，Job 完成"]
+    S12["用户收到全新消息 → 可正常转发"]
+
+    U --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+    S8 --> S9 --> S10 --> S11 --> S12
 ```
 
 （运行期的完整执行顺序、并发模型与退出路径见 §11。）
@@ -184,14 +182,14 @@ spore/
 
 解析流程（`internal/mtproto/resolve.go`）：
 
-```text
-SourceRef
- ├─ Username 分支：api.ContactsResolveUsername(ctx, name)
- │    → InputPeer；顺带把返回 Chats 里的 channel hash 写入缓存
- └─ ChannelID 分支：缓存命中 → InputChannel{ChannelID, AccessHash}
-      未命中 → WalkDialogs：手写 MessagesGetDialogs 翻页遍历全部对话
-              （覆盖归档对话夹），从每批 Chats 提取 hash 写缓存并 Save()
-      仍无 → AppError{CHANNEL_NOT_ACCESSIBLE}（用户文案指引 /join 邀请链接加入）
+```mermaid
+flowchart TB
+    SRC["SourceRef"]
+    SRC -->|"Username 分支"| UN["api.ContactsResolveUsername(ctx, name) → InputPeer<br/>顺带把返回 Chats 里的 channel hash 写入缓存"]
+    SRC -->|"ChannelID 分支"| HIT{"缓存命中？"}
+    HIT -->|"命中"| IC["InputChannel{ChannelID, AccessHash}"]
+    HIT -->|"未命中 → WalkDialogs"| WD["手写 MessagesGetDialogs 翻页遍历全部对话<br/>（覆盖归档对话夹），从每批 Chats 提取 hash 写缓存并 Save()"]
+    WD -->|"仍无"| ERR["AppError{CHANNEL_NOT_ACCESSIBLE}<br/>（用户文案指引 /join 邀请链接加入）"]
 ```
 
 前提：**用户账号必须是目标频道成员**（或频道可公开访问）。缓存持久化避免每次重启全量遍历。
@@ -209,63 +207,62 @@ SourceRef
 
 媒体发送统一走"下载 → 上传"：worker 打开下载句柄后交 `delivery.routerSender` 按媒体大小路由（`internal/queue/worker.go` + `internal/delivery/router.go`，Bot 会话见 §3.8）：
 
-```text
-源消息 Media（含下载位置 Location 与 Size）
-   │
-   ├─ media.Open 下载（三条路径共用）：
-   │     Document.Size / photo size 预检查
-   │     ├─ Size > MaxFileSize 且不可拆分（未启用拆分或
-   │     │     > MaxSplitTotalSize≈19GB）→ FILE_TOO_LARGE，直接拒绝
-   │     ├─ Size > MaxFileSize 且可拆分 → 视频走流式切段句柄（多线程
-   │     │     Parallel 写入有界窗口重排序缓冲 windowBuffer，内存封顶 128MB、
-   │     │     经进程级预算记账，消费侧顺序读喂 ffmpeg stdin——源不落盘；
-   │     │     预算不足降级临时文件）；非视频强制临时文件路径（字节分段
-   │     │     依赖完整落盘后按区间切分）
-   │     ├─ Size ≤ StreamLimit  → 流式：goroutine 内 downloader.Stream(ctx, pw)
-   │     │                        错误经 pw.CloseWithError 传出；pr 交给
-   │     │                        models.InputFileUpload{Data}（chunked 上传）
-   │     ├─ StreamLimit < Size ≤ InMemoryLimit 且预算充足 → 内存管道：
-   │     │     多线程 downloader.Parallel(WithThreads(DOWNLOAD_THREADS),
-   │     │     reorderBuffer) 乱序落位 + 顺序阻塞读（reorderBuffer 同时实现
-   │     │     WriterAt/Reader），下载与上传完全重叠（边下边发）、零磁盘写入；
-   │     │     内存占用 = 文件大小，按进程级预算闸门记账（Cleanup 归还）
-   │     └─ InMemoryLimit < Size ≤ MaxFileSize 或预算不足 → 临时文件：
-   │           downloader.Parallel(WithThreads(DOWNLOAD_THREADS),
-   │           TempDir/jobID-名字) 多线程并行落盘，经 fileGate 就绪水位
-   │           门控顺序读——下载落盘与上传读盘重叠（边下边发），
-   │           发送后 Cleanup（成功失败都清理）
-   │     （下载遇到 FILE_REFERENCE_EXPIRED → RefreshMedia 刷新后重试一次）
-   │
-   └─ 发送路由（routerSender，uploadCap = BotAPIUploadCap()）：
-         ├─ Size ≤ uploadCap → Bot API 上传（官方服务器 uploadCap=50MB 硬上限）
-         │     photo 超 PhotoLimit（官方 10MB）自动降级 document；相册走 sendMediaGroup
-         ├─ Size > uploadCap → Bot 身份会话 MTProto 直传（gotd uploader
-         │     WithThreads(UPLOAD_THREADS) 并发分片上传（>10MB bigLoop 单读多发，
-         │     ≤10MB smallLoop 固定串行）+ messages.sendMedia，上限 2000MB）；
-         │     Bot 会话未就绪时 LARGE_CHANNEL_UNAVAILABLE 确定性失败（小文件不受影响）
-         └─ 相册整组：全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap
-               （官方服务器 50MB——sendMediaGroup 把整组字节装进同一请求体，
-               请求体容量独立于逐成员上限，总量超限时官方服务器以纯文本
-               413 拒绝）→ sendMediaGroup；
-               含超限成员（video/document 且 ≤2000MB）或总量超 albumCap →
-               同一 Bot 会话逐成员 uploader 上传（串行，避免按成员放大
-               invoke 并发）+ messages.sendMultiMedia 整组直传；
-               全 document 组（分卷拆分段）同走该通道；
-               通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败。
-               全部相册满足"恰好组首一条 caption"不变量：客户端对多成员
-               带 caption 的相册首渲染会抑制组级展示位（真机五组实验
-               2026-09-20，含缓存频道副本反向验证），路由层发送前把全部
-               成员语义 caption（各成员正文、切段说明）按源顺序合并进组首
-               （实体按 UTF-16 平移、频道脚注保留组首一份），其余成员清零
-               ——Bot API（含本地服务器模式下的拆分相册）与 MTProto 从首次
-               请求起就收到规范形态；不做发送后 caption 修补（空串编辑受
-               依赖库 omitempty 影响不可靠）。混合相册拆分整组
-               同样按 split 记 delivery_mode（与单媒体拆分同语义）
+```mermaid
+flowchart TB
+    SRC["源消息 Media（含下载位置 Location 与 Size）"]
+
+    subgraph OPEN["media.Open 下载（三条路径共用）"]
+        direction TB
+        PRE{"Document.Size / photo size 预检查"}
+        B1["Size > MaxFileSize 且不可拆分（未启用拆分或<br/>> MaxSplitTotalSize≈19GB）→ FILE_TOO_LARGE，直接拒绝"]
+        B2["Size > MaxFileSize 且可拆分 → 视频走流式切段句柄<br/>（多线程 Parallel 写入有界窗口重排序缓冲 windowBuffer，<br/>内存封顶 128MB、经进程级预算记账，消费侧顺序读喂 ffmpeg stdin<br/>——源不落盘；预算不足降级临时文件）；<br/>非视频强制临时文件路径（字节分段依赖完整落盘后按区间切分）"]
+        B3["Size ≤ StreamLimit → 流式：goroutine 内 downloader.Stream(ctx, pw)<br/>错误经 pw.CloseWithError 传出；pr 交给<br/>models.InputFileUpload{Data}（chunked 上传）"]
+        B4["StreamLimit < Size ≤ InMemoryLimit 且预算充足 → 内存管道：<br/>多线程 downloader.Parallel(WithThreads(DOWNLOAD_THREADS), reorderBuffer)<br/>乱序落位 + 顺序阻塞读（reorderBuffer 同时实现 WriterAt/Reader），<br/>下载与上传完全重叠（边下边发）、零磁盘写入；<br/>内存占用 = 文件大小，按进程级预算闸门记账（Cleanup 归还）"]
+        B5["InMemoryLimit < Size ≤ MaxFileSize 或预算不足 → 临时文件：<br/>downloader.Parallel(WithThreads(DOWNLOAD_THREADS), TempDir/jobID-名字)<br/>多线程并行落盘，经 fileGate 就绪水位门控顺序读<br/>——下载落盘与上传读盘重叠（边下边发），<br/>发送后 Cleanup（成功失败都清理）"]
+        REF["下载遇到 FILE_REFERENCE_EXPIRED → RefreshMedia 刷新后重试一次"]
+
+        PRE -->|"Size > MaxFileSize 且不可拆分"| B1
+        PRE -->|"Size > MaxFileSize 且可拆分"| B2
+        PRE -->|"Size ≤ StreamLimit"| B3
+        PRE -->|"StreamLimit < Size ≤ InMemoryLimit 且预算充足"| B4
+        PRE -->|"InMemoryLimit < Size ≤ MaxFileSize 或预算不足"| B5
+        B3 -.-> REF
+        B4 -.-> REF
+        B5 -.-> REF
+    end
+
+    subgraph SEND["发送路由（routerSender，uploadCap = BotAPIUploadCap()）"]
+        direction TB
+        RT{"按 Size 路由"}
+        R1["Size ≤ uploadCap → Bot API 上传（官方服务器 uploadCap=50MB 硬上限）<br/>photo 超 PhotoLimit（官方 10MB）自动降级 document；相册走 sendMediaGroup"]
+        R2["Size > uploadCap → Bot 身份会话 MTProto 直传<br/>（gotd uploader WithThreads(UPLOAD_THREADS) 并发分片上传<br/>（>10MB bigLoop 单读多发，≤10MB smallLoop 固定串行）<br/>+ messages.sendMedia，上限 2000MB）；<br/>Bot 会话未就绪时 LARGE_CHANNEL_UNAVAILABLE 确定性失败（小文件不受影响）"]
+        ALB{"全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap？<br/>（官方服务器 50MB——sendMediaGroup 把整组字节装进同一请求体，<br/>请求体容量独立于逐成员上限，总量超限时官方服务器以纯文本 413 拒绝）"}
+        G1["sendMediaGroup"]
+        G2["同一 Bot 会话逐成员 uploader 上传（串行，避免按成员放大<br/>invoke 并发）+ messages.sendMultiMedia 整组直传；<br/>全 document 组（分卷拆分段）同走该通道；<br/>通道未就绪同样 LARGE_CHANNEL_UNAVAILABLE 确定性失败"]
+        C1["全部相册满足「恰好组首一条 caption」不变量：客户端对多成员<br/>带 caption 的相册首渲染会抑制组级展示位（真机五组实验<br/>2026-09-20，含缓存频道副本反向验证）"]
+        C2["路由层发送前把全部成员语义 caption（各成员正文、切段说明）<br/>按源顺序合并进组首（实体按 UTF-16 平移、频道脚注保留组首一份），<br/>其余成员清零——Bot API（含本地服务器模式下的拆分相册）与 MTProto<br/>从首次请求起就收到规范形态；不做发送后 caption 修补<br/>（空串编辑受依赖库 omitempty 影响不可靠）"]
+        C3["混合相册拆分整组同样按 split 记 delivery_mode（与单媒体拆分同语义）"]
+
+        RT -->|"Size ≤ uploadCap"| R1
+        RT -->|"Size > uploadCap"| R2
+        RT -->|"相册整组"| ALB
+        ALB -->|"是"| G1
+        ALB -->|"否：含超限成员（video/document 且 ≤2000MB）或总量超 albumCap"| G2
+        G1 --> C1
+        G2 --> C1
+        C1 --> C2
+        C2 --> C3
+    end
+
+    SRC --> PRE
+    SRC --> RT
+```
 
 分卷拆分投递（split，`internal/queue/split.go`）：超过单文件 MTProto 上传
 上限（2000MB）的媒体不再失败——切为 N 个分段（⌈Size/1800MB⌉，
 相册 10 成员上限 → 单条消息总量约 17.6GB，超出仍 FILE_TOO_LARGE），经相册
 整组直传为同一条消息。两种切段形态：
+
   - **可播放视频分段（视频首选，双模式按 moov 位置判定）**：下载流头部
     缓冲 64KB 解析 MP4 顶层 box 头（`media.SniffMoovPosition`，确定性预判
     非试错；判定字节经 io.MultiReader 接回消费流）——
@@ -298,6 +295,7 @@ SourceRef
     文件名 `<原名>.part<i>of<N>`，caption 只挂首段并附合并提示
     （cat / copy /b）；第 2 段起按"段起始字节 / 总大小 × 总时长"换算时间戳
     对完整文件 `ffmpeg -ss` 定位抽帧。
+
 **切段能力前置校验、不降级（设计决策 2026-09-20）**：超限视频在下载开始前
 校验切段条件（`ensurePlayableSplit`：ffmpeg 可用且含 matroska 封装器、源带
 时长属性），不满足直接以 `SPLIT_UNAVAILABLE` 报错终止任务——不发起下载、
@@ -306,6 +304,7 @@ SourceRef
 （压缩包等，那是唯一路径而非降级）。启动期探测 ffmpeg 的 muxer 列表
 （`media.CheckMatroskaMuxer`），缺 matroska 即告警（镜像自带精简 ffmpeg
 已含，构建期亦自检）。
+
 相册原子化：混合相册（图片 + 超限视频）经 planAlbumSend 预检（纯元数据）
 走**拆分整组**——图片与大视频的分段合成同一条相册 `[图片, 段1, 段2]` 整组
 直传，任务级原子（任何成员失败整组失败、零字节发出）；展开后超相册 10 成员
@@ -328,7 +327,6 @@ delivery_mode 记 `split`（仅成功时，失败回落 upload 由错误码记�
 相册整组恒走 Bot API）。相册成员经 AlbumGroupable 预检（Bot API 承载 ∪ video
 ≤MaxFileSize 的 MTProto 整组承载）；photo 超 photoLimit、document/audio 及超
 MaxFileSize 的成员不可整组，相册逐条发送（逐条后超限成员各自走分卷拆分）。
-```
 
 统一返回 `media.Handle{Reader, Cleanup}`；三条路径的 `Cleanup` 都是"放弃
 信号"——关闭数据源唤醒阻塞读者、终止仍在下载的 goroutine（临时文件路径
@@ -405,19 +403,22 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 用于"媒体坐标引用直发 + 私聊接力"（09-02 任务），因坐标按账号签发、链路复杂
 且与"下载 + 上传"双轨维护成本高而移除，改为承载大文件上传：
 
-```text
-worker（媒体 Size > BotAPIUploadCap）
- → delivery.routerSender（internal/delivery/router.go）
-     ├─ BotClient.Available() 为假 → LARGE_CHANNEL_UNAVAILABLE 确定性失败（零网络）
-     └─ mtproto.BotClient.SendMedia
-          ├─ resolveUserPeer：bot 特权 UsersGetUsers(InputUser{UserID, AccessHash:0})
-          │   反查目标用户 → InputPeerUser（内存缓存，跨重连保留）
-          ├─ uploader.NewUploader(api).Upload(NewUpload(文件名, reader, Size))
-          │   （>10MB 自动走 saveBigFilePart 大文件分片，上限 2000MB）
-          ├─ uploadedMediaOf：按 Kind 构造 InputMediaUploadedDocument
-          │   （MIME + video/audio 属性 + 文件名；photo 超限按 document 发送）
-          └─ MessagesSendMediaRequest
-              （caption 经 Caption.Limited 截断后透传原始实体；RandomID 防重放）
+```mermaid
+flowchart TB
+    W["worker（媒体 Size > BotAPIUploadCap）"]
+    RS["delivery.routerSender（internal/delivery/router.go）"]
+    AV{"BotClient.Available()？"}
+    FAIL["LARGE_CHANNEL_UNAVAILABLE 确定性失败（零网络）"]
+    SM["mtproto.BotClient.SendMedia"]
+    P1["resolveUserPeer：bot 特权 UsersGetUsers(InputUser{UserID, AccessHash:0})<br/>反查目标用户 → InputPeerUser（内存缓存，跨重连保留）"]
+    P2["uploader.NewUploader(api).Upload(NewUpload(文件名, reader, Size))<br/>（>10MB 自动走 saveBigFilePart 大文件分片，上限 2000MB）"]
+    P3["uploadedMediaOf：按 Kind 构造 InputMediaUploadedDocument<br/>（MIME + video/audio 属性 + 文件名；photo 超限按 document 发送）"]
+    P4["MessagesSendMediaRequest<br/>（caption 经 Caption.Limited 截断后透传原始实体；RandomID 防重放）"]
+
+    W --> RS --> AV
+    AV -->|"为假"| FAIL
+    AV -->|"就绪"| SM
+    SM --> P1 --> P2 --> P3 --> P4
 ```
 
 关键设计：
@@ -487,21 +488,26 @@ type Job struct {
 
 worker 主流程（`internal/queue/worker.go`）：
 
-```text
-process(job)（取数固定 15min 窗口；发送窗口按媒体总量自适应，封顶 2h）:
-  msgs, err := fetcher.Fetch(job.Ref)        // 失败 → SendMessage(UserText+来源链接) 并返回
-  items := message.Convert(msgs)
-  单条文本 → delivery.SendMessage(item.RenderHTML())
-  单条媒体 → sendMediaItem → openAndSend → media.Open
-             → SendMedia(reader=句柄, caption=MediaCaption)
-             （routerSender 按 Size 路由：≤uploadCap 走 Bot API，超限走大文件直传；
-               下载 FILE_REFERENCE_EXPIRED → RefreshMedia 刷新后重试一次）
-  Album(>1) → AlbumGroupable 预检（Bot API 承载 ∪ video≤MaxFileSize 的
-            MTProto 整组承载；不可整组成员导致降级逐条）
-            → 并发打开全部句柄（上限 2，任一失败整体失败并清理）
-              → SendAlbum(成员逐个携带自己的 caption；路由分流 Bot API
-                sendMediaGroup 或 MTProto 两阶段整组直传)
-  最后 delivery.DeleteMessage(StatusMsgID)
+```mermaid
+flowchart TB
+    P0["process(job)（取数固定 15min 窗口；发送窗口按媒体总量自适应，封顶 2h）"]
+    P1["msgs, err := fetcher.Fetch(job.Ref)"]
+    P1E["失败 → SendMessage(UserText+来源链接) 并返回"]
+    P2["items := message.Convert(msgs)"]
+    P4["单条文本 → delivery.SendMessage(item.RenderHTML())"]
+    P5["单条媒体 → sendMediaItem → openAndSend → media.Open<br/>→ SendMedia(reader=句柄, caption=MediaCaption)<br/>（routerSender 按 Size 路由：≤uploadCap 走 Bot API，超限走大文件直传；<br/>下载 FILE_REFERENCE_EXPIRED → RefreshMedia 刷新后重试一次）"]
+    P6["Album(>1) → AlbumGroupable 预检（Bot API 承载 ∪ video≤MaxFileSize 的<br/>MTProto 整组承载；不可整组成员导致降级逐条）<br/>→ 并发打开全部句柄（上限 2，任一失败整体失败并清理）<br/>→ SendAlbum(成员逐个携带自己的 caption；路由分流 Bot API<br/>sendMediaGroup 或 MTProto 两阶段整组直传)"]
+    P7["最后 delivery.DeleteMessage(StatusMsgID)"]
+
+    P0 --> P1
+    P1 -.->|"失败"| P1E
+    P1 --> P2
+    P2 -->|"单条文本"| P4
+    P2 -->|"单条媒体"| P5
+    P2 -->|"Album(>1)"| P6
+    P4 --> P7
+    P5 --> P7
+    P6 --> P7
 ```
 
 ## 5. 错误模型
@@ -580,14 +586,22 @@ func From(err error) *AppError  // 把 gotd/Bot API 错误分类为 AppError
 
 ### 7.1 MTProto 登录流程
 
-```text
-LOGIN_MODE=auto（默认）/ qr：
-    导出 login token → 终端渲染二维码 → 手机 Telegram「关联桌面设备」扫码确认 → 导入授权
-    （无需手机号、验证码与 2FA 密码；token 约 30s 过期自动刷新重绘）
-LOGIN_MODE=phone：
-    TG_PHONE → 发送验证码 → 终端输入验证码 → 2FA 密码（如设置）
-两种模式产物一致：写入 data/session.json；后续运行 session 有效 → 静默自动登录。
-auto 且已配置 TG_PHONE 时，扫码失败自动回退到验证码流程。
+```mermaid
+flowchart TB
+    MODE{"LOGIN_MODE？"}
+    QR["auto（默认）/ qr：导出 login token → 终端渲染二维码<br/>→ 手机 Telegram「关联桌面设备」扫码确认 → 导入授权<br/>（无需手机号、验证码与 2FA 密码；token 约 30s 过期自动刷新重绘）"]
+    PH["phone：TG_PHONE → 发送验证码 → 终端输入验证码 → 2FA 密码（如设置）"]
+    OUT["两种模式产物一致：写入 data/session.json"]
+    OK["后续运行 session 有效 → 静默自动登录"]
+    FB["auto 且已配置 TG_PHONE 时，扫码失败自动回退到验证码流程"]
+
+    MODE -->|"auto / qr"| QR
+    MODE -->|"phone"| PH
+    QR -.->|"扫码失败"| FB
+    FB -.-> PH
+    QR --> OUT
+    PH --> OUT
+    OUT --> OK
 ```
 
 - 扫码基于 gotd `auth/qrlogin` 包：独立轮询循环（不依赖 updates 加速信号；用户号会话虽已轻量消费 update 用于频道事件，扫码轮询仍自成循环）；二维码由 `mdp/qrterminal/v3` 渲染。
@@ -635,73 +649,68 @@ auto 且已配置 TG_PHONE 时，扫码失败自动回退到验证码流程。
 
 ### 11.1 进程启动顺序（cmd/bot/main.go）
 
-```text
-main()
- ├─ 1. godotenv.Load()              # 加载 .env（可选，失败忽略）
- ├─ 2. admin 子命令分流             # spore admin reset-key：只重置密钥后退出，不启动 Bot
- ├─ 3. config.Load(os.Getenv)       # 环境变量校验；失败 → stderr + exit(1)
- ├─ 4. newLogger(cfg.LogLevel)      # slog 文本日志 → stderr
- ├─ 5. os.MkdirAll(DataDir, 0700)   # data/：session.json 与 peers.json 落盘目录
- ├─ 6. 清理 TempDir 后重建          # 仅删除纯数字 job ID 命名的孤儿临时文件，避免误清目录
- ├─ 7. signal.NotifyContext(SIGINT, SIGTERM)
- ├─ 8. ApplyPendingImport           # 应用已确认的数据库导入候选（pending-import.json：
- │        #   保留当前 settings、清空 Web 会话、保存带时间戳 rollback 副本）；
- │        #   无 confirmed marker 的普通重启跳过
- ├─ 9. store.Open(DataDir/spore.db)  # 打开 SQLite 并自动执行版本化迁移（§3.7）
- ├─ 10. 媒体设置数据库覆盖          # max_file_size/stream_limit/temp_dir_max_size 覆盖 env；
- │        #   覆盖值非法时回退整套环境配置并产生 media.config_invalid 事件
- ├─ 11. transfercfg.Runtime         # 下载/上传线程与连接数：环境默认值 + 合法 DB 覆盖
- ├─ 12. cloud Manager               # 创建 cloud-drive.json 管理器（文件缺失 = 关闭态；
- │        #   损坏/校验失败保持关闭并产生 cloud.config_invalid，不阻断启动）
- ├─ 13. access.ImportLegacyWhitelist  # 首次启动（users 表为空）导入 ALLOWED_USER_IDS
- ├─ 14. notify Hub + errlog + rclone 探测
- │        # 事件通知 Hub（冷却/阈值/配置通道与兼容 owner 私聊）；
- │        # 错误日志中心 internal/errlog（启动即清一次过期行 + 每小时保留清理；
- │        #   请求管线与 Bot 相关环节错误逐条落 error_logs，管理端筛选查询）；
- │        # rclone 可用性探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）
- ├─ 15. FailInterruptedRequests     # 上次遗留的 queued/processing 批量置 failed(INTERRUPTED)
- ├─ 16. queue.New(LoadQueueCapacity) # 内存队列与 access 服务在 MTProto 就绪前创建：
- │        # 容量经设置项 queue_capacity 配置（缺省 64，重启生效），
- │        # Bot 提交与 Web 审批/重试共用同一队列与 access 服务；
- │        # 资源监控服务（internal/monitor）同时启动采样 goroutine
- ├─ 17. Web 管理端（internal/web）   # EnsureAccessKey（首启打印密钥一次）→ 独立 goroutine，
- │        # **先于用户号 MTProto ready 启动**；监听 WEB_ADDR（默认 127.0.0.1:8080）；
- │        # 启动失败/panic 只记日志，不影响 Bot；注入 access/queue/join/云盘/
- │        # MTProto 登录会话等（管理页面与扫码重连入口）
- ├─ 18. mtproto.NewBotClient(cfg, log).Run(ctx)  # 独立 goroutine：Bot 身份 MTProto 会话
- │        # （data/bot-session.json，Auth().Bot 非交互登录；异常退出指数退避自动重启。
- │        #  仅服务大文件直传；未就绪时仅超限媒体失败，小文件主链路不受影响）
- └─ 19. mtproto.New(cfg, log).Run(ctx, ready)   # 交出控制权，见 11.2
+```mermaid
+flowchart TB
+    M["main()"]
+    S1["1. godotenv.Load()——加载 .env（可选，失败忽略）"]
+    S2["2. admin 子命令分流<br/>spore admin reset-key：只重置密钥后退出，不启动 Bot"]
+    S3["3. config.Load(os.Getenv)<br/>环境变量校验；失败 → stderr + exit(1)"]
+    S4["4. newLogger(cfg.LogLevel)<br/>slog 文本日志 → stderr"]
+    S5["5. os.MkdirAll(DataDir, 0700)<br/>data/：session.json 与 peers.json 落盘目录"]
+    S6["6. 清理 TempDir 后重建<br/>仅删除纯数字 job ID 命名的孤儿临时文件，避免误清目录"]
+    S7["7. signal.NotifyContext(SIGINT, SIGTERM)"]
+    S8["8. ApplyPendingImport<br/>应用已确认的数据库导入候选（pending-import.json：<br/>保留当前 settings、清空 Web 会话、保存带时间戳 rollback 副本）；<br/>无 confirmed marker 的普通重启跳过"]
+    S9["9. store.Open(DataDir/spore.db)<br/>打开 SQLite 并自动执行版本化迁移（§3.7）"]
+    S10["10. 媒体设置数据库覆盖<br/>max_file_size/stream_limit/temp_dir_max_size 覆盖 env；<br/>覆盖值非法时回退整套环境配置并产生 media.config_invalid 事件"]
+    S11["11. transfercfg.Runtime<br/>下载/上传线程与连接数：环境默认值 + 合法 DB 覆盖"]
+    S12["12. cloud Manager<br/>创建 cloud-drive.json 管理器（文件缺失 = 关闭态；<br/>损坏/校验失败保持关闭并产生 cloud.config_invalid，不阻断启动）"]
+    S13["13. access.ImportLegacyWhitelist<br/>首次启动（users 表为空）导入 ALLOWED_USER_IDS"]
+    S14["14. notify Hub + errlog + rclone 探测<br/>事件通知 Hub（冷却/阈值/配置通道与兼容 owner 私聊）；<br/>错误日志中心 internal/errlog（启动即清一次过期行 + 每小时保留清理；<br/>请求管线与 Bot 相关环节错误逐条落 error_logs，管理端筛选查询）；<br/>rclone 可用性探测与每 10 分钟复查（cloud.disabled 事件的产生与自动恢复）"]
+    S15["15. FailInterruptedRequests<br/>上次遗留的 queued/processing 批量置 failed(INTERRUPTED)"]
+    S16["16. queue.New(LoadQueueCapacity)<br/>内存队列与 access 服务在 MTProto 就绪前创建：<br/>容量经设置项 queue_capacity 配置（缺省 64，重启生效），<br/>Bot 提交与 Web 审批/重试共用同一队列与 access 服务；<br/>资源监控服务（internal/monitor）同时启动采样 goroutine"]
+    S17["17. Web 管理端（internal/web）<br/>EnsureAccessKey（首启打印密钥一次）→ 独立 goroutine，<br/>先于用户号 MTProto ready 启动；监听 WEB_ADDR（默认 127.0.0.1:8080）；<br/>启动失败/panic 只记日志，不影响 Bot；注入 access/queue/join/云盘/<br/>MTProto 登录会话等（管理页面与扫码重连入口）"]
+    S18["18. mtproto.NewBotClient(cfg, log).Run(ctx)<br/>独立 goroutine：Bot 身份 MTProto 会话<br/>（data/bot-session.json，Auth().Bot 非交互登录；异常退出指数退避自动重启。<br/>仅服务大文件直传；未就绪时仅超限媒体失败，小文件主链路不受影响）"]
+    S19["19. mtproto.New(cfg, log).Run(ctx, ready)<br/>交出控制权，见 11.2"]
+
+    M --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+    S8 --> S9 --> S10 --> S11 --> S12 --> S13 --> S14 --> S15 --> S16
+    S16 --> S17
+    S17 -->|"独立 goroutine"| S18
+    S18 --> S19
 ```
 
 ### 11.2 MTProto 登录与就绪（internal/mtproto/client.go）
 
-```text
-Run(ctx, ready)                            # 重连循环：每轮一个完整 client 生命周期
- ├─ 每轮开始：takeWebLogin()               # Web 触发的重连走 Web 扫码呈现；首轮恒终端
- ├─ runOnce(ctx, ready, viaWeb)：
- │    ├─ floodwait.NewSimpleWaiter().WithMaxRetries(5)   # FLOOD_WAIT 自动等待重试
- │    ├─ telegram.NewClient(API_ID, API_HASH,
- │    │      { SessionStorage: data/session.json, NoUpdates: true })
- │    └─ client.Run(ctx, 回调)：
- │          回调：
- │          ├─ Auth().Status(ctx)
- │          ├─ 未授权 → login()：
- │          │    viaWeb → loginByQR(web)：扫码 URL 推送登录会话（Session.setQR），
- │          │      浏览器经 /mtproto/qr.png 渲染；失败回落"重启走终端登录"
- │          │    LOGIN_MODE=qr / auto → loginByQR()：终端渲染二维码，扫码确认
- │          │    auto 且配置了 TG_PHONE：扫码失败自动回退验证码流程
- │          │    LOGIN_MODE=phone（或上述回退）→ authFlow(terminalAuth)：
- │          │      手机号 → 终端输验证码 → 2FA 密码（如有）
- │          │    产物统一写入 data/session.json
- │          ├─ 已授权 → 静默登录（直接复用会话）
- │          └─ api := tg.NewClient(waiter.Handle(client.API().Invoker()))
- │                # 经 floodwait 包装的 API 客户端，随后传给 ready
- │             ready(ctx, api)             # 见 11.3；ready 返回本轮结束
- ├─ ctx 结束 → Run 返回 nil（正常退出路径）
- └─ 轮内异常退出（会话失效等）→ Session.setOffline(err) → waitRelogin(ctx)
-      # 不再终止进程：Bot/worker 已随本轮回调 ctx 结束而停止，Web 管理端
-      # 独立运行，管理员经 /mtproto/relogin 触发下一轮
+```mermaid
+flowchart TB
+    RUN["Run(ctx, ready)——重连循环：每轮一个完整 client 生命周期"]
+    WL["每轮开始：takeWebLogin()<br/>（Web 触发的重连走 Web 扫码呈现；首轮恒终端）"]
+    RO["runOnce(ctx, ready, viaWeb)"]
+    FW["floodwait.NewSimpleWaiter().WithMaxRetries(5)<br/>（FLOOD_WAIT 自动等待重试）"]
+    NC["telegram.NewClient(API_ID, API_HASH,<br/>{ SessionStorage: data/session.json, NoUpdates: true })"]
+    CR["client.Run(ctx, 回调)"]
+    ST{"Auth().Status(ctx)"}
+    LOGIN["login()"]
+    L1["viaWeb → loginByQR(web)：扫码 URL 推送登录会话（Session.setQR），<br/>浏览器经 /mtproto/qr.png 渲染；失败回落「重启走终端登录」"]
+    L2["LOGIN_MODE=qr / auto → loginByQR()：终端渲染二维码，扫码确认"]
+    L3["auto 且配置了 TG_PHONE：扫码失败自动回退验证码流程"]
+    L4["LOGIN_MODE=phone（或上述回退）→ authFlow(terminalAuth)：<br/>手机号 → 终端输验证码 → 2FA 密码（如有）"]
+    L5["产物统一写入 data/session.json"]
+    SILENT["静默登录（直接复用会话）"]
+    API["api := tg.NewClient(waiter.Handle(client.API().Invoker()))<br/>经 floodwait 包装的 API 客户端，随后传给 ready"]
+    READY["ready(ctx, api)（见 11.3）；ready 返回本轮结束"]
+    EXIT["ctx 结束 → Run 返回 nil（正常退出路径）"]
+    OFF["轮内异常退出（会话失效等）→ Session.setOffline(err) → waitRelogin(ctx)<br/>不再终止进程：Bot/worker 已随本轮回调 ctx 结束而停止，Web 管理端<br/>独立运行，管理员经 /mtproto/relogin 触发下一轮"]
+
+    RUN --> WL --> RO --> FW --> NC --> CR --> ST
+    ST -->|"未授权"| LOGIN
+    LOGIN --> L1 --> L2 --> L3 --> L4 --> L5
+    ST -->|"已授权"| SILENT
+    L5 --> API
+    SILENT --> API
+    API --> READY
+    RUN -->|"ctx 结束"| EXIT
+    RUN -.->|"轮内异常退出"| OFF
 ```
 
 **关键约束**：gotd 的连接只活在 `client.Run` 的回调作用域内，因此 Bot 轮询与 worker
@@ -712,37 +721,35 @@ Run(ctx, ready)                            # 重连循环：每轮一个完整 c
 
 **Bot 会话生命周期**（`internal/mtproto/bot.go`，与用户号 Run 平行的独立 goroutine）：
 
-```text
-BotClient.Run(ctx)                       # main.go 第 18 步启动，指数退避循环
- ├─ runOnce：
- │    ├─ telegram.NewClient(API_ID, API_HASH,
- │    │      { SessionStorage: data/bot-session.json, NoUpdates: true })
- │    ├─ 回调内：Auth().Status → 未授权则 Auth().Bot(ctx, BOT_TOKEN)
- │    ├─ api := tg.NewClient(floodwait SimpleWaiter 包装)
- │    ├─ setReady(api) / defer setOffline()   # 锁内换指针；发送方经 Available() 守门
- │    └─ <-ctx.Done() 维持连接（无业务常驻回调，发送由 worker 按需发起）
- └─ 异常退出：5s 起指数退避（上限 5min，稳定运行 1min 后重置）自动重启；
-      期间超过 Bot API 上限的媒体确定性失败（LARGE_CHANNEL_UNAVAILABLE），
-      小文件主链路不受影响
+```mermaid
+flowchart TB
+    RUN["BotClient.Run(ctx)——main.go 第 18 步启动，指数退避循环"]
+    ONCE["runOnce"]
+    NC["telegram.NewClient(API_ID, API_HASH,<br/>{ SessionStorage: data/bot-session.json, NoUpdates: true })"]
+    AUTH["回调内：Auth().Status → 未授权则 Auth().Bot(ctx, BOT_TOKEN)"]
+    API["api := tg.NewClient(floodwait SimpleWaiter 包装)"]
+    RDY["setReady(api) / defer setOffline()<br/>锁内换指针；发送方经 Available() 守门"]
+    WAIT["<-ctx.Done() 维持连接<br/>（无业务常驻回调，发送由 worker 按需发起）"]
+    RE["异常退出：5s 起指数退避（上限 5min，稳定运行 1min 后重置）自动重启；<br/>期间超过 Bot API 上限的媒体确定性失败（LARGE_CHANNEL_UNAVAILABLE），<br/>小文件主链路不受影响"]
+
+    RUN --> ONCE --> NC --> AUTH --> API --> RDY --> WAIT
+    WAIT -.->|"异常退出"| RE
+    RE -.->|"自动重启"| ONCE
 ```
 
 ### 11.3 ready 回调：组装核心链路（回到 main.go）
 
-```text
-ready(ctx, api)
- ├─ 1. fetcher := mtproto.NewFetcher(api, data/peers.json, log)
- │        # 构造时即加载 peer 缓存（ChannelID → AccessHash）
- ├─ 2. b, sender := botapi.New(Options{Cfg, Log, Queue, Access, Whoami})
- │        # 创建 go-telegram/bot（默认 handler）；队列与 access 服务在启动期
- │        # 已创建（§11.1 第 16 步），每轮复用；sender 经 SetSender 回填 access
- ├─ 3. sender := delivery.New(b, …) → router := delivery.NewRouter(sender, botClient, BotAPIUploadCap, MaxFileSize)
- │        # 业务发送走路由：Size ≤ Bot API 上限（官方服务器 50MB）→ Bot API 上传；
- │        # 超限 → Bot 号 MTProto 大文件直传；相册含超限成员或整组总量超
- │        # Bot API 请求体上限 → 同通道整组直传；文本/删除 → Bot API。
- │        # hub.SetSender 保留 Bot API 原始 owner 通道作兼容回退；配置化通知由 main 装配的 runtime sink 投递
- ├─ 4. deps := queue.Deps{Fetcher, Sender: counted(router), Store, Media 下载参数, Log}
- ├─ 5. go q.Run(ctx, cfg.WorkerCount, queue.Process(deps))   # worker 协程组
- └─ 6. b.Start(ctx)                      # 阻塞长轮询；ctx 结束后等队列 drain 完再返回
+```mermaid
+flowchart TB
+    R["ready(ctx, api)"]
+    S1["1. fetcher := mtproto.NewFetcher(api, data/peers.json, log)<br/>构造时即加载 peer 缓存（ChannelID → AccessHash）"]
+    S2["2. b, sender := botapi.New(Options{Cfg, Log, Queue, Access, Whoami})<br/>创建 go-telegram/bot（默认 handler）；队列与 access 服务在启动期<br/>已创建（§11.1 第 16 步），每轮复用；sender 经 SetSender 回填 access"]
+    S3["3. sender := delivery.New(b, …) →<br/>router := delivery.NewRouter(sender, botClient, BotAPIUploadCap, MaxFileSize)<br/>业务发送走路由：Size ≤ Bot API 上限（官方服务器 50MB）→ Bot API 上传；<br/>超限 → Bot 号 MTProto 大文件直传；相册含超限成员或整组总量超<br/>Bot API 请求体上限 → 同通道整组直传；文本/删除 → Bot API。<br/>hub.SetSender 保留 Bot API 原始 owner 通道作兼容回退；<br/>配置化通知由 main 装配的 runtime sink 投递"]
+    S4["4. deps := queue.Deps{Fetcher, Sender: counted(router), Store, Media 下载参数, Log}"]
+    S5["5. go q.Run(ctx, cfg.WorkerCount, queue.Process(deps))——worker 协程组"]
+    S6["6. b.Start(ctx)——阻塞长轮询；ctx 结束后等队列 drain 完再返回"]
+
+    R --> S1 --> S2 --> S3 --> S4 --> S5 --> S6
 ```
 
 `Whoami` 闭包经 MTProto 的 `users.getUsers` 查询自身账号，供 `/whoami` 命令验证通道。
@@ -765,18 +772,26 @@ ready(ctx, api)
 
 #### 阶段 A：接收与入队（internal/botapi/handler.go，轮询协程内）
 
-```text
-update 到达
- ├─ 1. 过滤：仅 Message、私聊、From 非空
- ├─ 2. 白名单 isAllowed（空表 Deny All）→ 失败回固定拒绝文案
- ├─ 3. 空文本 → textOnlyMsg
- ├─ 4. /start → HandleStart()；/help → helpText；/status、/health → 脱敏运行状态快照；/usage → 用量查询；/whoami → Whoami() 查询 MTProto 账号
- └─ 5. 其余文本 → handleLink：
-       ├─ tmeurl.Parse 失败 → INVALID_URL 文案
-       ├─ Queue.FullFor(按提交形态) → busy 文案（占位提示都省了）
-       ├─ SendMessage("正在获取消息...") → 记 StatusMsgID（发送失败仅告警）
-       ├─ NewJob + Enqueue；入队失败 → busy 文案 + 删除占位提示
-       └─ 记日志：任务已入队
+```mermaid
+flowchart TB
+    UP["update 到达"]
+    S1["1. 过滤：仅 Message、私聊、From 非空"]
+    S2["2. 白名单 isAllowed（空表 Deny All）<br/>失败回固定拒绝文案"]
+    S3["3. 空文本 → textOnlyMsg"]
+    S4["4. /start → HandleStart()；/help → helpText；<br/>/status、/health → 脱敏运行状态快照；/usage → 用量查询；<br/>/whoami → Whoami() 查询 MTProto 账号"]
+    S5["5. 其余文本 → handleLink"]
+    L1["tmeurl.Parse 失败 → INVALID_URL 文案"]
+    L2["Queue.FullFor(按提交形态) → busy 文案（占位提示都省了）"]
+    L3["SendMessage(「正在获取消息...」) → 记 StatusMsgID（发送失败仅告警）"]
+    L4["NewJob + Enqueue；入队失败 → busy 文案 + 删除占位提示"]
+    L5["记日志：任务已入队"]
+
+    UP --> S1 --> S2 --> S3 --> S4 --> S5
+    S5 --> L1
+    S5 --> L2
+    S5 --> L3
+    S5 --> L4
+    S5 --> L5
 ```
 
 #### 阶段 B：worker 处理（internal/queue/worker.go，worker 协程内）
@@ -784,75 +799,79 @@ update 到达
 每个 Job 的超时分阶段管理（`runJob`）：取数固定 15 分钟窗口；转换后按媒体总量
 自适应发送窗口（15min + 每 1MB 加 1s，封顶 2h——2GB 级文件需要更长传输时间）：
 
-```text
- ├─ 1. Fetcher.Fetch(ref)                          # internal/mtproto/fetch.go
- │     ├─ ResolveInputPeer：
- │     │    username → ContactsResolveUsername（顺带收割 hash 入缓存）
- │     │    channelID → 缓存命中直接用；未命中 → walkDialogs
- │     │      遍历主列表+归档夹（各自翻页）收割 hash → 落盘 → 重查；
- │     │      仍无 → CHANNEL_NOT_ACCESSIBLE
- │     ├─ getMessages：一次批量拉 [ID-9, ID+9] 共 19 个 ID
- │     │    （频道走 ChannelsGetMessages，用户/群走 MessagesGetMessages）
- │     ├─ 在结果中定位目标：服务消息 → SERVICE_MESSAGE；空 → MESSAGE_NOT_FOUND
- │     └─ 目标有 GroupedID → 就地过滤同组消息，按 ID 升序返回（Album）
- ├─ 2. message.Convert(msgs) → []Item              # internal/message/convert.go
- │     photo 取最大尺寸；document 按 attributes/MIME 分 voice/audio/video/document
- │     （GIF 以 animated 属性 + video/mp4 按 video 处理）；
- │     贴纸、投票、网页预览等非 photo/document 类型统一标 Unsupported——
- │     网页预览在源码注释中称按文本处理，但无对应实现分支与测试，
- │     按未确认能力对待，不作为已支持承诺
- ├─ 3. 分支发送（统一"下载 → 上传"，路由见 §3.4/§3.8）：
- │     ├─ 相册（多条且首项 IsAlbumMember）→ sendAlbumGroup：
- │     │    AlbumGroupable 预检（Bot API 判定 ∪ video≤MaxFileSize 的 MTProto
- │     │    整组承载；不支持类型/超限图片/超大成员不进组）→ 不可整组时逐条发送；
- │     │    并发 openWithRefresh 打开全部句柄（上限 2，FILE_REFERENCE_EXPIRED 时
- │     │    RefreshMedia 刷新后重试一次）→ SendAlbum 整组发送（路由分流
- │     │    Bot API sendMediaGroup / MTProto sendMultiMedia）；
- │     │    defer 统一清理全部句柄
- │     └─ 单条循环：
- │          Media==nil → SendMessage(RenderHTML())
- │          Unsupported → MEDIA_UNSUPPORTED
- │          其他 → sendMediaItem → openAndSend：media.Open 下载 →
- │            SendMedia(reader=句柄)（routerSender 按 Size 路由 Bot API /
- │            大文件直传；下载过期错误刷新后重试一次）
- ├─ 4. 失败路径：apperr.From(err) → SendMessage(UserText(code)+来源链接)
- │     用外层 ctx 发送（超时窗口不影响错误提示送达）
- └─ 5. cleanupStatusMsg：删除"正在获取消息..."（尽力而为，失败仅 debug 日志）
+```mermaid
+flowchart TB
+    B1["1. Fetcher.Fetch(ref)（internal/mtproto/fetch.go）"]
+    RP["ResolveInputPeer"]
+    RU["username → ContactsResolveUsername（顺带收割 hash 入缓存）"]
+    RC["channelID → 缓存命中直接用；未命中 → walkDialogs<br/>遍历主列表+归档夹（各自翻页）收割 hash → 落盘 → 重查；<br/>仍无 → CHANNEL_NOT_ACCESSIBLE"]
+    GM["getMessages：一次批量拉 [ID-9, ID+9] 共 19 个 ID<br/>（频道走 ChannelsGetMessages，用户/群走 MessagesGetMessages）"]
+    LOC["在结果中定位目标：服务消息 → SERVICE_MESSAGE；<br/>空 → MESSAGE_NOT_FOUND"]
+    GRP["目标有 GroupedID → 就地过滤同组消息，按 ID 升序返回（Album）"]
+    B2["2. message.Convert(msgs) → []Item（internal/message/convert.go）<br/>photo 取最大尺寸；document 按 attributes/MIME 分 voice/audio/video/document<br/>（GIF 以 animated 属性 + video/mp4 按 video 处理）；<br/>贴纸、投票、网页预览等非 photo/document 类型统一标 Unsupported——<br/>网页预览在源码注释中称按文本处理，但无对应实现分支与测试，<br/>按未确认能力对待，不作为已支持承诺"]
+    B3["3. 分支发送（统一「下载 → 上传」，路由见 §3.4/§3.8）"]
+    AL["相册（多条且首项 IsAlbumMember）→ sendAlbumGroup：<br/>AlbumGroupable 预检（Bot API 判定 ∪ video≤MaxFileSize 的<br/>MTProto 整组承载；不支持类型/超限图片/超大成员不进组）<br/>→ 不可整组时逐条发送；<br/>并发 openWithRefresh 打开全部句柄（上限 2，FILE_REFERENCE_EXPIRED 时<br/>RefreshMedia 刷新后重试一次）→ SendAlbum 整组发送（路由分流<br/>Bot API sendMediaGroup / MTProto sendMultiMedia）；<br/>defer 统一清理全部句柄"]
+    SG["单条循环"]
+    SN["Media==nil → SendMessage(RenderHTML())"]
+    SU["Unsupported → MEDIA_UNSUPPORTED"]
+    SO["其他 → sendMediaItem → openAndSend：media.Open 下载 →<br/>SendMedia(reader=句柄)（routerSender 按 Size 路由 Bot API /<br/>大文件直传；下载过期错误刷新后重试一次）"]
+    B4["4. 失败路径：apperr.From(err) → SendMessage(UserText(code)+来源链接)<br/>用外层 ctx 发送（超时窗口不影响错误提示送达）"]
+    B5["5. cleanupStatusMsg：删除「正在获取消息...」<br/>（尽力而为，失败仅 debug 日志）"]
+
+    B1 --> RP
+    RP -->|"username"| RU
+    RP -->|"channelID"| RC
+    RU --> GM
+    RC --> GM
+    GM --> LOC --> GRP --> B2 --> B3
+    B3 -->|"相册"| AL
+    B3 -->|"单条"| SG
+    SG -->|"Media==nil"| SN
+    SG -->|"Unsupported"| SU
+    SG -->|"其他"| SO
+    AL --> B4
+    SN --> B4
+    SU --> B4
+    SO --> B4
+    B4 --> B5
 ```
 
 #### 阶段 C：媒体下载（internal/media/handle.go）
 
-```text
-media.Open(ctx, api, media, jobID, opt, log)
- ├─ Size > MaxFileSize 且不可拆分 → FILE_TOO_LARGE（不发起下载）
- ├─ Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）→ 视频走流式窗口
- │      句柄（源不落盘，见 §3.4 分卷拆分投递）；非视频强制临时文件路径
- │      （字节分段依赖区间读取）
- ├─ Size ≤ StreamLimit → 流式：io.Pipe + 协程 downloader.Stream
- │      上传端直接消费读端，全程不落盘（Cleanup 关闭 Pipe 读端）
- ├─ StreamLimit < Size ≤ InMemoryLimit → 内存管道：协程 downloader.Parallel
- │      (WithThreads(DOWNLOAD_THREADS)) 多线程乱序写 reorderBuffer，
- │      上传端顺序阻塞读——边下边发、全程不落盘；内存占用 = 文件大小
- │      （Cleanup 关闭缓冲：唤醒阻塞读者、终止下载）
- └─ 其余 → ToPath(WithThreads(DOWNLOAD_THREADS), TmpDir/<jobID>-<文件名>)
-        多线程并行落盘 → *os.File；Cleanup = 关闭句柄 + 删除文件（成败都执行）
+```mermaid
+flowchart TB
+    OPEN["media.Open(ctx, api, media, jobID, opt, log)"]
+    D1["Size > MaxFileSize 且不可拆分 → FILE_TOO_LARGE（不发起下载）"]
+    D2["Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）→ 视频走流式窗口句柄<br/>（源不落盘，见 §3.4 分卷拆分投递）；<br/>非视频强制临时文件路径（字节分段依赖区间读取）"]
+    D3["Size ≤ StreamLimit → 流式：io.Pipe + 协程 downloader.Stream<br/>上传端直接消费读端，全程不落盘（Cleanup 关闭 Pipe 读端）"]
+    D4["StreamLimit < Size ≤ InMemoryLimit → 内存管道：<br/>协程 downloader.Parallel(WithThreads(DOWNLOAD_THREADS))<br/>多线程乱序写 reorderBuffer，上传端顺序阻塞读<br/>——边下边发、全程不落盘；内存占用 = 文件大小<br/>（Cleanup 关闭缓冲：唤醒阻塞读者、终止下载）"]
+    D5["其余 → ToPath(WithThreads(DOWNLOAD_THREADS), TmpDir/&lt;jobID&gt;-&lt;文件名&gt;)<br/>多线程并行落盘 → *os.File；<br/>Cleanup = 关闭句柄 + 删除文件（成败都执行）"]
+
+    OPEN -->|"Size > MaxFileSize 且不可拆分"| D1
+    OPEN -->|"Size > MaxFileSize 且可拆分（≤ MaxSplitTotalSize）"| D2
+    OPEN -->|"Size ≤ StreamLimit"| D3
+    OPEN -->|"StreamLimit < Size ≤ InMemoryLimit"| D4
+    OPEN -->|"其余"| D5
 ```
 
 #### 阶段 D：投递（internal/delivery）
 
-```text
- ├─ SendMessage / DeleteMessage：429 → 等 RetryAfter+1 秒后重试一次
- ├─ SendMedia：photo 超 sendPhoto 上限(10MB) → 归一为 document 发送；
- │      按 Kind 分发 sendPhoto / Video / Voice / Audio / Document
- ├─ SendAlbum（router 分流，发送前把全部成员 caption 归一化为组首一条）：
- │      全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap → sendMediaGroup
- │      整组原子发送（attach://<名字> 挂附件，每项各自渲染 caption HTML）；
- │      组内混入不支持类型或超限图片 → ErrAlbumNotSupported；
- │      含超限成员（video/document ≤2000MB）或总量超 albumCap →
- │      mtproto.BotClient.SendAlbum 两阶段：
- │      逐成员 uploader.Upload → messages.uploadMedia 注册（photo 走
- │      InputMediaUploadedPhoto，video 复用单发大文件的 document+video
- │      属性构造）→ AsInput 坐标引用 → messages.sendMultiMedia 一次整组
+```mermaid
+flowchart TB
+    DLV["投递（internal/delivery）"]
+    A["SendMessage / DeleteMessage：<br/>429 → 等 RetryAfter+1 秒后重试一次"]
+    B["SendMedia：photo 超 sendPhoto 上限(10MB) → 归一为 document 发送；<br/>按 Kind 分发 sendPhoto / Video / Voice / Audio / Document"]
+    C["SendAlbum（router 分流，发送前把全部成员 caption 归一化为组首一条）"]
+    E1["sendMediaGroup 整组原子发送<br/>（attach://&lt;名字&gt; 挂附件，每项各自渲染 caption HTML）"]
+    E2["ErrAlbumNotSupported"]
+    E3["mtproto.BotClient.SendAlbum 两阶段：<br/>逐成员 uploader.Upload → messages.uploadMedia 注册<br/>（photo 走 InputMediaUploadedPhoto，video 复用单发大文件的<br/>document+video 属性构造）→ AsInput 坐标引用<br/>→ messages.sendMultiMedia 一次整组"]
+
+    DLV --> A
+    DLV --> B
+    DLV --> C
+    C -->|"全员 ≤uploadCap 且 Bot API 可整组且总量 ≤albumCap"| E1
+    C -->|"组内混入不支持类型或超限图片"| E2
+    C -->|"含超限成员（video/document ≤2000MB）或总量超 albumCap"| E3
 ```
 
 注意：媒体上传不做 429 重试——上传体是单次消费的流，中途失败无法安全重放，
@@ -867,40 +886,132 @@ media.Open(ctx, api, media, jobID, opt, log)
 
 ### 11.7 退出顺序
 
-```text
-SIGINT / SIGTERM
- → ctx 取消
-   → b.Start 返回（停止轮询）
-   → 队列 drain（exit 通知 + 状态清理）完成后 ready 返回
-     → gotd 关闭连接 → Run 循环见 ctx 已结束而返回 nil（不再进入离线等待）
-   → worker 协程经 ctx.Done() 退出
- → main 记录"已退出"，进程结束
+```mermaid
+flowchart TB
+    SIG["SIGINT / SIGTERM"]
+    CTX["ctx 取消"]
+    BS["b.Start 返回（停止轮询）"]
+    DR["队列 drain（exit 通知 + 状态清理）完成后 ready 返回"]
+    GOTD["gotd 关闭连接 → Run 循环见 ctx 已结束而返回 nil<br/>（不再进入离线等待）"]
+    WK["worker 协程经 ctx.Done() 退出"]
+    FIN["main 记录「已退出」，进程结束"]
+
+    SIG --> CTX
+    CTX --> BS --> DR
+    DR --> GOTD
+    CTX --> WK
+    GOTD --> FIN
+    WK --> FIN
 ```
 
 ### 11.8 全景流程图
 
-```text
-启动：
-  .env → config 校验 → 日志 → data/ tmp/ 准备 → 信号 ctx
-    → 数据库导入候选应用（如有）→ store.Open（迁移）
-    → 媒体设置 DB 覆盖 → transfercfg 运行时 → cloud Manager → 白名单导入
-    → notify Hub + rclone 探测 → 中断请求恢复
-    → queue（容量读 settings）+ access 服务 + 资源监控
-    → Web 管理端（独立 goroutine，先于用户号 ready 启动）
-    → Bot 号 MTProto（独立 goroutine，大文件直传通道）
-    → 用户号 MTProto：会话有效？─否→ 扫码 / 验证码登录（写 session.json）
-    → ready：NewFetcher(peers.json) → botapi.New → go workers → b.Start 长轮询（阻塞）
-    （会话失效等异常退出后进入离线等待，可经 Web 触发重连进入下一轮）
+```mermaid
+flowchart TB
+    ST["启动"]
+    G1[".env → config 校验 → 日志 → data/ tmp/ 准备 → 信号 ctx"]
+    G2["数据库导入候选应用（如有）→ store.Open（迁移）"]
+    G3["媒体设置 DB 覆盖 → transfercfg 运行时 → cloud Manager → 白名单导入"]
+    G4["notify Hub + rclone 探测 → 中断请求恢复"]
+    G5["queue（容量读 settings）+ access 服务 + 资源监控"]
+    G6["Web 管理端（独立 goroutine，先于用户号 ready 启动）"]
+    G7["Bot 号 MTProto（独立 goroutine，大文件直传通道）"]
+    D{"用户号 MTProto：会话有效？"}
+    LG["扫码 / 验证码登录（写 session.json）"]
+    RDY["ready：NewFetcher(peers.json) → botapi.New → go workers<br/>→ b.Start 长轮询（阻塞）"]
+    OFF["会话失效等异常退出后进入离线等待，<br/>可经 Web 触发重连进入下一轮"]
 
-请求（用户私聊发 t.me 链接）：
-  轮询协程：私聊过滤 → tmeurl.Parse → access 六步校验链
-    （状态/重复/频率/额度/并发/队列满，通过即落 requests 行并扣额度）
-    → 占位提示 → Enqueue
-  worker：缓存频道复用命中 → 直接复制副本给用户（可跳过下列完整链路）；
-    否则 Fetch（Resolve → 批量取 → Album 聚合）→ Convert →
-    文本 → RenderHTML → SendMessage
-    媒体 → media.Open（流式 / 内存 / 临时文件 / 拒绝）→ SendMedia / SendAlbum
-    成功 → 删除占位、写缓存频道干净副本、复制到用户绑定频道
-    失败 → UserText 中文提示（附来源链接）；最后删除占位提示
-  → 用户收到一条全新消息，可正常转发 ✅
+    ST --> G1 --> G2 --> G3 --> G4 --> G5 --> G6 --> G7 --> D
+    D -->|"是"| RDY
+    D -->|"否"| LG
+    LG --> RDY
+    RDY -.-> OFF
 ```
+
+请求链路（用户私聊发 t.me 链接 → 执行 → 成功后副作用）不再维护文字版全景，
+统一以 §12 业务全景流程图为准——业务链路变更时只更新那一处，避免两份图各自漂移。
+
+## 12. 业务全景流程图
+
+> 本图是**业务链路的唯一权威流程图**：覆盖用户提交 → 检查排队 → 处理任务
+> （缓存秒回 / 完整下载上传）→ 收尾（存缓存、转发绑定频道、置顶、云盘下载），
+> 以及缓存从哪来（监听预热、迁移旧缓存、历史恢复）与记录提醒。
+> §11 是"代码按什么顺序跑"，本图是"一条链接经历什么"；功能变更时两处同步更新（见 12.2）。
+
+```mermaid
+flowchart TB
+    USER["用户<br/>在 bot 私聊发一条 t.me 链接<br/>（或用 /pin、/download 开头发）"]
+
+    subgraph SUBMIT["提交任务"]
+        direction TB
+        B1["bot 接收<br/>只处理私聊 · 只服务已批准的用户<br/>不是链接 → 当命令处理：<br/>/start 申请 · /bind 绑定 · /join 加入 · /watch 监听"]
+        B2["检查能不能接<br/>刚处理过（重复直接拒绝）· 太频繁 · 额度用完<br/>未完成太多 · 队列满 → 回复原因，结束<br/>过关 → 记任务 · 扣额度 · 回「正在获取消息…」"]
+        B3["任务排队<br/>普通任务走快车道<br/>云盘下载走慢车道（不抢快车道）"]
+        B1 --> B2 --> B3
+    end
+    USER --> B1
+
+    CLOUD["云盘下载（慢车道）<br/>完整下载 → 上传网盘<br/>回复目的地 · 路径 · 原链接"]
+    B3 -->|"慢车道"| CLOUD
+
+    B4{"先看缓存<br/>这条链接以前处理过吗？"}
+    B3 --> B4
+
+    subgraph WORK["处理任务"]
+        direction TB
+        B5["缓存秒回<br/>从缓存频道整条复制给用户<br/>秒回 · 文件多大都行 · 相册不拆散<br/>复制失败当没处理过，从头再来"]
+        B6["完整流程<br/>读取账号去源频道取消息<br/>下载媒体（超大视频自动切段）<br/>发给用户：50MB 内走官方接口<br/>超过 50MB → 大文件通道 ≤2000MB<br/>纯文本直接发一条新消息"]
+    end
+    B4 -->|"处理过"| B5
+    B4 -->|"没处理过"| B6
+
+    B7["送达<br/>用户收到一条全新的消息（可正常转发）"]
+    B5 --> B7
+    B6 --> B7
+
+    B8["收尾（顺手做；哪步失败都不影响用户已收到的文件）<br/>① 存缓存：干净副本存进缓存频道 → 以后同链接秒回<br/>② 转发绑定频道：发到该用户绑定的每个频道（带署名 · 有总开关）<br/>③ /pin：把发到绑定频道的内容置顶并回复结果"]
+    B7 --> B8
+
+    DUMP["缓存频道<br/>存着每条链接的「干净副本」<br/>秒回就是从这里整条复制的"]
+    B8 -->|"① 存副本"| DUMP
+
+    SRC["缓存从哪来<br/>· /watch 监听：频道新消息自动存一份<br/>· 迁移旧缓存：旧频道副本整体搬新频道<br/>· 历史恢复：优先从缓存复制重发"]
+    SRC -->|"都存进"| DUMP
+
+    ALERT["出问题自动提醒管理员<br/>任务连续失败 · 缓存频道被删或失权<br/>绑定频道失效 · 监听失效 · 磁盘快满<br/>→ bot 私聊 / 通知通道推送"]
+    B8 -.->|"出问题"| ALERT
+```
+
+### 12.1 关键分支与开关速查
+
+图里说"看缓存""转发绑定频道"的地方，对应的管理端开关与精确行为如下：
+
+| 图中环节 | 开关 / 前提 | 行为要点 |
+| --- | --- | --- |
+| 重复链接直接拒绝 | `dedup_window_min`（1–1440 分钟） | 窗口内同用户同链接直接拒绝；窗口外进入缓存秒回判定 |
+| 缓存秒回（先看缓存） | `tg_reuse_enabled` + 已配置缓存频道 | 命中即从缓存频道整条复制：秒回、不限文件大小、相册保组；收尾不重复存缓存，但照样转发绑定频道；复制失败回落完整流程，成功后补写缓存自愈 |
+| 转发绑定频道 | `channel_copy_enabled`（默认开，即时生效） | 成功后把发给用户的内容复制到该用户绑定的每个频道并带频道署名；尽力而为，失败只记日志；缓存秒回的任务同样转发 |
+| 置顶 /pin | `/pin <链接>` 或用户 auto_pin 偏好 | 转发到绑定频道后静音置顶组首，回复逐目标置顶结果；绕过投递总开关 |
+| 存缓存（干净副本） | `tg_reuse_enabled`（副本只服务复用） | 无署名干净副本写进缓存频道并记录索引；另有"仅缓存补写"任务形态（不打扰用户）用于复制失败后的自愈补写 |
+| 云盘下载 | `/download [目的地]` 或配对提交 | 慢车道，避免占用临时目录挤占普通任务；不发媒体、不写缓存、不转发绑定频道 |
+| 缓存预热（/watch 监听频道） | 申请审批生效 | 频道新消息自动存进缓存频道，之后任何人发该链接直接秒回 |
+| 缓存迁移（迁移旧缓存） | 管理端触发 | 换缓存频道后把旧频道可读副本整批搬入并回写索引；后台执行、断点续跑 |
+| 历史恢复 | 管理端发起 | 优先从缓存复制到指定目标，缓存不可读才重新提取；结果独立保存、不回写普通缓存，部分失败标 `uncertain` 不自动重试 |
+
+### 12.2 维护约定（功能变更必读）
+
+> **凡改动本图覆盖的任一环节——提交与准入、队列优先级、取数/下载/发送路由、
+> 成功后副作用（缓存写回 / 绑定频道投递 / 置顶 / 云盘）、监听预热、缓存迁移、
+> 历史恢复、事件告警——必须在同一提交批次更新本图**（含分支条件与开关名称），
+> 并同步检查 §11 对应小节。该约定已登记到
+> `.trellis/spec/guides/docs-sync.md` 的「改动 → 文档映射表」，提交前检查会执行。
+>
+> 改图时对照 12.1 速查表逐行核对：图里的每个分支判定都应有对应的开关或前提，
+> 表里的每行都应能在图中找到对应环节；对不上的就是图或代码有一方过时了。
+>
+> 本图为 mermaid 代码块：文档站经 `vitepress-plugin-mermaid` 渲染（跟随站点深浅色），
+> GitHub 原生渲染。**mermaid 锁定 v10**（docs/package.json devDependencies）——插件的
+> 依赖预打包清单按 v10 整理，升级到 v11 会在 dev 模式出现 CJS 依赖（fastdom 等）
+> 裸文件直出导致页面白屏；升级前先确认插件版本声明支持目标 mermaid 大版本。
+
+

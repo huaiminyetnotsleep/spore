@@ -1,8 +1,13 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 import { PROJECT_IDENTITY } from './projectIdentity.generated'
 
 // GitHub Pages 项目站点部署在配置的项目子路径下
-export default defineConfig({
+// 注意：mermaid 锁定 v10（package.json devDependencies），与插件的
+// optimizeDeps 预打包清单严格对应；升级 mermaid 前先核对插件版本兼容性，
+// 否则 dev 模式会出现 CJS 依赖（fastdom 等）裸文件直出导致页面白屏。
+export default withMermaid(
+  defineConfig({
   lang: 'zh-CN',
   title: PROJECT_IDENTITY.displayName,
   description: PROJECT_IDENTITY.description,
@@ -118,4 +123,5 @@ export default defineConfig({
     lightModeSwitchTitle: '切换到浅色模式',
     darkModeSwitchTitle: '切换到深色模式'
   }
-})
+  })
+)
