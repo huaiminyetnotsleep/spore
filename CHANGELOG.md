@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.38.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.37.0...v1.38.0) (2026-10-10)
+
+
+### Features
+
+* **recovery:** 已处理历史一键恢复接入缓存优先后台任务与管理端页面 ([76e447e](https://github.com/huaiminyetnotsleep/spore/commit/76e447e54fe64e4d717a58c2c3d6eacb18fcf918))
+
 ## [1.37.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.36.3...v1.37.0) (2026-10-10)
 
 
