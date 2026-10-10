@@ -409,3 +409,74 @@ func TestAPISettingsWatchForwardChannels(t *testing.T) {
 		t.Fatalf("清空后应为空: %+v", got)
 	}
 }
+
+// 旧单频道部署（仅 dump_channel_id 键）经新 API 的完整操作流：折算展示 →
+// 启停 → 重复添加同一频道 400 → 追加第二频道 → 移除。复现线上"参数非法"
+// 的候选分支（重复添加/未知 ID），确认其余形态全部放行。
+func TestAPISettingsDumpChannelsLegacyFoldFlow(t *testing.T) {
+	const legacyID int64 = -1001234567890
+	binder := &fakeChannelBinder{verifyID: legacyID, verifyTitle: "Spore Cache"}
+	e := newTestEnvOpts(t, func(_ *config.Config, o *Options) { o.Bindings = binder })
+	j := e.login(t)
+	csrf := apiCSRFToken(t, e, j)
+	ctx := context.Background()
+
+	// 旧键状态：无 dump_channels 键，仅 dump_channel_id + 标题
+	if err := e.st.SetSetting(ctx, "dump_channel_id", "-1001234567890"); err != nil {
+		t.Fatalf("写旧键失败: %v", err)
+	}
+	if err := e.st.SetSetting(ctx, "dump_channel_title", `"Spore Cache"`); err != nil {
+		t.Fatalf("写旧标题键失败: %v", err)
+	}
+
+	var view apiSettingsView
+	getAPIJSON(t, e, j, "/api/v1/settings", &view)
+	if len(view.DumpChannels) != 1 || view.DumpChannels[0].ChannelID != legacyID ||
+		!view.DumpChannels[0].Enabled || view.DumpChannelID != legacyID {
+		t.Fatalf("旧键应折算为单条启用项: %+v", view)
+	}
+
+	// 启停（停用 → 重新启用）：旧键折算项可按 ID 正常操作
+	resp := e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-1001234567890,"enabled":false}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("停用旧键折算项应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	saved := syscfg.LoadDumpChannels(ctx, e.st)
+	if len(saved) != 1 || saved[0].Enabled {
+		t.Fatalf("应保存停用状态: %+v", saved)
+	}
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-1001234567890,"enabled":true}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("重新启用应 200，得到 %d", resp.StatusCode)
+	}
+
+	// 重复添加同一频道（折算项 + 同目标）：400 已存在——线上"参数非法"
+	// 的最可能来源之一（把已有缓存频道再次填入添加框）
+	resp = e.apiPost(j, "/api/v1/settings", csrf,
+		`{"dump_channels":[{"id":-1001234567890},{"target":"@sporecache"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("重复添加同一频道应 400，得到 %d", resp.StatusCode)
+	}
+
+	// 追加真正的新频道 → 两频道并存 → 移除其一
+	binder.verifyID, binder.verifyTitle = -100777, "Cache B"
+	resp = e.apiPost(j, "/api/v1/settings", csrf,
+		`{"dump_channels":[{"id":-1001234567890},{"target":"@cacheb"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("追加新频道应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-100777,"enabled":true}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("移除应 200，得到 %d", resp.StatusCode)
+	}
+	saved = syscfg.LoadDumpChannels(ctx, e.st)
+	if len(saved) != 1 || saved[0].ChannelID != -100777 {
+		t.Fatalf("应只剩第二个频道: %+v", saved)
+	}
+
+	// 未知 ID（界面数据过期）：400 不存在
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"dump_channels":[{"id":-100555,"enabled":true}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("未知 ID 应 400，得到 %d", resp.StatusCode)
+	}
+}

@@ -95,9 +95,10 @@ func writeAPISingle(w http.ResponseWriter, v any) {
 
 // apiBadRequest 记录参数拒绝日志并输出 400 JSON。message 必须是本包
 // 受控文案（静态文案或与 SSR 页面提示同源的参数解析错误，JSON 编码输出），
-// 不得包含底层错误细节、路径或凭据。
+// 不得包含底层错误细节、路径或凭据；文案进日志（reason 字段）让"参数
+// 非法"类拒绝可事后定位具体字段，否则只能靠复现。
 func (s *Server) apiBadRequest(w http.ResponseWriter, r *http.Request, op, message string) {
-	s.log.Warn("API 请求参数非法", "op", op, "path", r.URL.Path)
+	s.log.Warn("API 请求参数非法", "op", op, "path", r.URL.Path, "reason", message)
 	writeAPIError(w, http.StatusBadRequest, apiCodeBadRequest, message)
 }
 
