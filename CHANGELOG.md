@@ -2,6 +2,15 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.40.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.39.0...v1.40.0) (2026-10-10)
+
+
+### Features
+
+* **dumpcache:** 缓存频道可配置多个并支持逐频道启停 ([fa59249](https://github.com/huaiminyetnotsleep/spore/commit/fa592498cf604a75797d6db366841f7d6bde7fa4))
+* **settings:** 副本同步更名为绑定频道投递并澄清界面文案 ([534f461](https://github.com/huaiminyetnotsleep/spore/commit/534f46104ba84c30da2efb465e02b8c154b7b78a))
+* **watch:** 监听转发频道可配置多个并透出转发目标与分组说明 ([ac6d11a](https://github.com/huaiminyetnotsleep/spore/commit/ac6d11ab00e00cfcf75176991b2c077a660d3094))
+
 ## [1.39.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.38.0...v1.39.0) (2026-10-10)
 
 
