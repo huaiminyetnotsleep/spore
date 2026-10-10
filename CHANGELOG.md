@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.40.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.40.0...v1.40.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **web:** 参数类 400 日志携带 reason 并固化缓存频道旧键操作流测试 ([78fa6c0](https://github.com/huaiminyetnotsleep/spore/commit/78fa6c0fa2d1e5c280c2d7a6f70bf39813014bea))
+
 ## [1.40.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.39.0...v1.40.0) (2026-10-10)
 
 
