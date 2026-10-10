@@ -74,6 +74,7 @@ function settingsView(overrides: Partial<SettingsView> = {}): SettingsView {
     watch_require_approval: true,
     watch_max_sources: 20,
     watch_per_user_limit: 3,
+    watch_forward_channels: [],
     max_request_attempts: 3,
     backup_interval_hours: 6,
     backup_keep_count: 8,

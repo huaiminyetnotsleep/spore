@@ -68,6 +68,7 @@ function eventRow(overrides: Partial<WatchEventRow> = {}): WatchEventRow {
     member_ids: [11],
     message_url: "https://t.me/privchan/11",
     dump_ids: [101],
+    targets: [{ channel_id: -100777, title: "镜像频道" }],
     request_id: 0,
     bot_id: 999,
     bot_username: "test_bot",
@@ -104,6 +105,9 @@ describe("监听记录页", () => {
   it("查询条件（源/方式）点击查询后生效，重置恢复全部", async () => {
     renderPage();
     await screen.findByText("私有频道");
+
+    // 「转发目标」列渲染事件的目标快照（首个 title）
+    expect(screen.getByText("镜像频道")).toBeInTheDocument();
 
     // 筛选下拉：combobox[0]=源、combobox[1]=方式（其后是分页 size changer）
     const pathSelect = screen.getAllByRole("combobox")[1]

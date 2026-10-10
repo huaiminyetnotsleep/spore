@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,20 +27,28 @@ var watchPathSet = map[string]bool{
 	WatchPathFallback: true,
 }
 
+// WatchEventTarget 是监听事件的一条转发目标频道快照（事件落库时的实际
+// 写入目标：缓存频道优先，其后为成功的监听转发频道）。
+type WatchEventTarget struct {
+	ChannelID int64  `json:"channel_id"`
+	Title     string `json:"title"`
+}
+
 // WatchEvent 是 watch_events 表的行模型。
 type WatchEvent struct {
-	ID          int64  `json:"id"`
-	ChannelID   int64  `json:"channel_id"`   // 源频道/群组 ID（-100 形态）
-	Username    string `json:"username"`     // 源公开用户名快照（无 @；私有源为空）
-	Title       string `json:"title"`        // 源标题快照
-	MessageID   int    `json:"message_id"`   // 定位消息 ID（相册取首条成员）
-	MemberIDs   []int  `json:"member_ids"`   // 转发的源消息 ID（相册为全部成员）
-	DumpIDs     []int  `json:"dump_ids"`     // 缓存频道落点消息 ID（回退入队时为空）
-	RequestID   int64  `json:"request_id"`   // 关联 requests 行（仅 fallback；0 = 无）
-	BotID       int64  `json:"bot_id"`       // 执行转储的 bot
-	BotUsername string `json:"bot_username"` // bot 用户名快照
-	Path        string `json:"path"`         // copy / fallback
-	CreatedAt   int64  `json:"created_at"`
+	ID          int64              `json:"id"`
+	ChannelID   int64              `json:"channel_id"`   // 源频道/群组 ID（-100 形态）
+	Username    string             `json:"username"`     // 源公开用户名快照（无 @；私有源为空）
+	Title       string             `json:"title"`        // 源标题快照
+	MessageID   int                `json:"message_id"`   // 定位消息 ID（相册取首条成员）
+	MemberIDs   []int              `json:"member_ids"`   // 转发的源消息 ID（相册为全部成员）
+	DumpIDs     []int              `json:"dump_ids"`     // 缓存频道落点消息 ID（回退入队时为空）
+	Targets     []WatchEventTarget `json:"targets"`      // 转发目标快照（旧行为空）
+	RequestID   int64              `json:"request_id"`   // 关联 requests 行（仅 fallback；0 = 无）
+	BotID       int64              `json:"bot_id"`       // 执行转储的 bot
+	BotUsername string             `json:"bot_username"` // bot 用户名快照
+	Path        string             `json:"path"`         // copy / fallback
+	CreatedAt   int64              `json:"created_at"`
 }
 
 // WatchEventsQuery 是事件列表查询：ChannelID=0 表示全部源；Path 为空
@@ -71,20 +81,32 @@ func (s *Store) InsertWatchEvent(ctx context.Context, in WatchEvent) (WatchEvent
 	if err != nil {
 		return WatchEvent{}, wrapDB("写入预热事件", err)
 	}
+	targetsJSON, err := json.Marshal(targetsOr(in.Targets))
+	if err != nil {
+		return WatchEvent{}, wrapDB("写入预热事件", err)
+	}
 	res, err := s.ex.ExecContext(ctx, `INSERT INTO watch_events
 		(channel_id, username, title, message_id, member_ids_json, dump_ids_json,
-		 request_id, bot_id, bot_username, path, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		 targets_json, request_id, bot_id, bot_username, path, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		// 快照列是 NOT NULL DEFAULT ''（与 watch_sources 的可空列不同）：
 		// 直接存字符串，不经 nullStr（空串转 NULL 会违反约束）
 		in.ChannelID, in.Username, in.Title, in.MessageID,
-		string(members), string(dumpJSON), in.RequestID, in.BotID,
+		string(members), string(dumpJSON), string(targetsJSON), in.RequestID, in.BotID,
 		in.BotUsername, in.Path, in.CreatedAt)
 	if err != nil {
 		return WatchEvent{}, wrapDB("写入预热事件", err)
 	}
 	in.ID, _ = res.LastInsertId()
 	return in, nil
+}
+
+// targetsOr：目标快照缺省为空数组（JSON null 会破坏解析方的切片语义）。
+func targetsOr(targets []WatchEventTarget) []WatchEventTarget {
+	if len(targets) > 0 {
+		return targets
+	}
+	return []WatchEventTarget{}
 }
 
 // membersOr：未显式给成员时按定位消息退化为单成员。
@@ -101,19 +123,63 @@ func membersOr(ids []int, messageID int) []int {
 const selectWatchEvent = `SELECT id, channel_id,
 	COALESCE(username, ''), COALESCE(title, ''), message_id,
 	COALESCE(member_ids_json, '[]'), COALESCE(dump_ids_json, '[]'),
+	COALESCE(targets_json, '[]'),
 	request_id, bot_id, COALESCE(bot_username, ''), path, created_at
 FROM watch_events`
 
 func scanWatchEvent(row scanner) (WatchEvent, error) {
 	var e WatchEvent
-	var members, dumps string
+	var members, dumps, targets string
 	err := row.Scan(&e.ID, &e.ChannelID, &e.Username, &e.Title, &e.MessageID,
-		&members, &dumps, &e.RequestID, &e.BotID, &e.BotUsername, &e.Path, &e.CreatedAt)
+		&members, &dumps, &targets, &e.RequestID, &e.BotID, &e.BotUsername, &e.Path, &e.CreatedAt)
 	if err != nil {
 		return e, err
 	}
 	_ = json.Unmarshal([]byte(members), &e.MemberIDs)
 	_ = json.Unmarshal([]byte(dumps), &e.DumpIDs)
+	_ = json.Unmarshal([]byte(targets), &e.Targets)
+	return e, nil
+}
+
+// UpdateWatchEventTargetsByRequest 以 requests 行 ID 定位回退路径事件行，
+// 整体覆盖目标快照（受保护内容重传进缓存并完成镜像后回写实际目标；仅
+// fallback 事件带 request_id，定位唯一）。返回是否存在对应事件行。
+func (s *Store) UpdateWatchEventTargetsByRequest(ctx context.Context, requestID int64, targets []WatchEventTarget) (bool, error) {
+	if requestID == 0 {
+		return false, nil
+	}
+	targetsJSON, err := json.Marshal(targetsOr(targets))
+	if err != nil {
+		return false, wrapDB("回写预热事件目标", err)
+	}
+	res, err := s.ex.ExecContext(ctx,
+		"UPDATE watch_events SET targets_json = ? WHERE request_id = ?",
+		string(targetsJSON), requestID)
+	if err != nil {
+		return false, wrapDB("回写预热事件目标", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, wrapDB("统计预热事件目标回写", err)
+	}
+	return n > 0, nil
+}
+
+// WatchEventByRequest 以 requests 行 ID 读取关联的回退路径事件行（仅
+// fallback 事件写 request_id，定位唯一）；不存在返回 ErrNotFound。重传
+// 镜像用它识别监听来源的补写任务并定位回写目标。
+func (s *Store) WatchEventByRequest(ctx context.Context, requestID int64) (WatchEvent, error) {
+	if requestID == 0 {
+		return WatchEvent{}, ErrNotFound
+	}
+	row := s.ex.QueryRowContext(ctx, selectWatchEvent+" WHERE request_id = ?", requestID)
+	e, err := scanWatchEvent(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WatchEvent{}, ErrNotFound
+	}
+	if err != nil {
+		return WatchEvent{}, wrapDB("查询预热事件", err)
+	}
 	return e, nil
 }
 

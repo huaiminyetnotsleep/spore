@@ -50,6 +50,9 @@ func runDumpJob(ctx context.Context, d Deps, j Job) (mediaMeta, error) {
 		return mediaMeta{}, err
 	}
 	d.Dump.RecordEntry(ctx, refChannelKey(j.Ref), j.Ref.MessageID, meta.SentIDs)
+	// 监听源回退任务的缓存中转镜像（受保护内容 → 转发频道）：实现内按
+	// requestID 反查监听事件行，非监听来源的补写任务直接跳过。
+	d.mirrorSourceDump(ctx, j, channel, meta.SentIDs)
 	d.Log.Info("缓存频道干净副本已写入", "job_id", j.ID, "request_id", j.RequestID,
 		"ref", j.Ref.String(), "messages", len(meta.SentIDs))
 	return meta, nil

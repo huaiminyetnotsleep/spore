@@ -221,6 +221,24 @@ body {
   color: inherit;
 }
 
+/* 侧边栏分组标题后的用途说明 icon：次要色小图标，悬停高亮提示可交互。 */
+.nav-group-label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.nav-group-hint {
+  display: inline-flex;
+  color: var(--ant-color-text-tertiary, rgba(0, 0, 0, 0.45));
+  font-size: 12px;
+  cursor: help;
+}
+
+.nav-group-hint:hover {
+  color: var(--ant-color-primary, #1677ff);
+}
+
 .page-content {
   flex: 1;
   width: min(1440px, 100%);

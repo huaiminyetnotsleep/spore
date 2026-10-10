@@ -85,6 +85,8 @@ describe("SPA 导航信息架构", () => {
   it("监听源分组拆分为监听源管理、监听源配置与监听记录三个独立菜单（记录在最前）", () => {
     const watchGroup = navigationGroups.find((group) => group.key === "watch-group");
     expect(watchGroup?.routeKeys).toEqual(["watch-events", "watch-sources", "watch-settings"]);
+    // 分组标题后的用途说明 icon（侧边栏悬停展示）
+    expect(watchGroup?.hint).toBe("监听频道/超级群组，然后转发到固定或者缓存频道");
 
     const eventsRoute = routeMeta.find((route) => route.key === "watch-events");
     expect(eventsRoute).toMatchObject({

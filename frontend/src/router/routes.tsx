@@ -445,6 +445,8 @@ export type NavigationGroup = {
   key: string;
   label: string;
   routeKeys: readonly RouteKey[];
+  /** hint 非空时在侧边栏分组标题后展示说明 icon（悬停查看用途）。 */
+  hint?: string;
 };
 
 /** 目标信息架构的五个业务域分组；分组本身不绑定页面路径。 */
@@ -458,6 +460,7 @@ export const navigationGroups = [
   {
     key: "watch-group",
     label: "监听源",
+    hint: "监听频道/超级群组，然后转发到固定或者缓存频道",
     routeKeys: ["watch-events", "watch-sources", "watch-settings"],
   },
   {

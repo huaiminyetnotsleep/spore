@@ -9,11 +9,13 @@ import { useState } from "react";
 import type { Key } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Button, Input, Select, Space, Tag, Typography } from "antd";
+import { Button, Input, Select, Space, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import {
+  fetchSettings,
   fetchWatchSources,
+  type SettingsView,
   type WatchInviteRequestRow,
   type WatchSourceRow,
 } from "../../api/admin";
@@ -99,6 +101,39 @@ function matchesKeyword(keyword: string, fields: (string | number)[]): boolean {
   return fields.some((f) => String(f ?? "").toLowerCase().includes(k));
 }
 
+/**
+ * 转发目标单元格：监听消息的转发目的由全局配置决定（无按源目标）——
+ * 有监听转发频道时展示其汇总（Tooltip 全量）；未配置时回落缓存频道；
+ * 缓存频道未配置时监听整体跳过，给出警示。查询失败不阻塞列表（显示 —）。
+ */
+function ForwardTargetCell({ settings }: { settings?: SettingsView }) {
+  if (!settings) {
+    return <Text type="secondary">—</Text>;
+  }
+  const forwards = settings.watch_forward_channels ?? [];
+  if (forwards.length > 0) {
+    const [first, ...rest] = forwards;
+    const label = first.title || String(first.channel_id);
+    return (
+      <Tooltip title={forwards.map((f) => f.title || f.channel_id).join("、")}>
+        <Text>{rest.length > 0 ? `${label} +${rest.length}` : label}</Text>
+      </Tooltip>
+    );
+  }
+  if (settings.dump_channel_id !== 0) {
+    return (
+      <Tooltip title="未配置监听转发频道：监听消息仅预热缓存频道（供链接复用秒回）">
+        <Text>缓存频道（兜底）</Text>
+      </Tooltip>
+    );
+  }
+  return (
+    <Tooltip title="缓存频道与监听转发频道均未配置，监听消息会被跳过；请先在「频道设置」配置缓存频道">
+      <Text type="warning">未配置缓存频道</Text>
+    </Tooltip>
+  );
+}
+
 export function WatchSourcesPage() {
   const [target, setTarget] = useState("");
   const [actingInvite, setActingInvite] = useState<{ id: number; kind: InviteActionKind } | null>(null);
@@ -118,6 +153,8 @@ export function WatchSourcesPage() {
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<Key[]>([]);
 
   const sources = useQuery({ queryKey: ["watch-sources"], queryFn: fetchWatchSources });
+  // 运行设置只用于「转发目标」列展示（全局监听转发频道/缓存频道）；查询失败不阻塞列表。
+  const settings = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
 
   const add = useAdminAction({
     action: (value: string) => addWatchSource(value),
@@ -335,6 +372,12 @@ export function WatchSourcesPage() {
           {row.prewarm_last_at > 0 ? <Text type="secondary">{fmtTime(row.prewarm_last_at)}</Text> : null}
         </Space>
       ),
+    },
+    {
+      title: "转发目标",
+      key: "forward_targets",
+      width: 150,
+      render: () => <ForwardTargetCell settings={settings.data} />,
     },
     { title: "添加时间", dataIndex: "created_at", render: (v: number) => fmtTime(v) },
     {

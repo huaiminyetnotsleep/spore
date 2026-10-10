@@ -483,6 +483,13 @@ CREATE TABLE recovery_items (
 );
 CREATE INDEX idx_recovery_items_job ON recovery_items(job_id,status,id);
 CREATE INDEX idx_recovery_items_identity ON recovery_items(identity_key,status);`,
+
+	// v27：监听事件转发目标快照——watch_events.targets_json 记录本批消息
+	// 实际写入的目标频道（缓存频道优先，其后为成功的监听转发频道；元素
+	// {channel_id, title}）。快路径在转储时写入；受保护内容回退路径先写
+	// 缓存频道，重传镜像完成后按 request_id 回写。旧行为空数组，管理端
+	// 展示为「—」。只存频道 ID 与标题快照，不存消息内容（数据范围红线）。
+	`ALTER TABLE watch_events ADD COLUMN targets_json TEXT NOT NULL DEFAULT '[]';`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

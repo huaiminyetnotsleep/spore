@@ -39,8 +39,9 @@ const (
 	// 缓存频道（重复链接复用的干净副本来源）：数字频道 ID 与标题。Web 端
 	// 配置（输入 @username / t.me 链接 / -100 数字 ID，经 bot 解析校验后
 	// 存数字 ID）；环境变量 DUMP_CHANNEL_ID 仅作 settings 为空时的兜底。
-	settingKeyDumpChannelID    = "dump_channel_id"
-	settingKeyDumpChannelTitle = "dump_channel_title"
+	// ID 键保留在本包；标题键单一来源在 syscfg（监听事件目标快照共用），
+	// LoadDumpChannelTitle 委托读取。
+	settingKeyDumpChannelID = "dump_channel_id"
 )
 
 // worker 数的 Web 可调范围：上限与传输线程一致，约束多任务并发的内存/连接放大。
@@ -146,12 +147,33 @@ func LoadEffectiveDumpChannelID(ctx context.Context, st *store.Store, envDefault
 	return loadJSONSetting(ctx, st, settingKeyDumpChannelID, envDefault, nil)
 }
 
-// LoadDumpChannelTitle 读取缓存频道标题（展示用；未配置为空）。
+// LoadDumpChannelTitle 读取缓存频道标题（展示用；未配置为空）。键单一
+// 来源在 syscfg（监听事件目标快照共用同一读取实现）。
 func LoadDumpChannelTitle(ctx context.Context, st *store.Store) string {
-	if st == nil {
-		return ""
+	return syscfg.LoadDumpChannelTitle(ctx, st)
+}
+
+// sameForwardChannels 比较监听转发频道列表是否等价（逐项比数字 ID 与
+// 标题快照；标题变化也视为变更，触发重写让展示保持最新）。
+func sameForwardChannels(a, b []syscfg.WatchForwardChannel) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return loadJSONSetting(ctx, st, settingKeyDumpChannelTitle, "", nil)
+	for i := range a {
+		if a[i].ChannelID != b[i].ChannelID || a[i].Title != b[i].Title {
+			return false
+		}
+	}
+	return true
+}
+
+// forwardChannelIDs 提取监听转发频道数字 ID 列表（审计上下文用）。
+func forwardChannelIDs(channels []syscfg.WatchForwardChannel) []int64 {
+	out := make([]int64, 0, len(channels))
+	for _, c := range channels {
+		out = append(out, c.ChannelID)
+	}
+	return out
 }
 
 // ---- 事件解决 ----
@@ -253,6 +275,10 @@ type settingsUpdateInput struct {
 	WatchRequireApproval *bool
 	WatchMaxSources      *int
 	WatchPerUserLimit    *int
+	// WatchForwardChannels 为监听转发频道目标列表（@username / t.me 链接 /
+	// -100 数字 ID）；nil 表示不变更，非 nil 整体替换（空列表清空 = 仅缓存
+	// 兜底）；逐项经 bot 解析校验后存数字 ID 与标题快照。
+	WatchForwardChannels *[]string
 	// MaxRequestAttempts 为单个请求累计尝试上限（含首次）；nil 表示不变更。
 	// 即时生效（syscfg 直查，重试校验与详情展示无缓存）。
 	MaxRequestAttempts *int
@@ -404,7 +430,7 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				if err := s.st.SetSetting(ctx, settingKeyDumpChannelID, "0"); err != nil {
 					return res, &settingsStoreError{op: "清除缓存频道", err: err}
 				}
-				_ = s.st.SetSetting(ctx, settingKeyDumpChannelTitle, `""`)
+				_ = s.st.SetSetting(ctx, syscfg.KeyDumpChannelTitle, `""`)
 				s.audit(ctx, "settings.dump_channel", "settings", map[string]any{
 					"before": before, "after": int64(0), "effect": "即时生效"})
 			}
@@ -423,7 +449,7 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 				if err := s.saveSettingValue(ctx, settingKeyDumpChannelID, "保存缓存频道", id); err != nil {
 					return res, err
 				}
-				if err := s.saveSettingValue(ctx, settingKeyDumpChannelTitle, "保存缓存频道标题", title); err != nil {
+				if err := s.saveSettingValue(ctx, syscfg.KeyDumpChannelTitle, "保存缓存频道标题", title); err != nil {
 					return res, err
 				}
 				s.audit(ctx, "settings.dump_channel", "settings", map[string]any{
@@ -499,6 +525,47 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 			}
 			s.audit(ctx, "settings.watch", "settings", map[string]any{
 				"before": before, "after": after, "effect": "即时生效"})
+		}
+	}
+
+	// 监听转发频道（即时生效）：整体替换语义——逐项经 bot 解析校验（频道
+	// 存在且 bot 可发帖，与缓存频道同款校验）后按数字 ID 保存并快照标题；
+	// 空列表清空（监听回落仅缓存频道兜底）。投递只按数字 ID，频道随后
+	// 公开转私有不影响使用；数量上限与去重见 syscfg。
+	if in.WatchForwardChannels != nil {
+		if s.bindings == nil {
+			return res, &settingsParamError{"频道服务未接入，无法校验监听转发频道。"}
+		}
+		resolved := make([]syscfg.WatchForwardChannel, 0, len(*in.WatchForwardChannels))
+		seen := make(map[int64]bool, len(*in.WatchForwardChannels))
+		for _, raw := range *in.WatchForwardChannels {
+			target := strings.TrimSpace(raw)
+			if target == "" {
+				continue
+			}
+			id, title, err := s.bindings.VerifyChannel(ctx, target)
+			if err != nil {
+				if apperr.From(err).Code == apperr.CodeChannelNotPostable {
+					return res, &settingsParamError{fmt.Sprintf("监听转发频道 %s 校验失败：请确认频道存在且机器人已被设为管理员（多机器人部署时需把全部机器人都设为该频道的管理员）。", target)}
+				}
+				return res, &settingsParamError{"监听转发频道 " + target + " 校验失败：" + apperr.UserText(apperr.From(err).Code)}
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			resolved = append(resolved, syscfg.WatchForwardChannel{ChannelID: id, Title: title})
+		}
+		if len(resolved) > syscfg.WatchForwardChannelsUpper() {
+			return res, &settingsParamError{fmt.Sprintf("监听转发频道最多 %d 个。", syscfg.WatchForwardChannelsUpper())}
+		}
+		before := syscfg.LoadWatchForwardChannels(ctx, s.st)
+		if !sameForwardChannels(before, resolved) {
+			if err := syscfg.SaveWatchForwardChannels(ctx, s.st, resolved); err != nil {
+				return res, &settingsStoreError{op: "保存监听转发频道", err: err}
+			}
+			s.audit(ctx, "settings.watch_forward_channels", "settings", map[string]any{
+				"before": forwardChannelIDs(before), "after": forwardChannelIDs(resolved), "effect": "即时生效"})
 		}
 	}
 

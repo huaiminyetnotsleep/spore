@@ -134,6 +134,16 @@ type ChannelLinksProvider interface {
 	PublicChannelLinks(ctx context.Context, userID int64) ([]message.ChannelLink, error)
 }
 
+// DumpMirror 把刚重传进缓存频道的受保护内容镜像到监听转发频道（缓存
+// 中转：缓存频道为 bot 自有，从缓存复制不再受源频道「禁止转发」限制）。
+// 由装配层提供实现；requestID 用于反查监听事件行——非监听来源的补写
+// 任务（管理端手动转存、历史恢复回填）查不到事件，实现应直接跳过。
+// 实现必须尽力而为：内部失败只记日志，不向调用方传播错误，更不得影响
+// 任务结果。
+type DumpMirror interface {
+	AfterSourceDump(ctx context.Context, requestID, dumpChannel int64, dumpIDs []int)
+}
+
 // CloudSink 是 worker 对网盘上传通道的最小依赖（方法签名与
 // cloudarchive.Sink 一致，*cloudarchive.RcloneSink 天然满足）。以接口注入
 // 保持 queue 可用假实现做确定性单测；nil 时云盘任务直接失败（防御装配错误）。
@@ -187,6 +197,10 @@ type Deps struct {
 	// Dump 是缓存频道读写通道（转存频道复用）：nil（未配置 DUMP_CHANNEL_ID）
 	// 时复用整体关闭，投递照常。
 	Dump *dumpcache.Service
+	// DumpMirror 是监听转发频道的缓存中转镜像通道（受保护源回退路径）：
+	// DumpOnly 任务真实重传进缓存频道后调用；nil 时跳过镜像。实现尽力
+	// 而为，失败不影响任务结果。
+	DumpMirror DumpMirror
 	// Channels 提供频道脚注链接；nil 时消息不带脚注。
 	Channels ChannelLinksProvider
 	// CloudSink 是云盘上传通道（/download 任务）；nil 时云盘任务直接失败。
@@ -202,6 +216,20 @@ type Deps struct {
 // copyWindow 是任务成功后频道副本投递的独立时间窗：使用剥离取消信号的
 // ctx，任务收尾（含进程退出）时副本投递不因 ctx 已死而失效。
 const copyWindow = 2 * time.Minute
+
+// mirrorSourceDump 在监听源回退任务真实重传进缓存频道后触发缓存中转
+// 镜像（受保护内容 → 监听转发频道）。使用剥离取消信号的 ctx 与独立时间
+// 窗：任务收尾时镜像仍可完成；Mirror 自身尽力而为，失败不影响任务结果。
+// 仅真实重传成功后调用——EntryLive 复核命中提前返回不经过此处，与快
+// 路径查重跳过语义一致：缓存已有副本 = 已处理过，不再重复镜像。
+func (d Deps) mirrorSourceDump(ctx context.Context, j Job, dumpChannel int64, dumpIDs []int) {
+	if d.DumpMirror == nil || len(dumpIDs) == 0 || j.RequestID == 0 {
+		return
+	}
+	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)
+	defer cancel()
+	d.DumpMirror.AfterSourceDump(mctx, j.RequestID, dumpChannel, dumpIDs)
+}
 
 // senderFor 解析任务应使用的发送通道：受理 bot 优先，未命中回退 Sender。
 func (d Deps) senderFor(j Job) delivery.Sender {

@@ -6,6 +6,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import {
+  InfoCircleOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -21,6 +22,7 @@ import {
   Menu,
   Result,
   Spin,
+  Tooltip,
   Typography,
 } from "antd";
 import type { MenuProps } from "antd";
@@ -40,6 +42,7 @@ import {
   getNavigationContext,
   navigationGroups,
   routeMeta,
+  type NavigationGroup,
   type RouteKey,
 } from "./router/routes";
 
@@ -71,9 +74,27 @@ function Navigation({
 
   const menuItems: MenuProps["items"] = useMemo(
     () =>
-      navigationGroups.map((group) => ({
+      // 显式标注 NavigationGroup：navigationGroups 为 as const 字面量联合，
+      // 可选 hint 只存在于部分分组上，未标注时联合类型无法统一访问。
+      navigationGroups.map((group: NavigationGroup) => ({
         key: group.key,
-        label: group.label,
+        label: (
+          <span className="nav-group-label">
+            {group.label}
+            {group.hint ? (
+              // 分组用途说明：纯悬停展示；点击不切换子菜单（阻止冒泡）。
+              <Tooltip title={group.hint}>
+                <span
+                  className="nav-group-hint"
+                  aria-label={`${group.label}功能说明`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <InfoCircleOutlined />
+                </span>
+              </Tooltip>
+            ) : null}
+          </span>
+        ),
         children: group.routeKeys.map((routeKey) => {
           const route = routeByKey.get(routeKey);
           if (!route) {

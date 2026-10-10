@@ -14,54 +14,55 @@ import (
 // apiSettingsView 是 GET /api/v1/settings 的响应 DTO：仅覆盖可编辑项与
 // 生效状态；静态配置（密钥状态等）与重启操作仍属旧版/后续任务范围。
 type apiSettingsView struct {
-	Timezone                      string `json:"timezone"`
-	DedupWindowMin                int    `json:"dedup_window_min"`
-	MaxLinksPerMessage            int    `json:"max_links_per_message"`
-	QueueCapacity                 int    `json:"queue_capacity"`
-	QueueRuntime                  int    `json:"queue_runtime"` // 0 表示未接入队列指标
-	QueueSame                     bool   `json:"queue_same"`
-	WorkerCount                   int    `json:"worker_count"`         // 配置值（DB 覆盖或环境默认；重启生效）
-	WorkerCountRuntime            int    `json:"worker_count_runtime"` // 当前进程值
-	WorkerCountSame               bool   `json:"worker_count_same"`
-	MaxFileSizeBytes              int64  `json:"max_file_size_bytes"` // 配置值（重启生效）
-	StreamLimitBytes              int64  `json:"stream_limit_bytes"`
-	MaxFileSizeRuntime            int64  `json:"max_file_size_runtime_bytes"` // 当前进程值
-	StreamLimitRuntime            int64  `json:"stream_limit_runtime_bytes"`
-	TempDirMaxSizeBytes           int64  `json:"temp_dir_max_size_bytes"`         // 配置值（重启生效）
-	TempDirMaxSizeRuntime         int64  `json:"temp_dir_max_size_runtime_bytes"` // 当前进程值
-	MemoryBudgetBytes             int64  `json:"memory_budget_bytes"`             // 内存管道进程级预算（即时生效）
-	MediaSame                     bool   `json:"media_same"`
-	ChannelCopyEnabled            bool   `json:"channel_copy_enabled"`     // 绑定频道投递总开关（即时生效）
-	TGReuseEnabled                bool   `json:"tg_reuse_enabled"`         // TG 链接复用总开关（即时生效；默认开）
-	DumpChannelID                 int64  `json:"dump_channel_id"`          // 缓存频道数字 ID（0 = 未配置）
-	DumpChannelTitle              string `json:"dump_channel_title"`       // 缓存频道标题（展示用）
-	JoinEnabled                   bool   `json:"join_enabled"`             // 频道加入总开关（即时生效；默认关）
-	JoinAutoLeaveExternal         bool   `json:"join_auto_leave_external"` // 自动退出外部拉入频道（惰性检测；默认关）
-	JoinRequireApproval           bool   `json:"join_require_approval"`
-	JoinMaxChannels               int    `json:"join_max_channels"` // 0 = 不限
-	JoinMuteEnabled               bool   `json:"join_mute_enabled"`
-	JoinArchiveEnabled            bool   `json:"join_archive_enabled"`
-	WatchApplyEnabled             bool   `json:"watch_apply_enabled"`      // 监听源用户自助申请开关（即时生效；默认关）
-	WatchRequireApproval          bool   `json:"watch_require_approval"`   // 用户申请需审批（false=免审批直接生效）
-	WatchMaxSources               int    `json:"watch_max_sources"`        // 监听源总数上限（0=不限；仅约束用户申请）
-	WatchPerUserLimit             int    `json:"watch_per_user_limit"`     // 每用户申请上限（0=不限）
-	MaxRequestAttempts            int    `json:"max_request_attempts"`     // 单个请求累计尝试上限（含首次；即时生效）
-	BackupIntervalHours           int    `json:"backup_interval_hours"`    // 自动备份间隔小时（0=关闭；缺省 6；即时生效）
-	BackupKeepCount               int    `json:"backup_keep_count"`        // 自动备份保留份数（缺省 8 ≈ 48 小时窗口）
-	ErrorLogRetentionDays         int    `json:"error_log_retention_days"` // 错误日志保留天数（缺省 30；即时生效）
-	DownloadThreads               int    `json:"download_threads"`
-	DownloadThreadsEnv            int    `json:"download_threads_env"`
-	DownloadThreadsOverridden     bool   `json:"download_threads_overridden"`
-	UploadThreads                 int    `json:"upload_threads"`
-	UploadThreadsEnv              int    `json:"upload_threads_env"`
-	UploadThreadsOverridden       bool   `json:"upload_threads_overridden"`
-	DownloadConnections           int    `json:"download_connections"`
-	DownloadConnectionsEnv        int    `json:"download_connections_env"`
-	DownloadConnectionsOverridden bool   `json:"download_connections_overridden"`
-	UploadConnections             int    `json:"upload_connections"`
-	UploadConnectionsEnv          int    `json:"upload_connections_env"`
-	UploadConnectionsOverridden   bool   `json:"upload_connections_overridden"`
-	LastBackupAt                  int64  `json:"last_backup_at"` // 0 表示从未备份
+	Timezone                      string                       `json:"timezone"`
+	DedupWindowMin                int                          `json:"dedup_window_min"`
+	MaxLinksPerMessage            int                          `json:"max_links_per_message"`
+	QueueCapacity                 int                          `json:"queue_capacity"`
+	QueueRuntime                  int                          `json:"queue_runtime"` // 0 表示未接入队列指标
+	QueueSame                     bool                         `json:"queue_same"`
+	WorkerCount                   int                          `json:"worker_count"`         // 配置值（DB 覆盖或环境默认；重启生效）
+	WorkerCountRuntime            int                          `json:"worker_count_runtime"` // 当前进程值
+	WorkerCountSame               bool                         `json:"worker_count_same"`
+	MaxFileSizeBytes              int64                        `json:"max_file_size_bytes"` // 配置值（重启生效）
+	StreamLimitBytes              int64                        `json:"stream_limit_bytes"`
+	MaxFileSizeRuntime            int64                        `json:"max_file_size_runtime_bytes"` // 当前进程值
+	StreamLimitRuntime            int64                        `json:"stream_limit_runtime_bytes"`
+	TempDirMaxSizeBytes           int64                        `json:"temp_dir_max_size_bytes"`         // 配置值（重启生效）
+	TempDirMaxSizeRuntime         int64                        `json:"temp_dir_max_size_runtime_bytes"` // 当前进程值
+	MemoryBudgetBytes             int64                        `json:"memory_budget_bytes"`             // 内存管道进程级预算（即时生效）
+	MediaSame                     bool                         `json:"media_same"`
+	ChannelCopyEnabled            bool                         `json:"channel_copy_enabled"`     // 绑定频道投递总开关（即时生效）
+	TGReuseEnabled                bool                         `json:"tg_reuse_enabled"`         // TG 链接复用总开关（即时生效；默认开）
+	DumpChannelID                 int64                        `json:"dump_channel_id"`          // 缓存频道数字 ID（0 = 未配置）
+	DumpChannelTitle              string                       `json:"dump_channel_title"`       // 缓存频道标题（展示用）
+	JoinEnabled                   bool                         `json:"join_enabled"`             // 频道加入总开关（即时生效；默认关）
+	JoinAutoLeaveExternal         bool                         `json:"join_auto_leave_external"` // 自动退出外部拉入频道（惰性检测；默认关）
+	JoinRequireApproval           bool                         `json:"join_require_approval"`
+	JoinMaxChannels               int                          `json:"join_max_channels"` // 0 = 不限
+	JoinMuteEnabled               bool                         `json:"join_mute_enabled"`
+	JoinArchiveEnabled            bool                         `json:"join_archive_enabled"`
+	WatchApplyEnabled             bool                         `json:"watch_apply_enabled"`      // 监听源用户自助申请开关（即时生效；默认关）
+	WatchRequireApproval          bool                         `json:"watch_require_approval"`   // 用户申请需审批（false=免审批直接生效）
+	WatchMaxSources               int                          `json:"watch_max_sources"`        // 监听源总数上限（0=不限；仅约束用户申请）
+	WatchPerUserLimit             int                          `json:"watch_per_user_limit"`     // 每用户申请上限（0=不限）
+	WatchForwardChannels          []syscfg.WatchForwardChannel `json:"watch_forward_channels"`   // 监听转发频道（空 = 仅缓存兜底）
+	MaxRequestAttempts            int                          `json:"max_request_attempts"`     // 单个请求累计尝试上限（含首次；即时生效）
+	BackupIntervalHours           int                          `json:"backup_interval_hours"`    // 自动备份间隔小时（0=关闭；缺省 6；即时生效）
+	BackupKeepCount               int                          `json:"backup_keep_count"`        // 自动备份保留份数（缺省 8 ≈ 48 小时窗口）
+	ErrorLogRetentionDays         int                          `json:"error_log_retention_days"` // 错误日志保留天数（缺省 30；即时生效）
+	DownloadThreads               int                          `json:"download_threads"`
+	DownloadThreadsEnv            int                          `json:"download_threads_env"`
+	DownloadThreadsOverridden     bool                         `json:"download_threads_overridden"`
+	UploadThreads                 int                          `json:"upload_threads"`
+	UploadThreadsEnv              int                          `json:"upload_threads_env"`
+	UploadThreadsOverridden       bool                         `json:"upload_threads_overridden"`
+	DownloadConnections           int                          `json:"download_connections"`
+	DownloadConnectionsEnv        int                          `json:"download_connections_env"`
+	DownloadConnectionsOverridden bool                         `json:"download_connections_overridden"`
+	UploadConnections             int                          `json:"upload_connections"`
+	UploadConnectionsEnv          int                          `json:"upload_connections_env"`
+	UploadConnectionsOverridden   bool                         `json:"upload_connections_overridden"`
+	LastBackupAt                  int64                        `json:"last_backup_at"` // 0 表示从未备份
 }
 
 // buildAPISettingsView 组装设置读取响应。
@@ -115,6 +116,7 @@ func (s *Server) buildAPISettingsView(ctx context.Context) apiSettingsView {
 	view.WatchRequireApproval = watchCfg.RequireApproval
 	view.WatchMaxSources = watchCfg.MaxSources
 	view.WatchPerUserLimit = watchCfg.PerUserLimit
+	view.WatchForwardChannels = syscfg.LoadWatchForwardChannels(ctx, s.st)
 	view.MaxRequestAttempts = syscfg.LoadMaxRequestAttempts(ctx, s.st)
 	view.BackupIntervalHours = syscfg.LoadBackupIntervalHours(ctx, s.st)
 	view.BackupKeepCount = syscfg.LoadBackupKeepCount(ctx, s.st)
@@ -156,41 +158,42 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	var in struct {
-		Timezone               string   `json:"timezone"`
-		DedupWindowMin         *int     `json:"dedup_window_min"`
-		MaxLinksPerMessage     *int     `json:"max_links_per_message"`
-		QueueCapacity          *int     `json:"queue_capacity"`
-		WorkerCount            *int     `json:"worker_count"`
-		MaxFileSize            string   `json:"max_file_size"`
-		MaxFileSizeUnit        string   `json:"max_file_unit"`
-		StreamLimit            string   `json:"stream_limit"`
-		StreamLimitUnit        string   `json:"stream_limit_unit"`
-		TempDirMaxSize         string   `json:"temp_dir_max_size"`
-		TempDirMaxSizeUnit     string   `json:"temp_dir_max_size_unit"`
-		MemoryBudget           string   `json:"memory_budget"`
-		MemoryBudgetUnit       string   `json:"memory_budget_unit"`
-		ChannelCopyEnabled     *bool    `json:"channel_copy_enabled"`
-		TGReuseEnabled         *bool    `json:"tg_reuse_enabled"`
-		DumpChannel            *string  `json:"dump_channel"`
-		JoinEnabled            *bool    `json:"join_enabled"`
-		JoinAutoLeaveExternal  *bool    `json:"join_auto_leave_external"`
-		JoinRequireApproval    *bool    `json:"join_require_approval"`
-		JoinMaxChannels        *int     `json:"join_max_channels"`
-		JoinMuteEnabled        *bool    `json:"join_mute_enabled"`
-		JoinArchiveEnabled     *bool    `json:"join_archive_enabled"`
-		WatchApplyEnabled      *bool    `json:"watch_apply_enabled"`
-		WatchRequireApproval   *bool    `json:"watch_require_approval"`
-		WatchMaxSources        *int     `json:"watch_max_sources"`
-		WatchPerUserLimit      *int     `json:"watch_per_user_limit"`
-		MaxRequestAttempts     *int     `json:"max_request_attempts"`
-		BackupIntervalHours    *int     `json:"backup_interval_hours"`
-		BackupKeepCount        *int     `json:"backup_keep_count"`
-		ErrorLogRetentionDays  *int     `json:"error_log_retention_days"`
-		DownloadThreads        *int     `json:"download_threads"`
-		UploadThreads          *int     `json:"upload_threads"`
-		DownloadConnections    *int     `json:"download_connections"`
-		UploadConnections      *int     `json:"upload_connections"`
-		ClearTransferOverrides []string `json:"clear_transfer_overrides"`
+		Timezone               string    `json:"timezone"`
+		DedupWindowMin         *int      `json:"dedup_window_min"`
+		MaxLinksPerMessage     *int      `json:"max_links_per_message"`
+		QueueCapacity          *int      `json:"queue_capacity"`
+		WorkerCount            *int      `json:"worker_count"`
+		MaxFileSize            string    `json:"max_file_size"`
+		MaxFileSizeUnit        string    `json:"max_file_unit"`
+		StreamLimit            string    `json:"stream_limit"`
+		StreamLimitUnit        string    `json:"stream_limit_unit"`
+		TempDirMaxSize         string    `json:"temp_dir_max_size"`
+		TempDirMaxSizeUnit     string    `json:"temp_dir_max_size_unit"`
+		MemoryBudget           string    `json:"memory_budget"`
+		MemoryBudgetUnit       string    `json:"memory_budget_unit"`
+		ChannelCopyEnabled     *bool     `json:"channel_copy_enabled"`
+		TGReuseEnabled         *bool     `json:"tg_reuse_enabled"`
+		DumpChannel            *string   `json:"dump_channel"`
+		JoinEnabled            *bool     `json:"join_enabled"`
+		JoinAutoLeaveExternal  *bool     `json:"join_auto_leave_external"`
+		JoinRequireApproval    *bool     `json:"join_require_approval"`
+		JoinMaxChannels        *int      `json:"join_max_channels"`
+		JoinMuteEnabled        *bool     `json:"join_mute_enabled"`
+		JoinArchiveEnabled     *bool     `json:"join_archive_enabled"`
+		WatchApplyEnabled      *bool     `json:"watch_apply_enabled"`
+		WatchRequireApproval   *bool     `json:"watch_require_approval"`
+		WatchMaxSources        *int      `json:"watch_max_sources"`
+		WatchPerUserLimit      *int      `json:"watch_per_user_limit"`
+		WatchForwardChannels   *[]string `json:"watch_forward_channels"`
+		MaxRequestAttempts     *int      `json:"max_request_attempts"`
+		BackupIntervalHours    *int      `json:"backup_interval_hours"`
+		BackupKeepCount        *int      `json:"backup_keep_count"`
+		ErrorLogRetentionDays  *int      `json:"error_log_retention_days"`
+		DownloadThreads        *int      `json:"download_threads"`
+		UploadThreads          *int      `json:"upload_threads"`
+		DownloadConnections    *int      `json:"download_connections"`
+		UploadConnections      *int      `json:"upload_connections"`
+		ClearTransferOverrides []string  `json:"clear_transfer_overrides"`
 	}
 	if !s.apiReadJSON(w, r, op, &in) {
 		return
@@ -220,6 +223,7 @@ func (s *Server) handleAPISettingsPost(w http.ResponseWriter, r *http.Request, _
 		WatchRequireApproval:   in.WatchRequireApproval,
 		WatchMaxSources:        in.WatchMaxSources,
 		WatchPerUserLimit:      in.WatchPerUserLimit,
+		WatchForwardChannels:   in.WatchForwardChannels,
 		MaxRequestAttempts:     in.MaxRequestAttempts,
 		BackupIntervalHours:    in.BackupIntervalHours,
 		BackupKeepCount:        in.BackupKeepCount,

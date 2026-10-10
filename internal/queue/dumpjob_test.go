@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -274,5 +275,86 @@ func TestDumpJobStaleEntryRewrites(t *testing.T) {
 	e := dumpEntryOf(t, s, 7)
 	if len(e.DumpIDs) == 0 || e.DumpIDs[0] == 11 {
 		t.Errorf("应落新副本坐标（而非旧条目）: %+v", e)
+	}
+}
+
+// recordingMirror 记录 AfterSourceDump 调用（缓存中转镜像钩子断言用）。
+type recordingMirror struct {
+	mu    sync.Mutex
+	calls []mirrorCall
+}
+
+type mirrorCall struct {
+	requestID, dumpChannel int64
+	dumpIDs                []int
+}
+
+func (m *recordingMirror) AfterSourceDump(_ context.Context, requestID, dumpChannel int64, dumpIDs []int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, mirrorCall{
+		requestID: requestID, dumpChannel: dumpChannel,
+		dumpIDs: append([]int(nil), dumpIDs...),
+	})
+}
+
+// 监听源回退任务（DumpOnly + request_id）真实重传进缓存频道后触发缓存
+// 中转镜像：镜像收到请求 ID、缓存频道与落点坐标（实现侧按 requestID 反查
+// 监听事件行决定是否镜像，见 cmd/bot 装配）。
+func TestDumpJobMirrorsSourceDump(t *testing.T) {
+	s := openStore(t)
+	job := dumpJob(t, s, 7)
+	sender := &chatRecordingSender{fakeSender: &fakeSender{}}
+	mirror := &recordingMirror{}
+	d := dumpDeps(t, s, fetcherWith(errInvoker{}, docMsg(7, 1201)), sender)
+	d.DumpMirror = mirror
+
+	runProcess(t, d, job)
+
+	e := dumpEntryOf(t, s, 7)
+	if len(mirror.calls) != 1 {
+		t.Fatalf("重传成功后应触发一次镜像: %+v", mirror.calls)
+	}
+	call := mirror.calls[0]
+	if call.requestID != job.RequestID || call.dumpChannel != testDumpChannel ||
+		len(call.dumpIDs) != len(e.DumpIDs) {
+		t.Fatalf("镜像参数应为请求 ID/缓存频道/落点坐标: %+v（期望 dumpIDs=%v）", call, e.DumpIDs)
+	}
+}
+
+// 执行时复核命中已有副本直接成功：不触发镜像——与快路径查重跳过语义
+// 一致（缓存已有副本 = 已处理过，避免转发频道重复刷屏）。
+func TestDumpJobExistingEntrySkipsMirror(t *testing.T) {
+	s := openStore(t)
+	job := dumpJob(t, s, 7)
+	seedDumpEntry(t, s, 7, []int{11})
+	sender := &chatRecordingSender{fakeSender: &fakeSender{}}
+	mirror := &recordingMirror{}
+	d := dumpDeps(t, s, &countingFetcher{fakeFetcher: &fakeFetcher{
+		msgs: []*tg.Message{{ID: 7, Message: "hello"}}}}, sender)
+	d.DumpMirror = mirror
+
+	runProcess(t, d, job)
+
+	if len(mirror.calls) != 0 {
+		t.Fatalf("命中已有副本不应触发镜像: %+v", mirror.calls)
+	}
+}
+
+// 补写发送失败：不触发镜像（镜像只发生在真实重传成功后）。
+func TestDumpJobFailureNoMirror(t *testing.T) {
+	s := openStore(t)
+	job := dumpJob(t, s, 7)
+	sender := &chatRecordingSender{fakeSender: &fakeSender{
+		mediaErr: func(mediaCall) error { return errFakeSend },
+	}}
+	mirror := &recordingMirror{}
+	d := dumpDeps(t, s, fetcherWith(errInvoker{}, docMsg(7, 1201)), sender)
+	d.DumpMirror = mirror
+
+	runProcess(t, d, job)
+
+	if len(mirror.calls) != 0 {
+		t.Fatalf("失败补写不应触发镜像: %+v", mirror.calls)
 	}
 }

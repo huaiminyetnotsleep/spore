@@ -282,3 +282,62 @@ func TestAPISettingsMaxRequestAttempts(t *testing.T) {
 		t.Errorf("校验失败后旧值应保留，得到 %d", got)
 	}
 }
+
+func TestAPISettingsWatchForwardChannels(t *testing.T) {
+	binder := &fakeChannelBinder{verifyID: -1001234567890, verifyTitle: "转发频道"}
+	e := newTestEnvOpts(t, func(_ *config.Config, o *Options) { o.Bindings = binder })
+	j := e.login(t)
+	csrf := apiCSRFToken(t, e, j)
+	ctx := context.Background()
+
+	var before apiSettingsView
+	getAPIJSON(t, e, j, "/api/v1/settings", &before)
+	if len(before.WatchForwardChannels) != 0 {
+		t.Fatalf("缺省应未配置转发频道: %+v", before.WatchForwardChannels)
+	}
+
+	// 配置：逐项经 binding 校验后保存；两个目标解析到同一 ID → 去重为 1
+	resp := e.apiPost(j, "/api/v1/settings", csrf, `{"watch_forward_channels":["@chan_a","-100999"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("配置转发频道应 200，得到 %d（body=%s）", resp.StatusCode, bodyOf(t, resp))
+	}
+	if binder.verifyTarget != "-100999" {
+		t.Fatalf("应逐项经 binding 校验，最后校验目标 %q", binder.verifyTarget)
+	}
+	got := syscfg.LoadWatchForwardChannels(ctx, e.st)
+	if len(got) != 1 || got[0].ChannelID != -1001234567890 || got[0].Title != "转发频道" {
+		t.Fatalf("应保存解析去重后的数字 ID 与标题: %+v", got)
+	}
+	if !e.containsAction("settings.watch_forward_channels") {
+		t.Error("配置变更应写审计 settings.watch_forward_channels")
+	}
+
+	// GET 回读
+	var after apiSettingsView
+	getAPIJSON(t, e, j, "/api/v1/settings", &after)
+	if len(after.WatchForwardChannels) != 1 || after.WatchForwardChannels[0].ChannelID != -1001234567890 {
+		t.Fatalf("设置视图应回读转发频道: %+v", after.WatchForwardChannels)
+	}
+
+	// 校验失败：受控 400，配置不变
+	binder.verifyErr = errors.New("not postable")
+	csrf = apiCSRFToken(t, e, j)
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"watch_forward_channels":["@bad"]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("校验失败应 400，得到 %d", resp.StatusCode)
+	}
+	if got := syscfg.LoadWatchForwardChannels(ctx, e.st); len(got) != 1 {
+		t.Fatalf("校验失败不应改动配置: %+v", got)
+	}
+
+	// 清空：整体替换语义（空数组 = 清空，回落缓存兜底）
+	binder.verifyErr = nil
+	csrf = apiCSRFToken(t, e, j)
+	resp = e.apiPost(j, "/api/v1/settings", csrf, `{"watch_forward_channels":[]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("清空应 200，得到 %d", resp.StatusCode)
+	}
+	if got := syscfg.LoadWatchForwardChannels(ctx, e.st); len(got) != 0 {
+		t.Fatalf("清空后应为空: %+v", got)
+	}
+}

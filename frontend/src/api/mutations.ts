@@ -302,6 +302,11 @@ export interface SettingsSaveInput {
   watch_require_approval?: boolean;
   watch_max_sources?: number;
   watch_per_user_limit?: number;
+  /**
+   * 监听转发频道目标列表（@用户名 / t.me 链接 / -100 数字 ID）；缺省不变更，
+   * 传数组整体替换（空数组清空 = 仅缓存频道兜底）；逐项经服务端校验解析。
+   */
+  watch_forward_channels?: string[];
   /** 单个请求累计尝试上限（1–10，含首次，即时生效）；缺省不变更。 */
   max_request_attempts?: number;
   backup_interval_hours?: number;

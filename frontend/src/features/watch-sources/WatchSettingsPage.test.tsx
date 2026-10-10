@@ -8,7 +8,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchSettings, type SettingsView } from "../../api/admin";
+import { fetchChannelBindings, fetchSettings, type SettingsView } from "../../api/admin";
 import { saveSettings } from "../../api/mutations";
 import { WatchSettingsPage } from "./WatchSettingsPage";
 
@@ -17,6 +17,7 @@ vi.mock("../../api/admin", async () => {
   return {
     ...actual,
     fetchSettings: vi.fn(),
+    fetchChannelBindings: vi.fn(),
   };
 });
 
@@ -29,6 +30,7 @@ vi.mock("../../api/mutations", async () => {
 });
 
 const mockFetchSettings = vi.mocked(fetchSettings);
+const mockFetchChannelBindings = vi.mocked(fetchChannelBindings);
 const mockSaveSettings = vi.mocked(saveSettings);
 
 function sampleSettings(overrides: Partial<SettingsView> = {}): SettingsView {
@@ -64,6 +66,7 @@ function sampleSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     watch_require_approval: true,
     watch_max_sources: 20,
     watch_per_user_limit: 3,
+    watch_forward_channels: [],
     max_request_attempts: 3,
     backup_interval_hours: 6,
     backup_keep_count: 8,
@@ -101,6 +104,7 @@ function renderPage() {
 describe("监听源配置页", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetchChannelBindings.mockResolvedValue({ items: [] });
   });
 
   it("渲染唯一 H1 标题「监听源配置」并在数据到达后渲染表单控件", async () => {
@@ -190,6 +194,49 @@ describe("监听源配置页", () => {
 
     await waitFor(() => {
       expect(mockSaveSettings).toHaveBeenCalledWith({ watch_max_sources: 30, watch_per_user_limit: 3 });
+    });
+  });
+
+  it("监听转发频道：回显数字 ID，输入新目标后显式整体保存", async () => {
+    mockFetchSettings.mockResolvedValueOnce(
+      sampleSettings({
+        watch_forward_channels: [{ channel_id: -100777, title: "缓存频道" }],
+      }),
+    );
+    mockSaveSettings.mockResolvedValueOnce({
+      ok: true,
+      settings: sampleSettings({
+        watch_forward_channels: [
+          { channel_id: -100777, title: "缓存频道" },
+          { channel_id: -100888, title: "新转发" },
+        ],
+      }),
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      // antd 把 aria-label 同时放在选择器容器与内部搜索 input 上，直接查 input
+      expect(document.querySelector<HTMLElement>(".ant-select-selector input")).not.toBeNull();
+    });
+    // 既有条目以数字 ID 形态回显
+    expect(screen.getByText("-100777")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存转发频道" })).toBeDisabled();
+
+    // tags 模式输入新目标并回车成签（rc-select 按 which 识别 Enter）
+    const input = document.querySelector<HTMLElement>(".ant-select-selector input");
+    expect(input).not.toBeNull();
+    fireEvent.change(input as HTMLElement, { target: { value: "@newchan" } });
+    fireEvent.keyDown(input as HTMLElement, { key: "Enter", keyCode: 13, which: 13 });
+
+    const saveBtn = screen.getByRole("button", { name: "保存转发频道" });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledWith({
+        watch_forward_channels: ["-100777", "@newchan"],
+      });
     });
   });
 });

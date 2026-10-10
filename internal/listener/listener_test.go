@@ -2,6 +2,7 @@ package listener
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sort"
@@ -15,17 +16,20 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
+	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 )
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // fakeCopySender 只实现 CopyMessages 的可编程假发送器（其余方法经接口
-// 内嵌占位，本包路径不会触达）。
+// 内嵌占位，本包路径不会触达）。failTo 按目标频道注入失败（转发镜像的
+// 单目标失败断言用），其余调用成功。
 type fakeCopySender struct {
 	delivery.Sender
 	mu     sync.Mutex
 	copies []copyRecord
 	err    error
+	failTo map[int64]error
 	nextID int
 }
 
@@ -38,6 +42,9 @@ func (f *fakeCopySender) CopyMessages(_ context.Context, from, to int64, ids []i
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.copies = append(f.copies, copyRecord{from: from, to: to, ids: append([]int(nil), ids...)})
+	if err := f.failTo[to]; err != nil {
+		return nil, err
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -395,6 +402,77 @@ func (s *Service) containsSkip(substr string) bool {
 		return false
 	}
 	return lc.contains(substr)
+}
+
+// 配置监听转发频道后：缓存复制成功 → 从源逐个镜像到转发频道；与缓存
+// 重复的配置项被过滤；单目标失败不扩散（缓存照常、其余目标照常）；事件
+// targets 快照只记实际成功写入的目标（缓存优先）。
+func TestForwardChannelsMirroredAfterCacheCopy(t *testing.T) {
+	l, snd, st, enqueued := newFixture(t)
+	const chatID int64 = -1003456
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "fwd", Title: "转发镜像",
+		Status: store.WatchApproved, Enabled: true,
+	})
+	ctx := context.Background()
+	if err := syscfg.SaveWatchForwardChannels(ctx, st, []syscfg.WatchForwardChannel{
+		{ChannelID: -100888, Title: "转发一"},
+		{ChannelID: -100999, Title: "转发二"},
+		{ChannelID: -100777, Title: "与缓存频道重复，应被过滤"},
+	}); err != nil {
+		t.Fatalf("写入转发频道配置失败: %v", err)
+	}
+	// 转发二注入失败：单目标失败只影响自身
+	snd.failTo = map[int64]error{-100999: errors.New("bot not admin")}
+
+	l.OnMessage(mediaMsg(chatID, 81, ""), snd, 42, "watcher_bot")
+
+	var events []store.WatchEvent
+	waitFor(t, func() bool {
+		events = listEvents(t, l)
+		return len(events) == 1 && len(events[0].Targets) == 2
+	})
+	copies := snd.snapshot()
+	// 复制调用三次：缓存 + 两个转发频道（转发二为失败尝试，同样留痕）
+	if len(copies) != 3 {
+		t.Fatalf("应尝试复制缓存与两个转发频道: %+v", copies)
+	}
+	targets := map[int64]int{}
+	for _, c := range copies {
+		targets[c.to]++
+	}
+	if targets[-100777] != 1 || targets[-100888] != 1 || targets[-100999] != 1 {
+		t.Fatalf("复制目标应为缓存(-100777)与两个转发频道各一次: %+v", targets)
+	}
+	ev := events[0]
+	if ev.Path != store.WatchPathCopy || len(ev.Targets) != 2 ||
+		ev.Targets[0].ChannelID != -100777 || ev.Targets[1].ChannelID != -100888 {
+		t.Fatalf("事件目标应为缓存+成功的转发一（失败项不记）: %+v", ev.Targets)
+	}
+	if calls := enqueued.snapshot(); len(calls) != 0 {
+		t.Fatalf("不应触发回退: %+v", calls)
+	}
+}
+
+// 未配置转发频道时行为与既有语义一致：只复制缓存频道一次，事件 targets
+// 仅缓存频道。
+func TestNoForwardChannelsCopiesCacheOnly(t *testing.T) {
+	l, snd, st, _ := newFixture(t)
+	const chatID int64 = -1004567
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "solo", Title: "仅缓存",
+		Status: store.WatchApproved, Enabled: true,
+	})
+	l.OnMessage(mediaMsg(chatID, 82, ""), snd, 0, "")
+	waitFor(t, func() bool { return len(listEvents(t, l)) == 1 })
+	copies := snd.snapshot()
+	if len(copies) != 1 || copies[0].to != -100777 {
+		t.Fatalf("应仅复制缓存频道: %+v", copies)
+	}
+	events := listEvents(t, l)
+	if len(events[0].Targets) != 1 || events[0].Targets[0].ChannelID != -100777 {
+		t.Fatalf("事件目标应仅缓存频道: %+v", events[0].Targets)
+	}
 }
 
 // 多 bot 池重复/交错投递：同一相册被两个受理 bot 各投递一遍（成员重复、

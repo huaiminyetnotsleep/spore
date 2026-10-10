@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { Button, Select, Space, Tag, Typography } from "antd";
+import { Button, Select, Space, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import { fetchWatchEvents, fetchWatchSources, type WatchEventRow } from "../../api/admin";
@@ -191,6 +191,27 @@ export function WatchEventsPage() {
         ),
     },
     {
+      title: "转发目标",
+      dataIndex: "targets",
+      width: 150,
+      render: (targets: WatchEventRow["targets"]) => {
+        // 旧行（targets 快照引入前）为空数组，显示「—」。
+        if (!targets || targets.length === 0) {
+          return <Text type="secondary">—</Text>;
+        }
+        const [first, ...rest] = targets;
+        const label = first.title || String(first.channel_id);
+        if (rest.length === 0) {
+          return <Text>{label}</Text>;
+        }
+        return (
+          <Tooltip title={targets.map((t) => t.title || t.channel_id).join("、")}>
+            <Text>{`${label} +${rest.length}`}</Text>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: "缓存落点",
       dataIndex: "dump_ids",
       width: 110,
@@ -224,7 +245,7 @@ export function WatchEventsPage() {
   return (
     <PageScaffold
       title="监听记录"
-      description="监听源转储的逐次留痕：哪个 Bot 在哪个源转发了哪些消息（含源消息直链）、走哪条路径、缓存落点与关联请求；受保护内容走重传管线时链接到对应请求行。"
+      description="监听源转储的逐次留痕：哪个 Bot 在哪个源转发了哪些消息（含源消息直链）、走哪条路径、实际转发目标（缓存频道与转发频道）、缓存落点与关联请求；受保护内容走重传管线时链接到对应请求行。"
     >
       <PageSection
         title="预热事件"

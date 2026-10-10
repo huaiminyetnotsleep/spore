@@ -9,7 +9,9 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  fetchSettings,
   fetchWatchSources,
+  type SettingsView,
   type WatchInviteRequestRow,
   type WatchSourceRow,
 } from "../../api/admin";
@@ -30,6 +32,7 @@ vi.mock("../../api/admin", async () => {
   return {
     ...actual,
     fetchWatchSources: vi.fn(),
+    fetchSettings: vi.fn(),
   };
 });
 
@@ -49,6 +52,7 @@ vi.mock("../../api/mutations", async () => {
 });
 
 const mockFetchSources = vi.mocked(fetchWatchSources);
+const mockFetchSettings = vi.mocked(fetchSettings);
 const mockAdd = vi.mocked(addWatchSource);
 const mockApproveInvite = vi.mocked(approveWatchInviteRequest);
 const mockDeleteInvite = vi.mocked(deleteWatchInviteRequest);
@@ -57,6 +61,16 @@ const mockRetryInvite = vi.mocked(retryWatchInviteRequest);
 const mockReview = vi.mocked(reviewWatchSource);
 const mockToggle = vi.mocked(toggleWatchSource);
 const mockDeleteSource = vi.mocked(deleteWatchSource);
+
+/** 「转发目标」列数据源的最小设置夹具（仅页面消费的字段参与断言）。 */
+function sampleSettings(overrides: Partial<SettingsView> = {}): SettingsView {
+  return {
+    watch_forward_channels: [],
+    dump_channel_id: 0,
+    dump_channel_title: "",
+    ...overrides,
+  } as SettingsView;
+}
 
 function sampleSource(overrides: Partial<WatchSourceRow> = {}): WatchSourceRow {
   return {
@@ -121,6 +135,26 @@ describe("监听源管理页", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetchSources.mockReset();
+    // 「转发目标」列数据源（查询失败不阻塞列表；缺省已配置缓存频道）
+    mockFetchSettings.mockResolvedValue(sampleSettings());
+  });
+
+  it("转发目标列展示监听转发频道汇总或缓存兜底", async () => {
+    mockFetchSources.mockResolvedValueOnce({ items: [sampleSource()] });
+    mockFetchSettings.mockResolvedValueOnce(
+      sampleSettings({
+        dump_channel_id: -100777,
+        dump_channel_title: "缓存频道",
+        watch_forward_channels: [
+          { channel_id: -100888, title: "转发一" },
+          { channel_id: -100999, title: "转发二" },
+        ],
+      }),
+    );
+    renderPage();
+    await screen.findByText("添加监听源");
+    // 设置查询异步返回后再断言单元格
+    expect(await screen.findByText("转发一 +1")).toBeInTheDocument();
   });
 
   it("渲染唯一 H1 页面标题「监听源管理」并提供添加输入框", async () => {

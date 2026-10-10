@@ -638,6 +638,12 @@ export function fetchApplications(): Promise<{ items: ApplicationRow[] }> {
 
 // ---- 系统设置（管理操作迁移） ----
 
+/** 转发目标频道（数字 ID + 标题快照）：监听转发频道配置与监听事件的目标快照共用。 */
+export interface WatchForwardTarget {
+  channel_id: number;
+  title: string;
+}
+
 /**
  * 可编辑运营设置及其生效状态（GET /api/v1/settings）。
  * 字节值与重启语义由服务端维护；媒体大小输入沿用 SSR 的"数值 + MB/GB 单位"。
@@ -696,6 +702,8 @@ export interface SettingsView {
   watch_max_sources: number;
   /** 每用户申请上限（0 = 不限；号主经 Bot 提交不受限）。 */
   watch_per_user_limit: number;
+  /** 监听转发频道（独立于缓存频道的镜像目标；空 = 仅缓存兜底）。 */
+  watch_forward_channels: WatchForwardTarget[];
 
   /** 单个请求累计尝试上限（含首次；即时生效；缺省 3，可配 1–10）。 */
   max_request_attempts: number;
@@ -1196,6 +1204,8 @@ export interface WatchEventRow {
   member_ids: number[];
   /** 缓存频道落点消息 ID（回退入队时为空）。 */
   dump_ids: number[];
+  /** 转发目标快照（缓存频道优先，其后为成功的转发频道；旧行为空）。 */
+  targets: WatchForwardTarget[];
   /** 关联 requests 行（仅 fallback；0 = 无）。 */
   request_id: number;
   bot_id: number;

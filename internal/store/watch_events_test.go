@@ -93,6 +93,59 @@ func TestListWatchEventsPathFilter(t *testing.T) {
 	}
 }
 
+// 目标快照 round-trip 与按 request 回写：Insert 写入 targets_json、List
+// 原样回读；UpdateWatchEventTargetsByRequest 按 request_id 整体覆盖；
+// WatchEventByRequest 命中 fallback 事件、未知 ID 返回 ErrNotFound。
+func TestWatchEventTargetsSnapshotAndRewrite(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	upsertWatch(t, s, WatchSource{ChannelID: -1001, Status: WatchApproved, Enabled: true})
+	want := []WatchEventTarget{{ChannelID: -100777, Title: "缓存"}, {ChannelID: -100888, Title: "转发一"}}
+	if _, err := s.InsertWatchEvent(ctx, WatchEvent{
+		ChannelID: -1001, Title: "源一", MessageID: 31, MemberIDs: []int{31},
+		DumpIDs: []int{301}, Targets: want, RequestID: 555, Path: WatchPathCopy,
+	}); err != nil {
+		t.Fatalf("写入事件失败: %v", err)
+	}
+	rows, _, err := s.ListWatchEvents(ctx, WatchEventsQuery{Page: 1, PageSize: 10})
+	if err != nil || len(rows) != 1 || len(rows[0].Targets) != 2 ||
+		rows[0].Targets[0] != want[0] || rows[0].Targets[1] != want[1] {
+		t.Fatalf("目标快照应原样回读: rows=%+v err=%v", rows, err)
+	}
+
+	// 未显式给目标时缺省空数组（而非 null）
+	if _, err := s.InsertWatchEvent(ctx, WatchEvent{
+		ChannelID: -1001, MessageID: 32, MemberIDs: []int{32}, Path: WatchPathCopy,
+	}); err != nil {
+		t.Fatalf("写入无目标事件失败: %v", err)
+	}
+	rows, _, _ = s.ListWatchEvents(ctx, WatchEventsQuery{Page: 1, PageSize: 10})
+	if len(rows[0].Targets) != 0 {
+		t.Fatalf("无目标应回读空数组: %+v", rows[0].Targets)
+	}
+
+	ev, err := s.WatchEventByRequest(ctx, 555)
+	if err != nil || ev.MessageID != 31 {
+		t.Fatalf("按 request 反查应命中: %+v err=%v", ev, err)
+	}
+	if _, err := s.WatchEventByRequest(ctx, 999999); err != ErrNotFound {
+		t.Fatalf("未知 request 应 ErrNotFound: %v", err)
+	}
+
+	rewritten := []WatchEventTarget{{ChannelID: -100777, Title: "缓存"}, {ChannelID: -100999, Title: "转发二"}}
+	ok, err := s.UpdateWatchEventTargetsByRequest(ctx, 555, rewritten)
+	if err != nil || !ok {
+		t.Fatalf("回写应命中: ok=%v err=%v", ok, err)
+	}
+	ev, _ = s.WatchEventByRequest(ctx, 555)
+	if len(ev.Targets) != 2 || ev.Targets[1] != rewritten[1] {
+		t.Fatalf("回写后应为新目标: %+v", ev.Targets)
+	}
+	if ok, err := s.UpdateWatchEventTargetsByRequest(ctx, 999999, rewritten); err != nil || ok {
+		t.Fatalf("未知 request 回写应返回 false: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestDeleteWatchEventsBatch(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
