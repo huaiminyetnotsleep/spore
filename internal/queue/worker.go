@@ -172,7 +172,7 @@ type Deps struct {
 	Progress *progress.Registry
 	// Copier 是频道副本投递通道（该用户绑定的频道）；nil 时跳过。
 	Copier ChannelCopier
-	// ChannelCopyEnabled 返回频道副本同步总开关（运行设置，main 注入实时
+	// ChannelCopyEnabled 返回绑定频道投递总开关（运行设置，main 注入实时
 	// 读库闭包）：返回 false 时跳过副本投递（绑定关系保留）；nil 视为开启。
 	ChannelCopyEnabled func() bool
 	// ReuseEnabled 返回 TG 链接复用总开关（运行设置，main 注入实时读库
@@ -447,14 +447,14 @@ func (d Deps) recordAnchors(ctx context.Context, j Job, kind string, ids []int) 
 // copyToChannels 在任务成功后把已发送消息复制到该用户绑定的频道。
 // 使用剥离取消信号的 ctx 与独立时间窗：任务收尾（含进程退出）时副本投递
 // 仍可完成；Copier 自身尽力而为，失败不向任务结果传播。
-// pin 为 true 时绕过频道同步开关（显式置顶意图优先于全局设置）并回写置顶
+// pin 为 true 时绕过绑定频道投递开关（显式置顶意图优先于全局设置）并回写置顶
 // 结果、给用户发简短确认；无媒体消息（纯文本任务）时整体跳过。
 func (d Deps) copyToChannels(ctx context.Context, j Job, msgIDs []int, pin bool) {
 	if d.Copier == nil || len(msgIDs) == 0 {
 		return
 	}
 	if !pin && d.ChannelCopyEnabled != nil && !d.ChannelCopyEnabled() {
-		d.Log.Info("频道同步开关已关闭，跳过副本投递", "job_id", j.ID, "user_id", j.UserID)
+		d.Log.Info("绑定频道投递开关已关闭，跳过副本投递", "job_id", j.ID, "user_id", j.UserID)
 		return
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), copyWindow)

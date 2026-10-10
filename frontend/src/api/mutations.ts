@@ -284,7 +284,7 @@ export interface SettingsSaveInput {
   /** 内存管道进程级预算（64MB–8GB，即时生效）；缺省不变更。 */
   memory_budget?: string;
   memory_budget_unit?: string;
-  /** 频道副本同步总开关；缺省不变更。 */
+  /** 绑定频道投递总开关；缺省不变更。 */
   channel_copy_enabled?: boolean;
   /** TG 链接复用总开关（copyMessages 直拷跳过重复下载上传）；缺省不变更。 */
   tg_reuse_enabled?: boolean;

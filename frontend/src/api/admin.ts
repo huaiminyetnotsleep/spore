@@ -668,7 +668,7 @@ export interface SettingsView {
   /** 内存管道进程级预算（字节；保存后即时生效）。 */
   memory_budget_bytes: number;
 
-  /** 频道副本同步总开关（即时生效；缺省 true）。 */
+  /** 绑定频道投递总开关（任务成功后自动发副本到用户绑定频道；即时生效；缺省 true）。 */
   channel_copy_enabled: boolean;
 
   /** TG 链接复用总开关（即时生效；缺省 true）。 */

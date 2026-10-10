@@ -510,7 +510,7 @@ API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skippe
 | 运行设置 | `max_file_size` / `stream_limit` / `temp_dir_max_size` | 字节数值 | 媒体参数（重启生效） |
 | 运行设置 | `memory_budget` | 字节数值 | 内存管道进程级预算（即时生效） |
 | 运行设置 | `max_links_per_message` | 数值 | 单条消息最大有效链接数 |
-| 运行设置 | `channel_copy_enabled` / `tg_reuse_enabled` | 布尔 | 频道副本同步 / 缓存频道复用总开关 |
+| 运行设置 | `channel_copy_enabled` / `tg_reuse_enabled` | 布尔 | 绑定频道投递 / 缓存频道复用总开关 |
 | 运行设置 | `dump_channel_id` / `dump_channel_title` | 数值 / 字符串 | 缓存频道（settings 优先于 `DUMP_CHANNEL_ID` 环境变量） |
 | 运行设置 | `last_backup_at` | 毫秒时间戳 | 最近备份时间 |
 | 运行设置 | `error_log_retention_days` | 数值 | 错误日志保留天数（1–365，缺省 30；即时生效） |

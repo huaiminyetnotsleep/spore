@@ -1,8 +1,8 @@
 /**
  * 频道设置页（请求与频道分组的配置入口）：从「运行设置」拆出，
- * 承载副本同步开关与缓存频道（重复链接复用）配置区，后续频道相关运行
+ * 承载绑定频道投递开关与缓存频道（重复链接复用）配置区，后续频道相关运行
  * 配置可继续归入本页分区。
- * 副本同步总开关（channel_copy_enabled）：切换即保存、即时生效；
+ * 绑定频道投递总开关（channel_copy_enabled）：切换即保存、即时生效；
  * 关闭只暂停任务成功后的副本投递，用户绑定关系保留（「频道绑定」页维护）。
  * 缓存频道（dump_channel）：输入 @用户名 / t.me 链接 / -100 数字 ID，保存时
  * 经服务端解析并校验 bot 已是频道管理员，存数字 ID（频道之后公开转私有不
@@ -63,15 +63,15 @@ export function ChannelSettingsPage() {
     }
   }, [data]);
 
-  // 频道同步开关：切换即保存，即时生效；
+  // 绑定频道投递开关：切换即保存，即时生效；
   // 关闭只暂停副本投递，用户绑定关系保留。
   const saveChannelCopy = useAdminAction({
     action: (enabled: boolean) => saveSettings({ channel_copy_enabled: enabled }),
     invalidate: [["settings"]],
     successText: (result) =>
       result.settings.channel_copy_enabled
-        ? "频道同步已开启，任务成功后会同步到用户绑定的频道。"
-        : "频道同步已关闭，绑定关系保留；重新打开即恢复。",
+        ? "绑定频道投递已开启，任务成功后会自动发副本到用户绑定的频道。"
+        : "绑定频道投递已关闭，绑定关系保留；重新打开即恢复。",
   });
 
   // 缓存频道：保存（非空=解析校验后配置；空串=清除）。服务端校验失败回受控 400。
@@ -111,7 +111,7 @@ export function ChannelSettingsPage() {
   return (
     <PageScaffold
       title="频道设置"
-      description="频道副本同步与缓存频道（重复链接复用）配置；开关切换即保存，输入类配置显式保存，均即时生效、无需重启。"
+      description="绑定频道投递与缓存频道（重复链接复用）配置；开关切换即保存，输入类配置显式保存，均即时生效、无需重启。"
     >
       <PageQueryState
         initialLoading={isPending && !data}
@@ -120,17 +120,20 @@ export function ChannelSettingsPage() {
         onRetry={() => void refetch()}
       >
         <Space direction="vertical" size="middle" className="field-width-full">
-          <PageSection title="副本同步" extra={<Tag color="green">切换即保存</Tag>}>
+          <PageSection
+            title="绑定频道投递（任务成功后自动发副本）"
+            extra={<Tag color="green">切换即保存</Tag>}
+          >
             <SettingItem
               control={
                 <Switch
                   checked={data?.channel_copy_enabled ?? true}
                   loading={saveChannelCopy.pending}
                   onChange={(enabled) => void saveChannelCopy.run(enabled)}
-                  aria-label="频道副本同步总开关"
+                  aria-label="绑定频道投递总开关"
                 />
               }
-              label="任务成功后同步副本到用户绑定的频道"
+              label="任务成功后自动发副本到用户绑定的频道"
               description="关闭后任务成功不再向用户绑定的频道投递副本（绑定关系保留，重新打开即恢复）；修改即时生效，不影响任务本身。"
             />
           </PageSection>

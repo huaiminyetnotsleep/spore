@@ -36,7 +36,7 @@ const (
 	pinReplyAlreadyMarkedText = "该任务已标记置顶，完成时会置顶到绑定频道/群组。"
 	pinReplyRaceText          = "任务状态刚刚发生变化，请重新回复该消息使用命令。"
 	pinReplyAlreadyPinnedText = "该任务已置顶。"
-	pinReplyNoCopiesText      = "该任务完成时未产生频道副本（当时无绑定或频道同步关闭），无法事后置顶。"
+	pinReplyNoCopiesText      = "该任务完成时未产生频道副本（当时无绑定或绑定频道投递已关闭），无法事后置顶。"
 	pinReplyFailedText        = "该任务未成功完成，无法置顶。"
 	pinReplyCancelledText     = "该任务已取消，无法置顶。"
 	pinReplyUnavailableText   = "置顶功能当前不可用，请稍后重试。"

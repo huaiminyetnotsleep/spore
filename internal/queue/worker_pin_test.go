@@ -30,7 +30,7 @@ func newPinJobWithRequest(t *testing.T, s *store.Store) (Job, store.Request) {
 		0, r.ID), r
 }
 
-// TestProcessPinTaskBypassesSwitchAndRecordsResult：pin 任务绕过频道同步
+// TestProcessPinTaskBypassesSwitchAndRecordsResult：pin 任务绕过绑定频道投递
 // 开关，置顶结果（成功数/总数）回写请求行并给用户发确认文案。
 func TestProcessPinTaskBypassesSwitchAndRecordsResult(t *testing.T) {
 	s := openStore(t)

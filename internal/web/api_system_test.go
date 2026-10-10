@@ -1,6 +1,6 @@
 package web
 
-// 系统设置 API（/api/v1/system/config）与运行设置频道同步开关的 API 行为测试。
+// 系统设置 API（/api/v1/system/config）与运行设置绑定频道投递开关的 API 行为测试。
 
 import (
 	"context"
@@ -90,7 +90,7 @@ func TestAPISettingsChannelCopySwitch(t *testing.T) {
 	var before apiSettingsView
 	getAPIJSON(t, e, j, "/api/v1/settings", &before)
 	if !before.ChannelCopyEnabled {
-		t.Fatalf("频道同步开关缺省应为 true: %+v", before)
+		t.Fatalf("绑定频道投递开关缺省应为 true: %+v", before)
 	}
 
 	// 关闭：即时生效并写审计

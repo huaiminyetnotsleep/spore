@@ -1,6 +1,6 @@
 /**
  * 运行设置页测试：基础设置的回填与"缺省不变更"保存语义。
- * 频道加入与频道同步配置已拆分至「受邀设置」「频道设置」独立页面，
+ * 频道加入与绑定频道投递配置已拆分至「受邀设置」「频道设置」独立页面，
  * 本页不再渲染对应区块；媒体大小输入留空时载荷不携带。
  * 查询与写接口以模块 mock 注入，不触网络。
  */
@@ -298,7 +298,7 @@ describe("运行设置页", () => {
     ).toBeInTheDocument();
   });
 
-  it("频道加入与频道同步区块已拆分至独立页面，本页不再渲染", async () => {
+  it("频道加入与绑定频道投递区块已拆分至独立页面，本页不再渲染", async () => {
     fetchSettingsMock.mockResolvedValue(settingsView());
     fetchBackupStatusMock.mockResolvedValue(backupView);
 
@@ -306,9 +306,9 @@ describe("运行设置页", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("Asia/Shanghai")).toBeInTheDocument());
     expect(screen.queryByText("频道加入（/join）")).not.toBeInTheDocument();
-    expect(screen.queryByText("频道同步")).not.toBeInTheDocument();
+    expect(screen.queryByText("绑定频道投递")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "允许加入频道总开关" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "频道副本同步总开关" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "绑定频道投递总开关" })).not.toBeInTheDocument();
   });
 
   it("媒体大小字段为可选覆盖语义：留空保持当前值，无 required 标记", async () => {

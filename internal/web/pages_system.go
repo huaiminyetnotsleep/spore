@@ -34,7 +34,7 @@ const (
 	settingKeyTempDirMaxSize     = "temp_dir_max_size"     // 临时目录总量上限（JSON 数字字节；重启生效）
 	settingKeyMemoryBudget       = "memory_budget"         // 内存管道进程级预算（JSON 数字字节；即时生效）
 	settingKeyMaxLinksPerMessage = "max_links_per_message" // 单条 Bot 输入最大有效链接数（JSON 数字；即时生效）
-	settingKeyChannelCopyEnable  = "channel_copy_enabled"  // 频道副本同步总开关（JSON 布尔；即时生效）
+	settingKeyChannelCopyEnable  = "channel_copy_enabled"  // 绑定频道投递总开关（JSON 布尔；即时生效）
 	settingKeyTGReuseEnable      = "tg_reuse_enabled"      // TG 链接复用总开关（JSON 布尔；即时生效）
 	// 缓存频道（重复链接复用的干净副本来源）：数字频道 ID 与标题。Web 端
 	// 配置（输入 @username / t.me 链接 / -100 数字 ID，经 bot 解析校验后
@@ -108,7 +108,7 @@ func LoadMaxLinksPerMessage(ctx context.Context, st *store.Store, envDefault int
 		func(n int) bool { return n >= config.MinLinksPerMessage && n <= config.MaxLinksPerMessage })
 }
 
-// LoadChannelCopyEnabled 读取频道副本同步总开关：键缺失或非法时回退开启。
+// LoadChannelCopyEnabled 读取绑定频道投递总开关：键缺失或非法时回退开启。
 // worker 每次投递副本前实时读取（main 装配闭包注入），管理端修改即时生效；
 // 关闭只暂停副本投递，用户绑定关系保留。
 func LoadChannelCopyEnabled(ctx context.Context, st *store.Store) bool {
@@ -231,7 +231,7 @@ type settingsUpdateInput struct {
 	// 空串表示不变更。即时生效。
 	MemoryBudgetRaw  string
 	MemoryBudgetUnit string
-	// ChannelCopyEnabled 为频道副本同步总开关；nil 表示不变更。
+	// ChannelCopyEnabled 为绑定频道投递总开关；nil 表示不变更。
 	ChannelCopyEnabled *bool
 	// TGReuseEnabled 为 TG 链接复用总开关（copyMessages 直拷跳过重复
 	// 下载上传）；nil 表示不变更。
@@ -367,11 +367,11 @@ func (s *Server) applySettingsUpdate(ctx context.Context, in settingsUpdateInput
 		}
 	}
 
-	// 频道副本同步开关（即时生效）：关闭只暂停副本投递，绑定关系保留
+	// 绑定频道投递开关（即时生效）：关闭只暂停副本投递，绑定关系保留
 	if in.ChannelCopyEnabled != nil {
 		current := LoadChannelCopyEnabled(ctx, s.st)
 		if current != *in.ChannelCopyEnabled {
-			if err := s.saveSettingValue(ctx, settingKeyChannelCopyEnable, "保存频道同步开关", *in.ChannelCopyEnabled); err != nil {
+			if err := s.saveSettingValue(ctx, settingKeyChannelCopyEnable, "保存绑定频道投递开关", *in.ChannelCopyEnabled); err != nil {
 				return res, err
 			}
 			s.audit(ctx, "settings.channel_copy_enabled", "settings", map[string]any{

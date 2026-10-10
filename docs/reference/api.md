@@ -1230,7 +1230,7 @@ cloud-drive.json.enc
 | `max_file_size_runtime_bytes` / `stream_limit_runtime_bytes` / `temp_dir_max_size_runtime_bytes` | int64 | 当前进程值 |
 | `media_same` | bool | 三项媒体配置是否都已生效 |
 | `memory_budget_bytes` | int64 | 内存管道进程级预算（字节；即时生效，settings 值优先于环境变量 `MEMORY_BUDGET`） |
-| `channel_copy_enabled` | bool | 频道副本同步总开关（即时生效；缺省 `true`） |
+| `channel_copy_enabled` | bool | 绑定频道投递总开关（任务成功后自动发副本到用户绑定频道；即时生效；缺省 `true`） |
 | `tg_reuse_enabled` | bool | 缓存频道复用总开关（即时生效；缺省 `true`） |
 | `dump_channel_id` | int64 | 缓存频道数字 ID（0 = 未配置；即时生效，settings 值优先于环境变量 `DUMP_CHANNEL_ID`） |
 | `dump_channel_title` | string | 缓存频道标题（展示用） |
@@ -1262,7 +1262,7 @@ cloud-drive.json.enc
 | `timezone` | string | IANA 时区名（如 `Asia/Shanghai`） |
 | `dedup_window_min` | int | 1–1440 分钟；缺省保持不变 |
 | `max_links_per_message` | int | 1–50；缺省保持不变，保存后即时影响新输入 |
-| `channel_copy_enabled` | bool | 频道副本同步总开关；缺省保持不变 |
+| `channel_copy_enabled` | bool | 绑定频道投递总开关；缺省保持不变 |
 | `tg_reuse_enabled` | bool | 缓存频道复用总开关；缺省保持不变 |
 | `dump_channel` | string | 缓存频道目标：`@用户名` / `t.me` 链接 / `-100` 数字 ID；经 Bot 校验（频道存在且 Bot 可发帖）后保存数字 ID；空串清除配置（显式 `0` 覆盖环境变量） |
 | `join_enabled` / `join_auto_leave_external` / `join_require_approval` / `join_mute_enabled` / `join_archive_enabled` | bool | 频道加入配置，逐项可选 |

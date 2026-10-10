@@ -1,5 +1,5 @@
 /**
- * 频道设置页测试：副本同步开关的回填与切换即保存语义。
+ * 频道设置页测试：绑定频道投递开关的回填与切换即保存语义。
  * 查询与写接口以模块 mock 注入，不触网络。
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -125,12 +125,12 @@ describe("频道设置页", () => {
 
     renderPage();
 
-    expect(screen.queryByRole("switch", { name: "频道副本同步总开关" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "绑定频道投递总开关" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /清除配置|验证并保存/ })).not.toBeInTheDocument();
     expect(saveSettingsMock).not.toHaveBeenCalled();
 
     resolveSettings(settingsView());
-    expect(await screen.findByRole("switch", { name: "频道副本同步总开关" })).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "绑定频道投递总开关" })).toBeChecked();
   });
 
   it("回填服务端当前开关值", async () => {
@@ -138,7 +138,7 @@ describe("频道设置页", () => {
 
     renderPage();
 
-    expect(await screen.findByRole("switch", { name: "频道副本同步总开关" })).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "绑定频道投递总开关" })).toBeChecked();
   });
 
   it("切换开关即保存 channel_copy_enabled", async () => {
@@ -147,7 +147,7 @@ describe("频道设置页", () => {
 
     renderPage();
 
-    const toggle = await screen.findByRole("switch", { name: "频道副本同步总开关" });
+    const toggle = await screen.findByRole("switch", { name: "绑定频道投递总开关" });
     fireEvent.click(toggle);
 
     await waitFor(() =>

@@ -31,7 +31,7 @@ type apiSettingsView struct {
 	TempDirMaxSizeRuntime         int64  `json:"temp_dir_max_size_runtime_bytes"` // 当前进程值
 	MemoryBudgetBytes             int64  `json:"memory_budget_bytes"`             // 内存管道进程级预算（即时生效）
 	MediaSame                     bool   `json:"media_same"`
-	ChannelCopyEnabled            bool   `json:"channel_copy_enabled"`     // 频道副本同步总开关（即时生效）
+	ChannelCopyEnabled            bool   `json:"channel_copy_enabled"`     // 绑定频道投递总开关（即时生效）
 	TGReuseEnabled                bool   `json:"tg_reuse_enabled"`         // TG 链接复用总开关（即时生效；默认开）
 	DumpChannelID                 int64  `json:"dump_channel_id"`          // 缓存频道数字 ID（0 = 未配置）
 	DumpChannelTitle              string `json:"dump_channel_title"`       // 缓存频道标题（展示用）

@@ -504,7 +504,7 @@ func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher, dumpSvc *
 		Events:    a.hub,         // 事件回调：连续任务失败 / 数据库写失败 / 临时目录占用
 		Progress:  a.progressReg, // 请求记录页实时进度（Web 记录页展示）
 		Copier:    a.bindings,    // 频道副本：任务成功后复制到该用户绑定的频道
-		// 频道同步开关：投递前实时读 settings（运行设置修改即时生效）
+		// 绑定频道投递开关：投递前实时读 settings（运行设置修改即时生效）
 		ChannelCopyEnabled: func() bool { return web.LoadChannelCopyEnabled(ctx, a.st) },
 		// TG 链接复用开关：任务取数前实时读 settings（关闭即回到完整下载上传）
 		ReuseEnabled: func() bool { return web.LoadTGReuseEnabled(ctx, a.st) },

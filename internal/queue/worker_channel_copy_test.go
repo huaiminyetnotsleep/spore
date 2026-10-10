@@ -99,7 +99,7 @@ func TestProcessSkipsChannelCopyWhenSwitchOff(t *testing.T) {
 		Sender:  &fakeSender{},
 		Store:   s,
 		Copier:  copier,
-		// 运行设置的频道同步开关关闭：跳过副本投递（绑定关系保留）
+		// 运行设置的绑定频道投递开关关闭：跳过副本投递（绑定关系保留）
 		ChannelCopyEnabled: func() bool { return false },
 		Log:                testLog(),
 	}

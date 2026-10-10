@@ -51,7 +51,7 @@ const (
 	KeyWatchSourceUnavailable = "watch.source_unavailable"    // 监听源探活不可用（bot 被移出或源被封禁）
 	KeyDumpChannelWriteFailed = "dump.channel_write_failed"   // 缓存频道写入失败（被封禁/失去权限/配置有误）
 
-	// 绑定频道失效事件：用户绑定的转发频道/群组（副本同步目标）。用户侧
+	// 绑定频道失效事件：用户绑定的转发频道/群组（绑定频道投递目标）。用户侧
 	// 已有私聊提醒与自动解绑，这里补齐管理员侧主动感知。
 	KeyBindingChannelGone     = "binding.channel_gone"      // 绑定频道本体消失（被封禁/删除/停用），已自动软解绑
 	KeyBindingChannelNoRights = "binding.channel_no_rights" // bot 被移出绑定频道/失去发言权限（可恢复，未解绑）
