@@ -462,6 +462,27 @@ CREATE INDEX idx_error_logs_request ON error_logs(request_id) WHERE request_id !
 CREATE INDEX idx_error_logs_created ON error_logs(created_at);
 
 ALTER TABLE cloud_uploads ADD COLUMN error_detail TEXT;`,
+
+	// v26：历史恢复只保存来源/目标坐标和状态，不改变历史索引。
+	`CREATE TABLE recovery_jobs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ status TEXT NOT NULL CHECK(status IN ('running','paused','completed','cancelled')),
+ target_chat_id INTEGER NOT NULL, target_title TEXT NOT NULL, bot_id INTEGER NOT NULL,
+ filter_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX idx_recovery_one_running ON recovery_jobs(status) WHERE status='running';
+CREATE TABLE recovery_items (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES recovery_jobs(id),
+ channel_key TEXT NOT NULL, message_id INTEGER NOT NULL, member_ids_json TEXT NOT NULL,
+ cache_copies_json TEXT NOT NULL, sent_ids_json TEXT NOT NULL DEFAULT '[]',
+ status TEXT NOT NULL CHECK(status IN ('pending','processing','succeeded','failed','unrecoverable','uncertain','skipped')),
+ method TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+ identity_key TEXT NOT NULL
+);
+CREATE INDEX idx_recovery_items_job ON recovery_items(job_id,status,id);
+CREATE INDEX idx_recovery_items_identity ON recovery_items(identity_key,status);`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

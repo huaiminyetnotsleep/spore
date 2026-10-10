@@ -90,6 +90,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/channel-join/channels", s.apiAuth(s.handleAPIJoinedChannelsList))
 	s.mountAPIWrite(mux, "/api/v1/channel-join/channels/leave", s.handleAPIJoinedChannelsLeave)
 
+	s.registerAPIRecoveryRoutes(mux)
+
 	// 监听源（/watch）：列表 / 管理员添加 / 审批 / 暂停开关 / 删除 / 移出 bot /
 	// 监听记录（预热事件）；私有邀请链接申请的审批/拒绝/重试/删除
 	mux.Handle("GET /api/v1/watch-sources", s.apiAuth(s.handleAPIWatchSourcesList))

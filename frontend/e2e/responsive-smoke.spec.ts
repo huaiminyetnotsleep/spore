@@ -1,8 +1,9 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { recoveryEnvelope, recoveryItemFixture, recoveryJobFixture, recoveryPreviewFixture } from "./recovery-fixtures";
 
 /**
  * 全路由响应式 smoke（实施计划 8.2）：
- * - 400px 覆盖 25 个受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
+ * - 400px 覆盖 全部受保护页面 + 登录 + 通配 404：页面容器无横向溢出，
  *   页面操作区 / 筛选 / 表单主按钮可见且落在视口宽度内；
  * - 宽表断言滚动发生在表格容器（.ant-table-content）内部；
  * - 1440 / 1024 / 768 覆盖代表性列表、详情、图表与设置页；
@@ -524,7 +525,7 @@ async function fulfillJSON(route: Route, status: number, body: unknown) {
   });
 }
 
-/** 全量替身：覆盖 25 个路由触达的全部读取端点；写请求统一返回 ok。 */
+/** 全量替身：覆盖 全部路由触达的全部读取端点；写请求统一返回 ok。 */
 async function mockAdminAPI(page: Page) {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -532,6 +533,10 @@ async function mockAdminAPI(page: Page) {
     const method = request.method();
 
     if (method === "POST") {
+      if (path.startsWith("/api/v1/recovery/")) {
+        await fulfillJSON(route, 200, path.endsWith("/preview") ? recoveryPreviewFixture : recoveryJobFixture);
+        return;
+      }
       await fulfillJSON(route, 200, { ok: true });
       return;
     }
@@ -617,6 +622,15 @@ async function mockAdminAPI(page: Page) {
       case "/api/v1/mtproto/status":
         await fulfillJSON(route, 200, mtprotoFixture);
         return;
+      case "/api/v1/recovery/jobs":
+        await fulfillJSON(route, 200, recoveryEnvelope([recoveryJobFixture]));
+        return;
+      case "/api/v1/recovery/jobs/71":
+        await fulfillJSON(route, 200, recoveryJobFixture);
+        return;
+      case "/api/v1/recovery/jobs/71/items":
+        await fulfillJSON(route, 200, recoveryEnvelope([recoveryItemFixture]));
+        return;
       case "/api/v1/bots":
         await fulfillJSON(route, 200, botsFixture);
         return;
@@ -634,7 +648,7 @@ async function mockAdminAPI(page: Page) {
   });
 }
 
-/** 25 个受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
+/** 全部受保护页面与页面骨架唯一 H1（与 routeMeta 的 title 一致）。 */
 const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin", heading: "总览" },
   { path: "/admin/stats", heading: "业务统计" },
@@ -648,6 +662,7 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/channel-bindings", heading: "频道绑定" },
   { path: "/admin/channel-settings", heading: "频道设置" },
   { path: "/admin/cloud-drive", heading: "云盘下载" },
+  { path: "/admin/recovery", heading: "历史恢复" },
   { path: "/admin/invite-approvals", heading: "加入审批" },
   { path: "/admin/joined-channels", heading: "已加入频道" },
   { path: "/admin/join-settings", heading: "受邀设置" },
@@ -716,7 +731,7 @@ async function expectActionsWithinViewport(page: Page, label: string) {
 }
 
 test.describe("全路由响应式 smoke", () => {
-  test("400px：25 个受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
+  test("400px：全部受保护页面无横向溢出且主操作/筛选可见", async ({ page }) => {
     await page.setViewportSize(PHONE_VIEWPORT);
     await mockAdminAPI(page);
 
@@ -793,6 +808,20 @@ test.describe("全路由响应式 smoke", () => {
     // 两字按钮 AntD 自动插入空格，用正则匹配
     await page.getByRole("button", { name: /重\s*置/ }).click();
     await expect(page.locator(".page-scaffold__title")).toHaveText("请求记录");
+  });
+
+  test("400px：历史恢复预检和选中详情保持表内滚动", async ({ page }) => {
+    await page.setViewportSize(PHONE_VIEWPORT);
+    await mockAdminAPI(page);
+    await gotoAdmin(page, "/admin/recovery");
+    await page.getByLabel("目标频道 / 超级群组").fill("-1001234567890");
+    await page.getByRole("button", { name: "权限预检" }).click();
+    await expect(page.getByRole("button", { name: "开始恢复" })).toBeVisible();
+    await page.getByRole("button", { name: "任务 #71" }).click();
+    await expect(page.getByText("部分发送，请核对目标。", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "继续任务" })).toBeVisible();
+    await expectNoHorizontalOverflow(page, "历史恢复预检与详情");
+    await expectActionsWithinViewport(page, "历史恢复预检与详情");
   });
 
   test("400px：用户新增 Modal 主按钮在视口内且可关闭", async ({ page }) => {

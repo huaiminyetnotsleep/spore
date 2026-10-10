@@ -29,7 +29,7 @@
 | 访问层 | `internal/store` 是唯一入口（`store.Open`）；业务 SQL 不出现在其他包 |
 | 连接 | 连接池固定 1 连接（SQLite 单写者，从根上消除写锁竞争） |
 | 连接级 PRAGMA | `journal_mode=WAL`、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL` |
-| schema 版本 | `PRAGMA user_version`（当前 **19**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
+| schema 版本 | `PRAGMA user_version`（当前 **26**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
 | 迁移规则 | 版本化、内嵌、**只增不改**：每个版本在独立事务内执行 DDL 并同事务写入 `user_version`；已发布迁移永不修改，新变更一律追加新版本 |
 
 容量目标：≤100 用户、约 5,000 请求/日（约 180 万行/年），远低于 SQLite 单文件上限，不引入 PostgreSQL/Redis 等外部数据库。
@@ -42,10 +42,10 @@
 
 ## 2. Schema 总览
 
-当前版本 v25 包含 **18 张业务表、22 个显式索引、4 个数据库外键**：
+当前版本 v26 包含 **20 张业务表、25 个显式索引、5 个数据库外键**：
 
-- 无触发器、无视图、无 CHECK 约束；状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
-- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`、`error_logs`）自动维护的内部表，**不属于业务 schema**。
+- 无触发器、无视图；恢复任务与条目的状态枚举另有 CHECK 约束，其他状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
+- `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`、`error_logs`）自动维护的内部表，**不属于业务 schema**。v26 的 `recovery_jobs`、`recovery_items` 同样使用 AUTOINCREMENT。
 - 频道没有独立表：频道维度的一切数据都是 `requests` 行的聚合（见 [第 4 节](#_4-表关系与约束)）。
 
 | 表 | 用途 | 引入版本 |
@@ -68,6 +68,9 @@
 | `watch_invite_requests` | 私有邀请链接监听申请的异步处理状态与安全展示快照 | v19 |
 | `sent_messages` | bot 发出消息坐标 → 请求的映射（/pin、/cancel 引用回复锚点；含频道副本组首坐标，供事后补置顶） | v22 |
 | `error_logs` | 错误日志中心：请求管线与 Bot 相关环节错误的逐条明细（来源/环节/错误码/根因串/参数快照），管理端筛选查询 | v25 |
+
+| `recovery_jobs` | 独立历史恢复任务：固定范围、目标、Bot、控制状态 | v26 |
+| `recovery_items` | 恢复单元的来源/缓存快照、执行状态与新目标输出坐标 | v26 |
 
 ## 3. 表数据字典
 
@@ -396,6 +399,42 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 
 保留策略：settings 键 `error_log_retention_days`（缺省 30 天）周期自动清理（每小时 + 启动即清一次）+ 管理端手动批量/按时间段删除（写审计）。
 
+### 3.19 recovery_jobs
+
+独立恢复任务，不属于普通 requests，不改变用户额度、绑定或全局缓存设置。唯一部分索引限制最多一个 `running` 任务。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 恢复任务 ID |
+| `status` | TEXT NOT NULL + CHECK | running / paused / completed / cancelled |
+| `target_chat_id` / `target_title` | INTEGER / TEXT NOT NULL | 创建时确认并固定的新目标 |
+| `bot_id` | INTEGER NOT NULL | 实际执行 Bot ID，不自动换 Bot |
+| `filter_json` | TEXT NOT NULL | channel_key/user_id/since/until；时间毫秒，until不含边界 |
+| `created_at` / `updated_at` | INTEGER NOT NULL | Unix毫秒 |
+| `last_error` | TEXT NOT NULL DEFAULT '' | 受控摘要，不记录正文或原始网络错误 |
+
+API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skipped 为条目状态实时聚合，不是本表列。创建及控制成功审计与状态变更同事务写入。
+
+### 3.20 recovery_items
+
+创建时固定恢复单元来源快照，不覆盖旧 requests/dump_entries/watch_events；只保存索引与结果，不包含内容或凭据。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 条目 ID |
+| `job_id` | INTEGER NOT NULL + FK | recovery_jobs.id |
+| `channel_key` / `message_id` | TEXT / INTEGER NOT NULL | 单元的规范来源坐标 |
+| `member_ids_json` | TEXT NOT NULL | 已知相册成员 ID 数组 |
+| `cache_copies_json` | TEXT NOT NULL | [{chat_id,message_ids}]，必须有已知缓存归属 |
+| `sent_ids_json` | TEXT NOT NULL DEFAULT '[]' | 新目标已知输出坐标，部分失败亦保留 |
+| `status` | TEXT NOT NULL + CHECK | pending/processing/succeeded/failed/unrecoverable/uncertain/skipped |
+| `method` | TEXT NOT NULL DEFAULT '' | cache/source/空 |
+| `error_code` / `error_message` | TEXT NOT NULL DEFAULT '' | 受控诊断 |
+| `created_at` / `updated_at` | INTEGER NOT NULL | Unix毫秒 |
+| `identity_key` | TEXT NOT NULL | 内部去重键，不向 API 返回 |
+
+发送前写 processing。重启将 processing 变为 uncertain、running任务变为paused；uncertain 不自动重试。结果不发布为普通 dump_entries 缓存索引，数据库备份不能单独还原消息或媒体。
+
 ## 4. 表关系与约束
 
 ### 4.1 数据库外键（均指向 `users(id)`，均 NO ACTION）
@@ -447,6 +486,14 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `idx_watch_invite_requests_hash_active` | `watch_invite_requests` | (invite_hash, status) | v19 | 相同完整 hash 的活动申请查重 |
 | `idx_sent_messages_msg` | `sent_messages` | (bot_id, chat_id, message_id) UNIQUE | v22 | 引用回复按坐标反查请求 |
 | `idx_sent_messages_request` | `sent_messages` | (request_id) | v22 | 按请求取频道副本坐标（事后补置顶） |
+
+| `idx_error_logs_created` | `error_logs` | (created_at) | v25 | 错误时间范围 |
+| `idx_error_logs_source` | `error_logs` | (source, id) | v25 | 错误来源过滤 |
+| `idx_error_logs_code` | `error_logs` | (code, id) | v25 | 错误码过滤 |
+| `idx_error_logs_request` | `error_logs` | (request_id) WHERE request_id != 0 | v25 | 请求错误反查 |
+| `idx_recovery_one_running` | `recovery_jobs` | (status) UNIQUE WHERE status='running' | v26 | 限制单运行任务 |
+| `idx_recovery_items_job` | `recovery_items` | (job_id, status, id) | v26 | 进度、执行与分页 |
+| `idx_recovery_items_identity` | `recovery_items` | (identity_key, status) | v26 | 同目标成功恢复去重 |
 
 隐式索引：`events.key` 的 UNIQUE 索引，以及各主键索引（含 `usage_daily` 复合主键）。
 
@@ -538,6 +585,8 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 - worker：按阶段更新 `requests` 状态与终态；云盘任务写 `cloud_uploads`；成功投递写 `dump_entries` 缓存副本坐标；
 - 绑定、加入、审批等管理动作与系统事件：写 `audit_log` / `events`。
 
+历史恢复 API `/api/v1/recovery/preview` 读取 requests/dump_entries/watch_events 等登记索引；`/recovery/jobs`、详情、逐项及控制读写 recovery_jobs/recovery_items，创建/控制成功审计同事务写入 audit_log，不覆盖原历史索引。恢复输出不是普通缓存复用索引。
+
 ## 9. 备份、导入与版本兼容
 
 **导出**：`VACUUM INTO` 生成在线一致快照，只含业务数据库；不含 Session、peers、云盘配置、临时媒体（见第 7 节）。
@@ -582,3 +631,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v23 | `requests.error_detail`（失败根因原始错误串落库，管理端详情页展示；重试/重置随 error_code 清空） |
 | v24 | `dump_entries.dump_channel_id`（副本所在缓存频道，0 = 存量永不命中）；`channel_bindings` 软解绑状态机（status/unbind_reason/unbound_at，解绑不删行） |
 | v25 | `error_logs` 错误日志中心表与四索引（来源/错误码/请求/时间）；`cloud_uploads.error_detail`（单文件上传失败根因，对称 requests v23） |
+| v26 | `recovery_jobs` / `recovery_items` 历史恢复任务与逐项坐标/结果；单运行任务唯一部分索引、逐项分页及身份去重索引；状态 CHECK 和 job_id 外键 |

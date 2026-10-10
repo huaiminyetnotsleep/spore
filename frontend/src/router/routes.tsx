@@ -134,6 +134,9 @@ const BotsPage = lazy(() =>
 const MTProtoPage = lazy(() =>
   import("../features/mtproto/MTProtoPage").then((m) => ({ default: m.MTProtoPage })),
 );
+const RecoveryPage = lazy(() =>
+  import("../features/recovery/RecoveryPage").then((m) => ({ default: m.RecoveryPage })),
+);
 const AuditPage = lazy(() =>
   import("../features/audit/AuditPage").then((m) => ({ default: m.AuditPage })),
 );
@@ -244,6 +247,15 @@ export const routeMeta = [
     title: "频道设置",
     groupKey: "request-channels",
     icon: <SettingOutlined />,
+    menuVisible: true,
+  },
+  {
+    key: "recovery",
+    path: "/recovery",
+    label: "历史恢复",
+    title: "历史恢复",
+    groupKey: "request-channels",
+    icon: <HistoryOutlined />,
     menuVisible: true,
   },
   {
@@ -426,7 +438,7 @@ export const navigationGroups = [
   {
     key: "request-channels",
     label: "请求与频道",
-    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings"],
+    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings", "recovery"],
   },
   {
     key: "watch-group",
@@ -553,6 +565,7 @@ export function AppRoutes() {
         <Route path="/watch-settings" element={<WatchSettingsPage />} />
         <Route path="/watch-events" element={<WatchEventsPage />} />
         <Route path="/cloud-drive" element={<CloudDrivePage />} />
+        <Route path="/recovery" element={<RecoveryPage />} />
         <Route path="/invite-approvals" element={<JoinApprovalsPage />} />
         <Route path="/joined-channels" element={<JoinedChannelsPage />} />
         <Route path="/join-settings" element={<JoinSettingsPage />} />

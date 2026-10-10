@@ -37,6 +37,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/notifycfg"
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	queuepkg "github.com/huaiminyetnotsleep/spore/internal/queue"
+	"github.com/huaiminyetnotsleep/spore/internal/recovery"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
@@ -375,6 +376,11 @@ func main() {
 	// 每 bot 独立的大文件直传会话（botID 即 token 数字前缀）：跨 MTProto
 	// 重连复用，长轮询重建不影响会话。
 	pool := botpool.New()
+	recoverySvc, err := recovery.New(ctx, st, pool)
+	if err != nil {
+		logger.Error("初始化历史恢复失败", "error", err.Error())
+		os.Exit(1)
+	}
 	runtime := newBotRuntime(pool, st, logger)
 	botClients := make(map[int64]*mtproto.BotClient, len(bots))
 	for i, bt := range bots {
@@ -452,7 +458,8 @@ func main() {
 		Store:             st,
 		Cfg:               cfg,
 		Log:               logger,
-		Access:            accessSvc,                                        // 管理操作入口（审批/重试/限额/设置）
+		Access:            accessSvc, // 管理操作入口（审批/重试/限额/设置）
+		Recovery:          recoverySvc,
 		DumpCache:         dumpHolder,                                       // 缓存频道迁移工具（ready 生命周期内刷新）
 		Queue:             q,                                                // 总览页队列指标
 		MTProto:           &mtprotoWebAdapter{c: m},                         // 扫码登录状态与重连/清理会话接口（§6.4）
@@ -527,6 +534,7 @@ func main() {
 		cloudSink:   rcloneSink,
 		botIdentity: botIdentity,
 		dumpHolder:  dumpHolder,
+		recovery:    recoverySvc,
 	}
 
 	err = m.Run(ctx, a.onMTProtoReady)

@@ -15,6 +15,7 @@
 - [5a. 云盘下载](#_5a-云盘下载)
 - [5b. 缓存补写（转存缓存频道）](#_5b-缓存补写-转存缓存频道)
 - [5c. 云盘配置备份与恢复](#_5c-云盘配置备份与恢复)
+- [5d. 已处理历史恢复](#_5d-已处理历史恢复)
 - [6. 频道统计](#_6-频道统计)
 - [6a. 频道加入（受邀频道）](#_6a-频道加入-受邀频道)
 - [7. 事件中心](#_7-事件中心)
@@ -855,6 +856,54 @@ cloud-drive.json.enc
 错误：`400 BAD_REQUEST`（确认值不符）、`409 CONFLICT`（没有可用回滚点）、`503 SERVICE_UNAVAILABLE`（配置管理器不可用）。失败时保持当前配置不变。
 
 安全审计只记录格式版本、加密载荷哈希（`sha256` 是 AES-256-GCM 加密 payload 的摘要，不是整个 ZIP 包的摘要）、大小、目的地名称/数量、动作与结果；导出、上传、确认、取消和回滚过程中，备份密码与 `options` 值均不得出现在日志、审计、错误响应或常规 JSON 响应中。
+
+---
+
+## 5d. 已处理历史恢复
+
+独立后台任务只恢复系统已登记的请求、缓存和监听历史，不枚举原来源全部消息，不重发用户私聊，不同步其他绑定，不自动切换缓存或绑定配置。所有接口要求管理员会话；POST 要求会话级 CSRF。读取与成功写响应均带 `Cache-Control: no-store`，错误使用统一受控信封，不返回 Telegram 原始错误详情。
+
+### POST /api/v1/recovery/preview
+### POST /api/v1/recovery/jobs
+
+预览和创建使用相同 JSON：
+
+```json
+{
+  "filter": {"channel_key":"", "user_id":0, "since":0, "until":0},
+  "target":"-1001234567890",
+  "bot_id":0
+}
+```
+
+`target` 必填，是公开用户名或私有数字 ID；必须为可发送的频道或非论坛超级群组。`bot_id=0` 选择可用主 Bot，创建时保存真实 Bot ID，此后不自动换 Bot；指定 ID 必须对应可用机器人。`filter` 可省略：空来源、用户 ID 为 0、时间为 0 分别表示不限制该条件；时间是 Unix 毫秒，`since` 含边界，`until` 不含边界且非零时必须大于 `since`。来源支持公开用户名和私有频道数字 ID，按登记索引匹配，不扫描 Telegram 历史。
+
+预览响应 `200` 为原始对象：`{target_chat_id,target_title,bot_id,total,with_cache,without_cache,cache_channels,warnings}`。`cache_channels` 每项为 `{channel_id,readable,message}`，只是聊天与权限元数据检查，不试发/删除消息；`with_cache` 表示有已知归属的缓存坐标，不保证每条消息存在。预览不创建任务；创建时重新验证，不把之前预览作为权限凭证。
+
+创建响应 `201` 为 `RecoveryJob` 原始对象，固定候选集、目标与执行 Bot。空候选、冲突或范围过大拒绝创建，不把当前分页偷偷当作全部范围。相同目标/Bot 的候选有既有不确定或在途结果时也拒绝创建，防止用新任务绕过人工核对。创建成功的 `recovery.create` 审计与任务、条目在同一事务提交。
+
+### GET /api/v1/recovery/jobs
+### GET /api/v1/recovery/jobs/{id}
+### GET /api/v1/recovery/jobs/{id}/items
+
+列表支持统一 `page` / `page_size`，响应 `{items,page,page_size,total,total_pages}`，空列表为 `[]`。详情返回 `RecoveryJob` 原始对象。条目列表额外支持可选 `status`：`pending`、`processing`、`succeeded`、`failed`、`unrecoverable`、`uncertain`、`skipped`；未知值返回 `400`。
+
+`RecoveryJob` 字段：`id,status,target_chat_id,target_title,bot_id,filter,created_at,updated_at,total,pending,processing,succeeded,failed,unrecoverable,uncertain,skipped,last_error`。任务状态为 `running`、`paused`、`completed`、`cancelled`；时间字段为 Unix 毫秒，计数字段实时聚合逐项状态。
+
+`RecoveryItem` 字段：`id,job_id,channel_key,message_id,member_ids,cache_copies,sent_ids,status,method,error_code,error_message,created_at,updated_at`。`cache_copies` 每项为 `{chat_id,message_ids}`，`sent_ids` 是已知新目标输出；`method` 为 `cache`、`source` 或空字符串。只保存坐标与受控诊断，不包含正文、caption、实体内容、媒体或会话凭据。
+
+### POST /api/v1/recovery/jobs/{id}/pause
+### POST /api/v1/recovery/jobs/{id}/resume
+### POST /api/v1/recovery/jobs/{id}/cancel
+### POST /api/v1/recovery/jobs/{id}/retry
+
+控制无需请求体，成功返回更新后的任务原始对象。暂停/取消会停止后续条目并等待在途工作结束；继续会重新验证机器人和目标权限。重试仅限 paused/completed 且存在 failed/unrecoverable 的任务，重新排入确定失败或补齐权限后可再尝试的无法恢复项目，不重发成功、跳过或结果不确定的项目。状态不允许时返回 `409 STORE_CONSTRAINT`。成功控制审计 `recovery.pause/resume/cancel/retry` 与状态变化同事务提交。
+
+执行优先使用缓存，只有确定没有发送成功时才回退其他副本或由读取账号重取原来源；双方不可读时标记无法恢复。部分复制、输出数量异常、网络超时或处理中断可能已产生消息，标记 `uncertain` 并保留已知输出，**不保证 exactly-once，也不盲目重试**。启动时未完成运行任务转为暂停，在途项目转为不确定，数据库恢复不会自动重发。
+
+恢复不覆盖 `dump_entries`，也不自动发布普通缓存复用索引；手动把目标设为缓存不等于旧链接立即命中。新输出使用新消息 ID/发送时间，不承诺原作者、链接、回复关系或全局历史顺序。
+
+常见错误：`400` 非法输入/分页/状态；`404 NOT_FOUND` 未知任务；`409 STORE_CONSTRAINT` 空范围或状态冲突；`409 SEND_TARGET_INVALID` 目标不可用/无发送权限；`503 BOT_DISABLED` 执行 Bot 不可用；`503` 服务或 Telegram 网络不可用。权限预检不能替代逐项实际结果。
 
 ---
 

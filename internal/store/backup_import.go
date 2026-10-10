@@ -114,6 +114,22 @@ func ValidateBackup(ctx context.Context, path string) error {
 			return fmt.Errorf("备份缺少 schema v%d 必要字段 %s.%s", requirement.version, requirement.table, requirement.column)
 		}
 	}
+	if version >= 26 {
+		for table, required := range map[string][]string{
+			"recovery_jobs":  {"id", "status", "target_chat_id", "target_title", "bot_id", "filter_json", "created_at", "updated_at", "last_error"},
+			"recovery_items": {"id", "job_id", "channel_key", "message_id", "member_ids_json", "cache_copies_json", "sent_ids_json", "status", "method", "error_code", "error_message", "created_at", "updated_at", "identity_key"},
+		} {
+			columns, e := tableColumns(ctx, db, table)
+			if e != nil {
+				return e
+			}
+			for _, column := range required {
+				if !columns[column] {
+					return fmt.Errorf("备份缺少 schema v26 必要字段 %s.%s", table, column)
+				}
+			}
+		}
+	}
 	return nil
 }
 

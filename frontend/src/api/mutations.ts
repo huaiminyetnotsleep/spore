@@ -25,7 +25,7 @@ import type {
 } from "./admin";
 
 /** 写请求公共出口：JSON 体 + CSRF 请求头。 */
-async function postJSON<T>(path: string, body?: unknown): Promise<T> {
+export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>(path, {
     method: "POST",
     headers: {

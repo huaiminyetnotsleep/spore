@@ -230,6 +230,7 @@ type Options struct {
 	// Bindings 是频道绑定服务（internal/binding.Service）；缺失时相关路由报不可用。
 	Bindings  ChannelBinder
 	DumpCache DumpCacheMigrator // 可选：缓存频道迁移工具（跨生命周期持有器注入）
+	Recovery  RecoveryManager   // 可选：已处理历史的独立恢复任务
 	// ChannelJoin 是频道加入管理服务（internal/joinmgr.Service）；
 	// 缺失时相关路由报不可用。
 	ChannelJoin ChannelJoinManager
@@ -290,6 +291,7 @@ type Server struct {
 	monitor          *monitor.Service
 	bindings         ChannelBinder
 	dumpCache        DumpCacheMigrator
+	recovery         RecoveryManager
 	channelJoin      ChannelJoinManager
 	watch            WatchManager
 	transfer         TransferConfig
@@ -364,6 +366,7 @@ func New(opt Options) (*Server, error) {
 		monitor:          opt.Monitor,
 		bindings:         opt.Bindings,
 		dumpCache:        opt.DumpCache,
+		recovery:         opt.Recovery,
 		channelJoin:      opt.ChannelJoin,
 		watch:            opt.Watch,
 		transfer:         opt.Transfer,

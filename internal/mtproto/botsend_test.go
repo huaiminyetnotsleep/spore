@@ -444,10 +444,11 @@ func TestBotClientSendLargeMediaErrors(t *testing.T) {
 // "先注册后整组"断言；failUploadOn（1 起，0 = 不注入）在对应次数的
 // uploadMedia 上返回 uploadErr。
 type albumSendInvoker struct {
-	mu           sync.Mutex
-	users        tg.UserClassVector
-	failUploadOn int
-	uploadErr    error
+	mu              sync.Mutex
+	users           tg.UserClassVector
+	failUploadOn    int
+	uploadErr       error
+	partialResponse bool
 
 	nextID       int64
 	usersCalls   int
@@ -495,10 +496,11 @@ func (f *albumSendInvoker) Invoke(_ context.Context, req bin.Encoder, d bin.Deco
 		f.sendCalls++
 		f.callLog = append(f.callLog, "sendMultiMedia")
 		f.lastSend = r
-		payload = &tg.Updates{Updates: []tg.UpdateClass{
-			&tg.UpdateMessageID{ID: 4242, RandomID: 1},
-			&tg.UpdateMessageID{ID: 4243, RandomID: 2},
-		}}
+		updates := []tg.UpdateClass{&tg.UpdateMessageID{ID: 4242, RandomID: 1}, &tg.UpdateMessageID{ID: 4243, RandomID: 2}}
+		if f.partialResponse {
+			updates = updates[:1]
+		}
+		payload = &tg.Updates{Updates: updates}
 	default:
 		return fmt.Errorf("测试 invoker：未预期的请求 %T", req)
 	}
@@ -522,6 +524,17 @@ func albumMembers() ([]message.Media, []io.Reader, []message.Caption) {
 			}},
 			{Text: "视频说明"},
 		}
+}
+
+func TestBotClientSendAlbumPartialResponseKeepsKnownIDs(t *testing.T) {
+	inv := &albumSendInvoker{partialResponse: true, users: tg.UserClassVector{Elems: []tg.UserClass{&tg.User{ID: 7, AccessHash: 777}}}}
+	c := newTestBotClient(t)
+	c.setReady(tg.NewClient(inv))
+	medias, readers, captions := albumMembers()
+	ids, err := c.SendAlbum(context.Background(), 7, medias, readers, captions)
+	if err == nil || len(ids) != 1 || ids[0] != 4242 {
+		t.Fatalf("lost partial output: ids=%v err=%v", ids, err)
+	}
 }
 
 func TestBotClientSendAlbumTwoPhase(t *testing.T) {

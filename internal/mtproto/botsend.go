@@ -168,7 +168,7 @@ func (c *BotClient) SendAlbum(ctx context.Context, chatID int64, medias []messag
 	}
 	ids := sentMessageIDs(upd)
 	if len(ids) != len(medias) {
-		return nil, apperr.New(apperr.CodeInternal,
+		return ids, apperr.New(apperr.CodeInternal,
 			fmt.Sprintf("MessagesSendMultiMedia 响应应含 %d 条消息，得到 %d 条", len(medias), len(ids)))
 	}
 	return ids, nil

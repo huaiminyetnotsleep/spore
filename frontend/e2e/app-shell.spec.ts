@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { recoveryEnvelope, recoveryItemFixture, recoveryJobFixture, recoveryPreviewFixture } from "./recovery-fixtures";
 
 const composeMode = Boolean(process.env.PLAYWRIGHT_BASE_URL);
 const accessKey = process.env.PLAYWRIGHT_ACCESS_KEY;
@@ -187,6 +188,18 @@ async function mockAdminAPI(page: Page, options: { sessionStatus?: number; users
     }
     if (path === "/api/v1/users/101" && method === "GET") {
       await fulfillJSON(route, 200, userDetailFixture);
+      return;
+    }
+    if (path === "/api/v1/bots" && method === "GET") {
+      await fulfillJSON(route, 200, { bots: [{ bot_id: 42, name: "Fixture Bot", primary: true, online: true, disabled: false, restart_pending: false }], max_bots: 3, need_apply: false });
+      return;
+    }
+    if (path.startsWith("/api/v1/recovery/")) {
+      const payload = method === "POST"
+        ? path.endsWith("/preview") ? recoveryPreviewFixture : recoveryJobFixture
+        : path.endsWith("/items") ? recoveryEnvelope([recoveryItemFixture])
+        : path.endsWith("/jobs") ? recoveryEnvelope([recoveryJobFixture]) : recoveryJobFixture;
+      await fulfillJSON(route, 200, payload);
       return;
     }
     if (path === "/api/v1/overview" && method === "GET") {

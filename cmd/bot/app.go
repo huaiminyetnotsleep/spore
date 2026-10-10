@@ -32,6 +32,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/notify"
 	"github.com/huaiminyetnotsleep/spore/internal/progress"
 	queuepkg "github.com/huaiminyetnotsleep/spore/internal/queue"
+	"github.com/huaiminyetnotsleep/spore/internal/recovery"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
 	"github.com/huaiminyetnotsleep/spore/internal/transfercfg"
@@ -66,7 +67,8 @@ type app struct {
 	cloud       *cloudarchive.Manager
 	cloudSink   cloudarchive.Sink
 	botIdentity *botIdentityStore
-	dumpHolder  *dumpCacheHolder // 当前 dumpcache 服务持有器（Web 迁移端点委托）
+	dumpHolder  *dumpCacheHolder  // 当前 dumpcache 服务持有器（Web 迁移端点委托）
+	recovery    *recovery.Service // 进程级恢复状态，源API只在ready内租用
 }
 
 // onMTProtoReady 在用户号 MTProto 就绪（含重连）时执行：绑定资料刷新与
@@ -175,6 +177,18 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	// 队列可观测地结束：轮询停止后等 drain（退出通知+状态清理）完成再退出本轮
 	queueDone := make(chan struct{})
 	deps := a.queueDeps(ctx, fetcher, dumpSvc)
+	recoveryDone := make(chan struct{})
+	go func() {
+		defer close(recoveryDone)
+		if a.recovery == nil {
+			return
+		}
+		if err := a.recovery.Run(ctx, recovery.Runtime{Queue: a.q, Source: func(c context.Context, item store.RecoveryItem, target int64, sender delivery.Sender) (queuepkg.RecoveryResult, error) {
+			return queuepkg.RecoverySource(c, deps, item, target, sender)
+		}}); err != nil {
+			a.log.Error("历史恢复runner停止", "error", err.Error())
+		}
+	}()
 	go func() {
 		a.q.Run(ctx, a.cfg.WorkerCount, queuepkg.Process(deps), queuepkg.Discard(deps))
 		close(queueDone)
@@ -197,6 +211,7 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		}(m)
 	}
 	wg.Wait()
+	<-recoveryDone // join恢复租约，旧MT API返回后永不再使用
 	<-queueDone
 	return nil
 }
