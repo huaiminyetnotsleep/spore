@@ -39,6 +39,9 @@ var eventCatalog = []EventDefinition{
 	{Type: KeyMTProtoBanned, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityCritical, Title: "用户号被封禁或会话被撤销", Description: "MTProto 用户号已被封禁或会话被撤销，请导出备份后清理会话文件并用新号扫码登录。", SupportsRecovery: true},
 	{Type: KeyBotBanned, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityCritical, Title: "Bot Token 已失效", Description: "Bot Token 已失效（被封禁或撤销），该 Bot 已停用；请在 @BotFather 检查状态或替换 Token。", SupportsRecovery: true},
 	{Type: KeyBackupFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "备份执行失败", Description: "自动或手动备份执行失败，请检查磁盘空间与数据目录。", SupportsRecovery: true},
+	{Type: KeySourceInaccessible, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "提取源频道无法访问", Description: "提取源频道无法访问（可能已被封禁、删除或读取账号未加入），相关任务已失败；请检查源频道状态。"},
+	{Type: KeyWatchSourceUnavailable, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityError, Title: "监听源不可用", Description: "监听源无法访问（受理 bot 可能已被移出或源已被封禁），该源新消息将无法预热缓存；请在管理端确认源状态。", SupportsRecovery: true},
+	{Type: KeyDumpChannelWriteFailed, Category: CategorySystemAlert, TypeLabel: "系统告警", Severity: SeverityWarn, Title: "缓存频道写入失败", Description: "缓存频道写入失败（可能已被封禁、bot 失去发帖权限或配置有误）；任务投递不受影响，但同链接暂无法秒回复用。", SupportsRecovery: true},
 
 	// 活动通知：逐次即时推送，不写事件中心（审计已有 audit_log 覆盖）。
 	{Type: KeyWebAdminLogin, Category: CategoryActivity, TypeLabel: "活动通知", Severity: SeverityInfo, Title: "管理后台登录成功", Description: "有新的管理后台登录。"},

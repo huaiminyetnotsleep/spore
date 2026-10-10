@@ -65,6 +65,10 @@ type EventSink interface {
 	// StoreWriteFailed 上报任务终态落库失败（数据库错误的代表性位置）。
 	// scene 为写入场景的可读标签（随告警展示）。
 	StoreWriteFailed(ctx context.Context, scene string)
+	// SourceInaccessible 上报一次源频道不可访问（CHANNEL_NOT_ACCESSIBLE，
+	// 含源被封禁/删除/读取账号未加入）：源侧状态信号单次即告警，不等
+	// 连续失败累计（ref 为来源消息链接，随告警展示）。
+	SourceInaccessible(ctx context.Context, ref string)
 	// CheckTempDir 在任务开始前提供低频抽样点：事件中心据此检查临时目录占用。
 	CheckTempDir(ctx context.Context)
 }
@@ -312,6 +316,12 @@ func Process(d Deps) Processor {
 			// 错误日志中心：每次失败尝试逐条留痕（requests.error_detail 只保留
 			// 最终一次，重试期间的中间根因在此不丢）
 			d.ErrLog.Record(ctx, taskErrorLog(j, ae, meta))
+			// 源不可访问（含被封禁/删除/读取账号未加入）单次即事件告警：
+			// 这是源侧状态信号，等连续失败累计会让管理员错过单源低频失效；
+			// DumpOnly 补写任务同样上报（该路径本就不打扰用户）。
+			if ae.Code == apperr.CodeChannelInaccessible && d.Events != nil {
+				d.Events.SourceInaccessible(ctx, j.Ref.String())
+			}
 			if finishErr := finishRequest(d, ctx, j, store.RequestResult{
 				Status:           store.RequestFailed,
 				ErrorCode:        string(ae.Code),
@@ -955,7 +965,7 @@ func finishBotDisabled(d Deps, ctx context.Context, j Job) {
 const errorDetailLimit = 300
 
 // errorDetailRaw 提取失败根因文本（不截断）：优先取 AppError 的 cause
-//（保留错误链上下文，如 "FLOOD_WAIT_X: 3000"、Bot API 响应描述），无
+// （保留错误链上下文，如 "FLOOD_WAIT_X: 3000"、Bot API 响应描述），无
 // cause 时用内部描述，最后回落码字符串。requests.error_detail 经
 // errorDetailText 按 300 截断后使用；错误日志记录传原文交给 errlog 截断。
 func errorDetailRaw(ae *apperr.AppError) string {

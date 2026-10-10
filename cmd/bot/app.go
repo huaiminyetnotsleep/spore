@@ -161,7 +161,12 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	//（频道侧审核、Bot 权限人工配置）最迟一个周期自动推进。
 	a.watch.SetBots(a.pool.BotAPIs())
 	a.watch.SetNotifier(joinmgr.SenderNotifier{Sender: botpool.UserRouter{Pool: a.pool}})
+	// 监听源探活：源把 bot 移出/封禁后没有任何错误信号（只是收不到新帖），
+	// 周期 GetChat 兜底发现并上报 watch.source_unavailable 事件（恢复自动
+	// 解决）；缓存频道写失败/恢复事件同经 Hub 推送管理员。
+	a.watch.SetEvents(a.hub)
 	go a.watch.RunReconcile(ctx)
+	go a.watch.RunHealthCheck(ctx)
 
 	// 业务发送走路由：未超过 Bot API 上限的媒体走 Bot API 上传，超限媒体经
 	// 受理 bot 的 MTProto 会话直传（不经 Bot API 服务器，上限 2000MB）；
@@ -458,6 +463,9 @@ func (a *app) dumpChannelClosure(ctx context.Context) func() int64 {
 func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
 	dumpChannel := a.dumpChannelClosure(ctx)
 	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannel, a.log)
+	// 写失败/恢复上报事件中心（dump.channel_write_failed）：缓存频道被封
+	// 不中断服务，写失败是唯一信号，不能只有进程日志。
+	dumpSvc.SetEvents(a.hub)
 	a.dumpHolder.Set(dumpSvc)
 	a.access.SetDumpLive(dumpSvc.EntryLive)
 	a.access.SetDumpChannelID(dumpChannel)

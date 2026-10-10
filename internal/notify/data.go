@@ -55,6 +55,22 @@ type StoreWriteData struct {
 	Scene string // 写入场景（提交落库 / 队列满终态 / 任务开始标记 / 任务终态）
 }
 
+// SourceInaccessibleData 提取源频道无法访问（source.channel_inaccessible）。
+type SourceInaccessibleData struct {
+	Ref string // 最近一次失败任务的来源消息链接（受控 t.me 链接）
+}
+
+// DumpWriteData 缓存频道写入失败（dump.channel_write_failed）。
+type DumpWriteData struct {
+	Code string // apperr 错误码（受控码名，不含错误原文）
+}
+
+// WatchSourceUnavailableData 监听源探活不可用（watch.source_unavailable）。
+type WatchSourceUnavailableData struct {
+	Sources []string // 当前不可用源的展示名（标题优先，回退 @用户名；封顶 5 个）
+	Extra   int      // 超出封顶数量的其余不可用源个数
+}
+
 // ---- 活动通知 payload ----
 
 // AdminLoginData 管理后台登录成功（web.admin_login）。

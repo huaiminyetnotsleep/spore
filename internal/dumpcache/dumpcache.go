@@ -18,9 +18,11 @@ package dumpcache
 //     的 canonical clean caption 只重写组首——不从源 items 按 span 重建
 //     多条 caption（会把问题形态带回缓存并经复用扩散）。
 //
-// 全部步骤尽力而为：任一失败只记日志、不落条目（下次成功投递自愈），
-// 不影响任务结果。首次失败以 Warn 提示检查 DUMP_CHANNEL_ID 与 bot 频道
-// 管理员权限（替代启动期预校验：写失败本身就是最准确的校验）。
+// 全部步骤尽力而为：任一失败记日志、向事件中心上报管理员告警
+//（dump.channel_write_failed，缓存频道被封/失去权限/配置有误的唯一主动
+// 感知渠道）、不落条目（下次成功投递自愈），不影响任务结果。首次失败
+// 以 Warn 提示检查 DUMP_CHANNEL_ID 与 bot 频道管理员权限（替代启动期
+// 预校验：写失败本身就是最准确的校验）。
 
 import (
 	"context"
@@ -29,10 +31,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 )
+
+// Events 是缓存频道写入失败/恢复的事件上报出口（*notify.Hub 结构性满足；
+// nil 表示未装配，跳过上报）。定义在包内以保持依赖边界——dumpcache 不
+// 直接依赖 notify 包。
+type Events interface {
+	// DumpChannelWriteFailed 上报一次缓存频道写入失败（code 为 apperr 错误码，
+	// 不含错误原文）。事件中心按 key 合并并受冷却窗口约束，逐任务失败不会刷屏。
+	DumpChannelWriteFailed(ctx context.Context, code string)
+	// DumpChannelRecovered 在写入恢复成功后自动解决对应事件
+	// （事件从未发生时为静默 no-op）。
+	DumpChannelRecovered(ctx context.Context)
+}
 
 // Service 是缓存频道读写通道；channelID 闭包实时读取当前配置（Web 端
 // settings 优先，环境变量兜底，main 注入），返回 0 表示未配置（功能关闭）。
@@ -45,6 +60,7 @@ type Service struct {
 	st        *store.Store
 	channelID func() int64
 	log       *slog.Logger
+	events    Events // 写入失败/恢复事件上报；nil 跳过（SetEvents 在服务发布前调用）
 
 	hintOnce sync.Once // 首次写失败的配置提示只打一次
 
@@ -58,6 +74,12 @@ type Service struct {
 func New(snd delivery.Sender, sndFor func(botID int64) delivery.Sender, st *store.Store,
 	channelID func() int64, log *slog.Logger) *Service {
 	return &Service{snd: snd, sndFor: sndFor, st: st, channelID: channelID, log: log}
+}
+
+// SetEvents 注入写入失败/恢复事件出口（装配层在服务对外发布前调用一次，
+// 早于任何任务路径使用，因此字段无需加锁）。nil 表示不装配。
+func (s *Service) SetEvents(events Events) {
+	s.events = events
 }
 
 // senderFor 解析任务应使用的发送通道：受理 bot 优先，未命中回退 snd。
@@ -92,6 +114,7 @@ func (s *Service) RecordEntry(ctx context.Context, channelKey string, messageID 
 	if !ok || len(dumpIDs) == 0 {
 		return
 	}
+	s.recovered(ctx) // 能走到落条目，说明副本发送已成功——视为写入恢复信号
 	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
 		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
 		DumpChannelID: channel,
@@ -247,6 +270,7 @@ func (s *Service) WriteClean(ctx context.Context, botID, chatID int64, channelKe
 		dumpIDs = ids
 	}
 
+	s.recovered(ctx) // 复制与 caption 清洗全部成功：缓存频道写入恢复
 	if _, err := s.st.InsertDumpEntry(ctx, store.DumpEntry{
 		ChannelKey: channelKey, MessageID: messageID, DumpIDs: dumpIDs,
 		DumpChannelID: channel,
@@ -281,7 +305,8 @@ func CleanCaption(it message.Item, first bool, sourceURL string, links []message
 }
 
 // failHint 记录写入失败；首次附带配置检查提示（频道 ID 是否正确、bot 是否
-// 为频道管理员）。
+// 为频道管理员）。同时向事件中心上报管理员告警——缓存频道被封不会中断
+// 服务，若无事件管理员只能靠日志巡检发现；code 为受控错误码，不含错误原文。
 func (s *Service) failHint(ctx context.Context, err error) {
 	if ctx.Err() != nil {
 		return // 任务收尾窗口取消不算配置问题
@@ -290,4 +315,15 @@ func (s *Service) failHint(ctx context.Context, err error) {
 	s.hintOnce.Do(func() {
 		s.log.Warn("缓存频道首次写入失败：请检查 DUMP_CHANNEL_ID 是否正确、bot 是否为该频道管理员（复制仍会回落，不影响任务）")
 	})
+	if s.events != nil {
+		s.events.DumpChannelWriteFailed(ctx, string(apperr.From(err).Code))
+	}
+}
+
+// recovered 上报一次"写入恢复"信号：副本写入链路重新成功（干净副本写入
+// 成功，或补写/预热任务直接发送成功后落条目）。事件从未发生时静默 no-op。
+func (s *Service) recovered(ctx context.Context) {
+	if s.events != nil {
+		s.events.DumpChannelRecovered(ctx)
+	}
 }

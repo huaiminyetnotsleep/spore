@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/huaiminyetnotsleep/spore/internal/apperr"
 	"github.com/huaiminyetnotsleep/spore/internal/delivery"
 	"github.com/huaiminyetnotsleep/spore/internal/message"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
@@ -398,4 +399,95 @@ func TestEntryMissSilent(t *testing.T) {
 	if strings.Contains(buf.String(), "查询缓存频道条目失败") {
 		t.Fatalf("正常未命中不应告警: %s", buf.String())
 	}
+}
+
+// ---- 事件上报：写失败告警（dump.channel_write_failed）与成功恢复 ----
+
+// recordingEvents 记录写失败/恢复事件上报。
+type recordingEvents struct {
+	mu       sync.Mutex
+	failures []string // DumpChannelWriteFailed 的 code 序列
+	recovers int      // DumpChannelRecovered 次数
+}
+
+func (r *recordingEvents) DumpChannelWriteFailed(_ context.Context, code string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures = append(r.failures, code)
+}
+
+func (r *recordingEvents) DumpChannelRecovered(context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recovers++
+}
+
+func TestWriteCleanFailureRaisesEvent(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{failCopies: true}
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+	ev := &recordingEvents{}
+	s.SetEvents(ev)
+	ctx := context.Background()
+
+	s.WriteClean(ctx, 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
+
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if len(ev.failures) != 1 {
+		t.Fatalf("写失败应上报一次事件，得到 %v", ev.failures)
+	}
+	// 未分类错误（fakeErr）应上报 INTERNAL_ERROR 受控码，不含错误原文
+	if ev.failures[0] != string(apperr.CodeInternal) {
+		t.Fatalf("应上报受控错误码，得到 %q", ev.failures[0])
+	}
+	if ev.recovers != 0 {
+		t.Fatalf("失败路径不应上报恢复: %d", ev.recovers)
+	}
+}
+
+func TestWriteCleanSuccessRecoversEvent(t *testing.T) {
+	st := openStore(t)
+	s := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	ev := &recordingEvents{}
+	s.SetEvents(ev)
+	ctx := context.Background()
+
+	s.WriteClean(ctx, 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "https://t.me/example/7", "")
+
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if len(ev.failures) != 0 || ev.recovers != 1 {
+		t.Fatalf("写成功应只上报恢复: failures=%v recovers=%d", ev.failures, ev.recovers)
+	}
+}
+
+// ctx 已取消（任务收尾窗口）不产生事件——取消不算配置/封禁问题。
+func TestFailHintSkipsCanceledContext(t *testing.T) {
+	st := openStore(t)
+	s := New(&fakeSender{}, nil, st, func() int64 { return -1001234567890 }, testLog())
+	ev := &recordingEvents{}
+	s.SetEvents(ev)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.failHint(ctx, errBoom)
+
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if len(ev.failures) != 0 {
+		t.Fatalf("取消窗口不应上报事件: %v", ev.failures)
+	}
+}
+
+// 未注入事件出口时写失败不 panic（nil 跳过）。
+func TestWriteCleanFailureWithoutEventsSink(t *testing.T) {
+	st := openStore(t)
+	fs := &fakeSender{failCopies: true}
+	s := New(fs, nil, st, func() int64 { return -1001234567890 }, testLog())
+
+	s.WriteClean(context.Background(), 0, 111, "example", 7,
+		[]message.Item{mediaItem(7, "x")}, [][]int{{55}}, "", "") // 不 panic 即通过
 }

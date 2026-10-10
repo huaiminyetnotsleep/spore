@@ -22,7 +22,14 @@ type recordingSink struct {
 	clouds  []bool   // CloudResult 的 succeeded 序列（云盘任务）
 	details []string // TaskResult/CloudResult 的 detail 序列（失败上下文）
 	stores  int      // StoreWriteFailed 次数
+	sources []string // SourceInaccessible 的 ref 序列（源不可访问告警）
 	disks   int      // CheckTempDir 次数
+}
+
+func (r *recordingSink) SourceInaccessible(_ context.Context, ref string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sources = append(r.sources, ref)
 }
 
 func (r *recordingSink) TaskResult(_ context.Context, succeeded bool, detail string) {
@@ -255,5 +262,32 @@ func TestWorkerPlainJobSkipsCloudResult(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.clouds) != 0 {
 		t.Fatalf("普通任务不应上报 CloudResult，得到 %v", sink.clouds)
+	}
+}
+
+// 源频道不可访问（CHANNEL_NOT_ACCESSIBLE，含源被封禁/删除/读取账号未加入）
+// 单次即触发源事件告警，不等连续失败累计。
+func TestWorkerReportsSourceInaccessible(t *testing.T) {
+	s := openStore(t)
+	if _, err := s.CreateUser(context.Background(), store.User{ID: 1, Status: store.UserEnabled}); err != nil {
+		t.Fatalf("创建用户失败: %v", err)
+	}
+	job := newRequestJob(t, s)
+	sink := &recordingSink{}
+	deps := Deps{
+		Fetcher: &fakeFetcher{err: apperr.New(apperr.CodeChannelInaccessible, "no access")},
+		Sender:  &fakeSender{},
+		Store:   s,
+		Events:  sink,
+		Log:     testLog(),
+	}
+	done := make(chan struct{})
+	go func() { Process(deps)(context.Background(), job); close(done) }()
+	waitDone(t, done)
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.sources) != 1 || sink.sources[0] != job.Ref.String() {
+		t.Fatalf("源不可访问应单次上报来源链接，得到 %v", sink.sources)
 	}
 }

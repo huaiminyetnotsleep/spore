@@ -1,0 +1,3 @@
+🕐 时间：{{ .Time }}
+📡 不可用源：{{ range $i, $s := .Payload.Sources }}{{ if $i }}、{{ end }}{{ $s }}{{ end }}{{ if .Payload.Extra }}（另有 {{ .Payload.Extra }} 个）{{ end }}
+📌 处置：到管理端监听源页确认源状态；bot 被移出的重新拉入并授权，源已失效的停用或移除

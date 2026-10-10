@@ -44,6 +44,13 @@ const (
 	KeyBotBanned     = "bot.banned"     // Bot Token 失效（被封禁或撤销），该 bot 已标记停用
 	KeyBackupFailed  = "backup.failed"  // 自动/CLI 备份执行失败（含磁盘空间不足跳过）
 
+	// 源与缓存频道失效事件：转发链路上的外部资源（提取源频道、/watch 监听
+	// 源、缓存频道）被封禁或失去访问权限。用户侧尽力降级（任务失败提示/
+	// 复用回落/预热跳过），这里补的是管理员侧的主动感知。
+	KeySourceInaccessible     = "source.channel_inaccessible" // 提取源频道无法访问（被封禁/删除/读取账号未加入）
+	KeyWatchSourceUnavailable = "watch.source_unavailable"    // 监听源探活不可用（bot 被移出或源被封禁）
+	KeyDumpChannelWriteFailed = "dump.channel_write_failed"   // 缓存频道写入失败（被封禁/失去权限/配置有误）
+
 	// 云盘下载（/download）事件源。
 	KeyCloudUploadFailed  = "cloud.upload_failed"  // 云盘任务连续失败（独立计数）
 	KeyCloudConfigInvalid = "cloud.config_invalid" // 云盘配置损坏或默认目的地悬空
@@ -64,6 +71,10 @@ const (
 	DefaultDiskLimitBytes     = int64(1) << 30   // 临时目录占用告警阈值（1GB）
 	diskCheckInterval         = time.Minute      // 临时目录占用检查的最小间隔（抽样节流）
 	raiseTimeout              = 10 * time.Second // 单次事件落库/通知的时间上限（不阻塞调用方过久）
+
+	// watchSourceTitleLimit 是监听源不可用推送中展示的源名封顶数量，
+	// 超出部分折叠为计数（payload 只进推送，仍不宜无限拉长）。
+	watchSourceTitleLimit = 5
 )
 
 // Notifier 是 Hub 对通知通道的最小依赖（delivery.Sender 天然满足）。
@@ -474,6 +485,45 @@ func (h *Hub) CloudDisabledRecovered(ctx context.Context) {
 // StoreWriteFailed 记录一次数据库写入失败；scene 为写入场景的可读标签。
 func (h *Hub) StoreWriteFailed(ctx context.Context, scene string) {
 	h.Raise(ctx, KeyStoreWriteFailed, SeverityError, StoreWriteData{Scene: scene})
+}
+
+// SourceInaccessible 记录一次提取源频道无法访问（CHANNEL_NOT_ACCESSIBLE 类
+// 错误，含源被封禁/删除/读取账号未加入）。ref 为来源消息链接，仅随推送
+// 展示；事件按 key 合并、受冷却窗口约束，多源同时失效时推送展示最近一次。
+func (h *Hub) SourceInaccessible(ctx context.Context, ref string) {
+	h.Raise(ctx, KeySourceInaccessible, SeverityError, SourceInaccessibleData{Ref: ref})
+}
+
+// DumpChannelWriteFailed 记录一次缓存频道写入失败（code 为 apperr 错误码，
+// 不含错误原文）。写失败不影响任务结果，事件只承担管理员侧感知。
+func (h *Hub) DumpChannelWriteFailed(ctx context.Context, code string) {
+	h.Raise(ctx, KeyDumpChannelWriteFailed, SeverityWarn, DumpWriteData{Code: code})
+}
+
+// DumpChannelRecovered 在缓存频道写入恢复成功后自动解决对应事件
+// （事件从未发生时为静默 no-op）。
+func (h *Hub) DumpChannelRecovered(ctx context.Context) {
+	h.Recover(ctx, KeyDumpChannelWriteFailed)
+}
+
+// WatchSourcesUnavailable 记录监听源探活发现不可用源（titles 为当前不可用
+// 源的展示名列表，封顶 5 个）。集合持续非空期间重复调用按 key 合并并展示
+// 最新列表；集合恢复为空时由 WatchSourcesRecovered 解决事件。
+func (h *Hub) WatchSourcesUnavailable(ctx context.Context, titles []string) {
+	data := WatchSourceUnavailableData{Sources: titles}
+	if len(titles) > watchSourceTitleLimit {
+		data = WatchSourceUnavailableData{
+			Sources: titles[:watchSourceTitleLimit],
+			Extra:   len(titles) - watchSourceTitleLimit,
+		}
+	}
+	h.Raise(ctx, KeyWatchSourceUnavailable, SeverityError, data)
+}
+
+// WatchSourcesRecovered 在全部监听源探活恢复可达后自动解决对应事件
+// （事件从未发生时为静默 no-op）。
+func (h *Hub) WatchSourcesRecovered(ctx context.Context) {
+	h.Recover(ctx, KeyWatchSourceUnavailable)
 }
 
 // CheckTempDir 抽样检查临时目录占用：超过阈值时产生（或合并）事件，

@@ -65,6 +65,11 @@ type Service struct {
 
 	notifyMu sync.RWMutex
 	notify   Notifier
+
+	healthMu    sync.Mutex
+	events      Events         // 探活事件出口（SetEvents 注入；nil 跳过）
+	healthFails map[int64]int  // channel_id → 连续探测失败轮数（见 health.go）
+	unavailable map[int64]bool // 当前判定不可用的源集合（见 health.go）
 }
 
 // Options 构造参数；Store 必填。Membership 缺省时私有邀请链接按普通
@@ -87,7 +92,8 @@ func New(opt Options) (*Service, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	return &Service{st: opt.Store, member: opt.Membership, log: opt.Log, now: opt.Now}, nil
+	return &Service{st: opt.Store, member: opt.Membership, log: opt.Log, now: opt.Now,
+		healthFails: make(map[int64]int), unavailable: make(map[int64]bool)}, nil
 }
 
 // SetBots 注入 Bot 客户端列表（主 bot 在前）。
