@@ -12,12 +12,8 @@ node_modules/
 data/
 /bot
 /spore-linux
-.claude/
-.trellis/
 .zcode/
-.agents/
-AGENTS.md
-.gitattributes
+.claude/settings.local.json
 coverage/
 .DS_Store
 *.log
