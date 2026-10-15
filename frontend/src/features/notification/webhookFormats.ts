@@ -114,7 +114,7 @@ export const WEBHOOK_FORMATS: readonly WebhookFormatDescriptor[] = [
   {
     value: "discord",
     label: "Discord",
-    description: "发送 Discord Webhook 消息，并通过 allowed_mentions 限制用户、角色或 everyone 提醒。",
+    description: "发送 Discord Webhook 消息，正文使用 Embed 卡片样式，@ 提醒经 allowed_mentions 白名单限制到用户、角色或 everyone。",
     urlPlaceholder: "https://discord.com/api/webhooks/…",
     mentionOptions: [
       { value: "none", label: "不提醒" },
@@ -127,13 +127,13 @@ export const WEBHOOK_FORMATS: readonly WebhookFormatDescriptor[] = [
         key: "user_ids",
         label: "Discord 用户 ID",
         placeholder: "123456789, 987654321",
-        extra: "多个用户 ID 使用英文逗号分隔。",
+        extra: "多个用户 ID 使用英文逗号分隔；也支持直接粘贴 <@ID> 形式。",
       },
       role_ids: {
         key: "role_ids",
         label: "Discord 角色 ID",
         placeholder: "123456789, 987654321",
-        extra: "多个角色 ID 使用英文逗号分隔。",
+        extra: "多个角色 ID 使用英文逗号分隔；也支持直接粘贴 <@&ID> 形式。",
       },
     },
     defaults: { mention_mode: "none" },

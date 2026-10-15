@@ -100,18 +100,28 @@ func TestDingTalkPayloadAndSignature(t *testing.T) {
 	}
 }
 
-func TestDiscordAllowedMentions(t *testing.T) {
+func TestDiscordAllowedMentionsAndEmbed(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
 	cfg := webhookSecrets{
 		URL: "https://example.com/discord",
 		Config: storedWebhook{
-			DiscordUserIDs: []string{"1"}, DiscordRoleIDs: []string{"2"}, DiscordEveryone: true,
+			DiscordUserIDs: []string{"<@111>"}, DiscordRoleIDs: []string{"222"}, DiscordEveryone: true,
 		},
 	}
-	body, _, _, err := buildDiscord(cfg, "hello", time.Time{})
+	body, _, _, err := buildDiscord(cfg, "hello", now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var payload struct {
+		Content string `json:"content"`
+		Embeds  []struct {
+			Description string `json:"description"`
+			Color       int    `json:"color"`
+			Footer      struct {
+				Text string `json:"text"`
+			} `json:"footer"`
+			Timestamp string `json:"timestamp"`
+		} `json:"embeds"`
 		Allowed struct {
 			Parse []string `json:"parse"`
 			Users []string `json:"users"`
@@ -121,8 +131,33 @@ func TestDiscordAllowedMentions(t *testing.T) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Allowed.Parse) != 1 || payload.Allowed.Parse[0] != "everyone" || payload.Allowed.Users[0] != "1" || payload.Allowed.Roles[0] != "2" {
+	// mention 语法必须出现在 content，否则 Discord 不会真正 @（allowed_mentions 只是白名单）。
+	if payload.Content != "@everyone <@111> <@&222> " {
+		t.Fatalf("mention syntax missing from content: %q", payload.Content)
+	}
+	if len(payload.Allowed.Parse) != 1 || payload.Allowed.Parse[0] != "everyone" ||
+		len(payload.Allowed.Users) != 1 || payload.Allowed.Users[0] != "111" ||
+		len(payload.Allowed.Roles) != 1 || payload.Allowed.Roles[0] != "222" {
 		t.Fatalf("unexpected discord allowed_mentions: %s", body)
+	}
+	if len(payload.Embeds) != 1 {
+		t.Fatalf("expected exactly one embed: %s", body)
+	}
+	embed := payload.Embeds[0]
+	if embed.Description != "hello" || embed.Footer.Text != "Spore" ||
+		embed.Timestamp != now.UTC().Format(time.RFC3339) {
+		t.Fatalf("unexpected discord embed: %s", body)
+	}
+
+	plain, _, _, err := buildDiscord(webhookSecrets{URL: cfg.URL}, "hello", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(plain, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Content != "" || len(payload.Allowed.Parse) != 0 || len(payload.Allowed.Users) != 0 || len(payload.Allowed.Roles) != 0 {
+		t.Fatalf("unexpected no-mention discord payload: %s", plain)
 	}
 }
 
