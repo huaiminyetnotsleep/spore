@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 46
-- **Last Active**: 2026-10-10
+- **Total Sessions**: 47
+- **Last Active**: 2026-10-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1067 | Active |
+| `journal-1.md` | ~1088 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 47 | 2026-10-15 | 监听源专属转发目标全量落地 | `b855b9a` | `main` |
 | 46 | 2026-10-10 | 封禁场景接入管理员事件告警（提取源/监听源/缓存频道） | `3da5802` | `main` |
 | 45 | 2026-09-22 | 前端移动端全量响应式兼容与体验优化 | `5ea8eab` | `feat/mobile-responsive-frontend` |
 | 44 | 2026-09-18 | 文档 CI 双通道化：构建校验与发版部署分离 | `870ebc0` | `feat/docs-ci-dual-channel` |

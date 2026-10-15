@@ -1065,3 +1065,24 @@ docs-deploy 拆为 docs-build-check（push/PR 仅构建）与 docs-release（发
 ### Status
 
 [OK] **Completed**
+
+
+## Session 47: 监听源专属转发目标全量落地
+
+**Date**: 2026-10-15
+**Task**: 监听源专属转发目标全量落地
+**Branch**: `main`
+
+### Summary
+
+完成 watch-source-forward-target 任务全周期：v28 迁移（forward_binding_channel_id/global_mirror_enabled/邀请暂存列/channel_bindings.kind）、watch.Service 统一投递计划（快路径与受保护回退共用、去重、运行时防循环、专属目标精确 Bot 路由不回退主 Bot）、botapi /watchtarget 选择面板与 /watch 提交即选、Web 逐源全局镜像开关与候选一致性、文档与 spec 同步。trellis-check 修复 10 处小问题并报告候选下拉缺后端 kind 字段的结构性缺口，本会话补齐（v28 追加列 + 绑定落库 + API 下发 + 刷新回填 + 测试）。全量门禁绿后提交推送 main。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b855b9a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
