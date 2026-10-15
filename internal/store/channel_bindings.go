@@ -39,6 +39,19 @@ var unbindReasonSet = map[string]bool{
 	UnbindReasonChannelGone: true,
 }
 
+// bindingKindSet 是合法聊天类型快照白名单（空串 = v28 前历史行，待回填）。
+var bindingKindSet = map[string]bool{
+	"":                    true,
+	BindingKindChannel:    true,
+	BindingKindSupergroup: true,
+}
+
+// channel_bindings.kind 的取值（Bot API Chat.Type 原样快照）。
+const (
+	BindingKindChannel    = "channel"
+	BindingKindSupergroup = "supergroup"
+)
+
 // ChannelBinding 是 channel_bindings 表的行模型，主键为 Bot API 的频道
 // 数字 ID（-100 前缀）。同一频道只归属一个用户；时间字段为 Unix 毫秒。
 // BotID 是绑定路由：>0 表示绑定经该 bot 建立并通过硬校验，副本/置顶只接受
@@ -52,6 +65,7 @@ type ChannelBinding struct {
 	UserID       int64
 	Username     string // 频道公开用户名（无 @），私有频道为空
 	Title        string
+	Kind         string // 聊天类型快照（channel / supergroup）；v28 前历史行为空
 	BoundVia     string
 	BotID        int64
 	Status       string // active / unbound
@@ -70,21 +84,21 @@ type ChannelBindingWithUser struct {
 }
 
 const selectChannelBinding = `SELECT channel_id, user_id,
-	COALESCE(username, ''), COALESCE(title, ''), bound_via, bot_id,
+	COALESCE(username, ''), COALESCE(title, ''), kind, bound_via, bot_id,
 	status, COALESCE(unbind_reason, ''), unbound_at,
 	created_at, updated_at
 FROM channel_bindings`
 
 func scanChannelBinding(row scanner) (ChannelBinding, error) {
 	var b ChannelBinding
-	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.BoundVia,
-		&b.BotID, &b.Status, &b.UnbindReason, &b.UnboundAt,
+	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.Kind,
+		&b.BoundVia, &b.BotID, &b.Status, &b.UnbindReason, &b.UnboundAt,
 		&b.CreatedAt, &b.UpdatedAt)
 	return b, err
 }
 
 const selectChannelBindingWithUser = `SELECT b.channel_id, b.user_id,
-	COALESCE(b.username, ''), COALESCE(b.title, ''), b.bound_via, b.bot_id,
+	COALESCE(b.username, ''), COALESCE(b.title, ''), b.kind, b.bound_via, b.bot_id,
 	b.status, COALESCE(b.unbind_reason, ''), b.unbound_at,
 	b.created_at, b.updated_at,
 	COALESCE(u.username, ''), COALESCE(u.display_name, '')
@@ -93,8 +107,8 @@ LEFT JOIN users u ON u.id = b.user_id`
 
 func scanChannelBindingWithUser(row scanner) (ChannelBindingWithUser, error) {
 	var b ChannelBindingWithUser
-	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.BoundVia,
-		&b.BotID, &b.Status, &b.UnbindReason, &b.UnboundAt,
+	err := row.Scan(&b.ChannelID, &b.UserID, &b.Username, &b.Title, &b.Kind,
+		&b.BoundVia, &b.BotID, &b.Status, &b.UnbindReason, &b.UnboundAt,
 		&b.CreatedAt, &b.UpdatedAt, &b.UserUsername, &b.UserDisplayName)
 	return b, err
 }
@@ -117,6 +131,9 @@ func (s *Store) UpsertChannelBinding(ctx context.Context, in ChannelBinding) (Ch
 	if !boundViaSet[in.BoundVia] {
 		return ChannelBinding{}, apperr.New(apperr.CodeInternal, fmt.Sprintf("非法绑定来源 %q", in.BoundVia))
 	}
+	if !bindingKindSet[in.Kind] {
+		return ChannelBinding{}, apperr.New(apperr.CodeInternal, fmt.Sprintf("非法绑定聊天类型 %q", in.Kind))
+	}
 	if in.CreatedAt == 0 {
 		in.CreatedAt = nowMillis()
 	}
@@ -128,10 +145,10 @@ func (s *Store) UpsertChannelBinding(ctx context.Context, in ChannelBinding) (Ch
 		switch {
 		case errors.Is(err, ErrNotFound):
 			_, err := tx.ex.ExecContext(ctx, `INSERT INTO channel_bindings
-				(channel_id, user_id, username, title, bound_via, bot_id, created_at, updated_at)
-				VALUES (?,?,?,?,?,?,?,?)`,
+				(channel_id, user_id, username, title, kind, bound_via, bot_id, created_at, updated_at)
+				VALUES (?,?,?,?,?,?,?,?,?)`,
 				in.ChannelID, in.UserID, nullStr(in.Username), nullStr(in.Title),
-				in.BoundVia, in.BotID, in.CreatedAt, in.UpdatedAt)
+				in.Kind, in.BoundVia, in.BotID, in.CreatedAt, in.UpdatedAt)
 			if err != nil {
 				return wrapDB("写入频道绑定", err)
 			}
@@ -145,16 +162,21 @@ func (s *Store) UpsertChannelBinding(ctx context.Context, in ChannelBinding) (Ch
 				fmt.Errorf("频道 %d 已被其他用户绑定", in.ChannelID))
 		}
 		// 同用户刷新，或复活/接管 unbound 行：状态复位并清理解绑痕迹。
+		// 调用方未携带类型快照（空串）时保留库中既有值，避免刷新路径把
+		// v28 后已回填的 kind 意外抹掉。
 		created := existing.CreatedAt
 		if existing.UserID != in.UserID {
 			created = in.CreatedAt // 接管视为新绑定
 		}
+		if in.Kind == "" {
+			in.Kind = existing.Kind
+		}
 		_, err = tx.ex.ExecContext(ctx, `UPDATE channel_bindings SET
-			user_id = ?, username = ?, title = ?, bound_via = ?, bot_id = ?,
+			user_id = ?, username = ?, title = ?, kind = ?, bound_via = ?, bot_id = ?,
 			status = ?, unbind_reason = '', unbound_at = 0,
 			created_at = ?, updated_at = ?
 			WHERE channel_id = ?`,
-			in.UserID, nullStr(in.Username), nullStr(in.Title), in.BoundVia, in.BotID,
+			in.UserID, nullStr(in.Username), nullStr(in.Title), in.Kind, in.BoundVia, in.BotID,
 			BindingStatusActive, created, in.UpdatedAt, in.ChannelID)
 		if err != nil {
 			return wrapDB("更新频道绑定", err)
@@ -270,6 +292,11 @@ func (s *Store) MarkChannelBindingUnbound(ctx context.Context, channelID, ownerI
 // DeleteChannelBinding 物理删除绑定并返回删除前的记录；ownerID > 0 时限定
 // 只删除该用户的绑定（Bot 侧"解绑自己的频道"），0 表示无归属限制
 // （Web 管理端解绑任意绑定）。不存在或不属于该用户时返回 ErrNotFound。
+// 同事务显式清空引用该绑定的监听源专属目标与活动邀请申请的暂存目标：
+// watch_invite_requests 侧列无外键（等待期允许脏 ID），必须显式清空；
+// watch_sources 侧虽有 ON DELETE SET NULL（连接级 PRAGMA foreign_keys 开启
+// 时自动生效），显式清空使其不依赖连接 PRAGMA 状态并保持两表口径一致
+// （软解绑不删行、保留引用，由投递时复查状态）。
 // 常规解绑请用 MarkChannelBindingUnbound（软解绑留痕）；本方法仅供管理端
 // 删除入口与既有语义兜底。
 func (s *Store) DeleteChannelBinding(ctx context.Context, channelID, ownerID int64) (ChannelBinding, error) {
@@ -280,8 +307,27 @@ func (s *Store) DeleteChannelBinding(ctx context.Context, channelID, ownerID int
 	if ownerID > 0 && b.UserID != ownerID {
 		return ChannelBinding{}, ErrNotFound
 	}
-	res, err := s.ex.ExecContext(ctx, "DELETE FROM channel_bindings WHERE channel_id = ?", channelID)
-	if err := affected(res, err, "删除频道绑定"); err != nil {
+	now := nowMillis()
+	err = s.Tx(ctx, func(tx *Store) error {
+		res, err := tx.ex.ExecContext(ctx, "DELETE FROM channel_bindings WHERE channel_id = ?", channelID)
+		if err := affected(res, err, "删除频道绑定"); err != nil {
+			return err
+		}
+		res, err = tx.ex.ExecContext(ctx,
+			"UPDATE watch_sources SET forward_binding_channel_id = NULL, updated_at = ? WHERE forward_binding_channel_id = ?",
+			now, channelID)
+		if err := affected(res, err, "清空监听源专属目标引用"); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		res, err = tx.ex.ExecContext(ctx,
+			"UPDATE watch_invite_requests SET forward_binding_channel_id = NULL, updated_at = ? WHERE forward_binding_channel_id = ?",
+			now, channelID)
+		if err := affected(res, err, "清空邀请申请专属目标引用"); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return ChannelBinding{}, err
 	}
 	return b, nil

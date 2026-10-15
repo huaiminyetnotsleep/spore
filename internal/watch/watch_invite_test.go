@@ -286,7 +286,9 @@ func TestUserInvitePendingNoJoinUntilApprove(t *testing.T) {
 		checkInfo: mtproto.InviteInfo{Title: "私有频道", Participants: 5, IsChannel: true},
 		joinID:    testBareID, joinTitle: "私有频道",
 	}
-	svc, st := newInviteService(t, m, adminChat(42))
+	// 受理 Bot 精确路由：申请经 bot9 提交，池内须含该 Bot（adminChat(42)
+	// 是主 bot，adminChat(9) 是受理 bot——激活校验落在受理 Bot 上）。
+	svc, st := newInviteService(t, m, adminChat(42), adminChat(9))
 	enableApply(t, st, true)
 	enabledUser(t, st, 7)
 	ctx := context.Background()

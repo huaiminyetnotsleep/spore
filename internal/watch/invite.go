@@ -88,7 +88,8 @@ func (s *Service) submitInvite(ctx context.Context, userID int64, isOwner bool, 
 		if existing.UserID != userID {
 			return SubmitOutcome{Kind: SubmitAlreadyOthers, Title: title}, nil
 		}
-		return SubmitOutcome{Kind: inviteStatusOutcome(existing.Status), Title: title}, nil
+		// 活动申请幂等命中：带申请 ID 供 Bot 端立即重开专属目标选择（暂存）。
+		return SubmitOutcome{Kind: inviteStatusOutcome(existing.Status), Title: title, RequestID: existing.ID}, nil
 	case !errors.Is(err, store.ErrNotFound):
 		return SubmitOutcome{}, err
 	}
@@ -133,13 +134,21 @@ func (s *Service) submitInvite(ctx context.Context, userID int64, isOwner bool, 
 	}
 	if !isOwner && cfg.RequireApproval {
 		s.log.Info("监听邀请申请已提交", "request_id", req.ID, "user_id", userID)
-		return SubmitOutcome{Kind: SubmitInvitePending, Title: inviteDisplayTitle(req)}, nil
+		return SubmitOutcome{Kind: SubmitInvitePending, Title: inviteDisplayTitle(req), RequestID: req.ID}, nil
 	}
 	req, src, err := s.advanceInvite(ctx, req, "")
 	if err != nil {
 		return SubmitOutcome{}, err
 	}
-	return SubmitOutcome{Kind: inviteStatusOutcome(req.Status), Title: inviteOutcomeTitle(req, src)}, nil
+	// 免审批推进：仍处活动状态带申请 ID（专属目标暂存到申请）；已激活则带
+	// 源行（选择直接落 watch_sources，与普通源一致）。
+	out := SubmitOutcome{Kind: inviteStatusOutcome(req.Status), Title: inviteOutcomeTitle(req, src)}
+	if src != nil && req.Status == store.WatchInviteApproved {
+		out.Channel = *src
+	} else {
+		out.RequestID = req.ID
+	}
+	return out, nil
 }
 
 // checkInviteLimits 合并计算每用户与总量上限；命中时返回对应 outcome。
@@ -308,6 +317,10 @@ func (s *Service) RejectInviteRequest(ctx context.Context, actor string, id int6
 	if err != nil {
 		return store.WatchInviteRequest{}, err
 	}
+	// 终态不保留可投递策略：清空暂存的专属目标
+	if _, cerr := s.st.SetWatchInviteRequestForwardBinding(ctx, id, 0); cerr != nil {
+		s.log.Warn("清理已拒绝邀请申请专属目标暂存失败", "request_id", id, "error", cerr.Error())
+	}
 	if _, cerr := s.st.ClearWatchInviteRequestHash(ctx, id, 0); cerr != nil {
 		s.log.Warn("清理已拒绝邀请申请 hash 失败", "request_id", id, "error", cerr.Error())
 	} else if fresh, gerr := s.st.GetWatchInviteRequest(ctx, id); gerr == nil {
@@ -436,8 +449,12 @@ func (s *Service) resolveInviteChannel(ctx context.Context, req store.WatchInvit
 // activateInvite 阶段二：校验 Bot 管理员身份并激活监听源。
 // 未通过转 waiting_bot（等人工配置后自动/手动重试）；通过则创建正式
 // watch_sources 并通知申请人。频道级冲突检查在此执行（此时才有真实 ID）。
+// 申请人暂存的专属目标在源行落库后复验转移（等待期内绑定可能已解绑/
+// 被删），转移失败只记日志——源照常激活，目标可稍后经 /watchtarget 补设。
 func (s *Service) activateInvite(ctx context.Context, req store.WatchInviteRequest, actor string) (store.WatchInviteRequest, *store.WatchSource, error) {
-	chat, err := s.verifyBotAdmin(ctx, req.ChannelID)
+	// 受理 Bot 校验：用户申请按申请行记录的 Bot（激活后的监听由它承载）；
+	// 管理员路径（bot_id=0）沿用主 bot。
+	chat, err := s.verifyBotAdmin(ctx, req.ChannelID, req.BotID)
 	if err != nil {
 		if apperr.From(err).Code == apperr.CodeChannelNotPostable {
 			updated, uerr := s.st.UpdateWatchInviteRequestStatus(ctx, req.ID,
@@ -466,6 +483,17 @@ func (s *Service) activateInvite(ctx context.Context, req store.WatchInviteReque
 	} else if !errors.Is(gerr, store.ErrNotFound) {
 		return req, nil, gerr
 	}
+	// 循环转发防护：已被用作转发目标（专属/全局）的频道不能成为监听源
+	//（与 Submit/AdminAdd 同一不变量，此处为邀请激活侧的执行点）。查询
+	// 失败按瞬态错误上抛由对账循环重试——failInvite 的 note 会直达申请人，
+	// 只有受控哨兵文案（ErrForwardTargetConflict 链）才可写入。
+	if cerr := s.sourceChannelBlockedAsTarget(ctx, req.ChannelID); cerr != nil {
+		if !errors.Is(cerr, ErrForwardTargetConflict) {
+			return req, nil, cerr
+		}
+		updated, ferr := s.failInvite(ctx, req, cerr.Error())
+		return updated, nil, ferr
+	}
 
 	row, uerr := s.st.UpsertWatchSource(ctx, store.WatchSource{
 		ChannelID:   req.ChannelID,
@@ -482,6 +510,11 @@ func (s *Service) activateInvite(ctx context.Context, req store.WatchInviteReque
 	if uerr != nil {
 		return req, nil, uerr
 	}
+	// 转移暂存的专属目标（「提交后立即选择」的私有邀请路径终点）：按与
+	// SetForwardTarget 同一套校验复验等待期内的变化，失败只停止转移。
+	if req.ForwardBindingChannelID != 0 {
+		s.transferStagedForwardTarget(ctx, req, &row)
+	}
 	// 申请行补全频道快照（kind/username 在 GetChat 后才可得）
 	if _, uerr := s.st.UpdateWatchInviteRequestChannel(ctx, req.ID,
 		req.ChannelID, string(chat.Type), chat.Username, chat.Title, 0); uerr != nil {
@@ -494,15 +527,63 @@ func (s *Service) activateInvite(ctx context.Context, req store.WatchInviteReque
 		return req, &row, uerr
 	}
 	if req.UserID > 0 {
+		targetNote := ""
+		if row.ForwardBindingChannelID != 0 {
+			targetNote = "，新消息会转发到你选择的专属目标"
+		}
 		s.notifyUser(ctx, req.UserID, fmt.Sprintf(
-			"你申请的监听邀请「%s」已完成配置，开始监听：源内新消息会自动预热缓存频道。", chat.Title))
+			"你申请的监听邀请「%s」已完成配置，开始监听：源内新消息会自动预热缓存频道%s。", chat.Title, targetNote))
 	}
 	s.log.Info("监听邀请申请已激活", "request_id", req.ID,
 		"channel_id", req.ChannelID, "actor", actor)
 	return updated, &row, nil
 }
 
-// failInvite 置申请为 failed（保留 hash 供重试）并尽力通知申请人。
+// transferStagedForwardTarget 把邀请申请暂存的专属目标转移到正式源行：
+// 复验绑定（active/归属/路由）与循环约束（目标不能是监听源/缓存频道），
+// 通过则写入源行；无论成败都清空申请暂存（approved 为终态，不保留可
+// 投递策略）。失败不阻断激活，申请人可稍后 /watchtarget 重设。
+func (s *Service) transferStagedForwardTarget(ctx context.Context, req store.WatchInviteRequest, row *store.WatchSource) {
+	clear := func() {
+		if _, err := s.st.SetWatchInviteRequestForwardBinding(ctx, req.ID, 0); err != nil {
+			s.log.Warn("清空邀请申请专属目标暂存失败", "request_id", req.ID, "error", err.Error())
+		}
+	}
+	b, err := s.st.GetChannelBinding(ctx, req.ForwardBindingChannelID)
+	if err != nil {
+		s.log.Info("监听邀请专属目标暂存转移跳过：绑定不可用",
+			"request_id", req.ID, "target_channel_id", req.ForwardBindingChannelID)
+		clear()
+		return
+	}
+	if err := s.checkForwardTargetEligible(*row, b); err != nil {
+		s.log.Info("监听邀请专属目标暂存转移跳过：绑定校验未过",
+			"request_id", req.ID, "target_channel_id", b.ChannelID, "reason", err.Error())
+		clear()
+		return
+	}
+	if err := s.checkForwardTargetLoops(ctx, *row, b.ChannelID); err != nil {
+		s.log.Info("监听邀请专属目标暂存转移跳过：循环约束",
+			"request_id", req.ID, "target_channel_id", b.ChannelID, "reason", err.Error())
+		clear()
+		return
+	}
+	updated, err := s.st.SetWatchSourceForwardBinding(ctx, req.ChannelID, b.ChannelID)
+	if err != nil {
+		s.log.Warn("监听邀请专属目标暂存转移失败（源已激活，可稍后重设）",
+			"request_id", req.ID, "target_channel_id", b.ChannelID, "error", err.Error())
+		clear()
+		return
+	}
+	*row = updated
+	clear()
+	s.log.Info("监听邀请专属目标暂存已转移", "request_id", req.ID,
+		"source_channel_id", req.ChannelID, "target_channel_id", b.ChannelID)
+}
+
+// failInvite 置申请为 failed（保留 hash 供重试）并尽力通知申请人。failed
+// 保留重试可能，专属目标暂存随之保留（重试成功路径仍可转移）；只有
+// rejected/approved 终态清空。
 func (s *Service) failInvite(ctx context.Context, req store.WatchInviteRequest, note string) (store.WatchInviteRequest, error) {
 	updated, uerr := s.st.UpdateWatchInviteRequestStatus(ctx, req.ID, store.WatchInviteFailed, note, 0)
 	if uerr != nil {

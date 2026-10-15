@@ -113,6 +113,31 @@ type Watch interface {
 	ListInvitesByUser(ctx context.Context, userID int64) ([]store.WatchInviteRequest, error)
 }
 
+// WatchForward 是监听源专属转发目标能力（watch.Service）在 Bot 侧所需的
+// 最小接口：候选查询（源与私有邀请申请两条路径）、设置/清除与展示状态。
+// 全部归属/路由/循环校验在服务内完成；作为可选能力独立注入，nil 时
+// /watchtarget 与提交后选择面板降级，/watch 主流程不受影响。
+type WatchForward interface {
+	// UserSourceByTarget 把 /watchtarget 的目标参数解析为本人监听源行；
+	// 他人源/管理员源返回 store.ErrNotFound（不泄露存在性）。
+	UserSourceByTarget(ctx context.Context, userID int64, target string) (store.WatchSource, error)
+	// EligibleForwardTargets 返回源可选的专属目标候选（本人 active 绑定、
+	// 与源受理 Bot 同路由、循环目标已剔除）。
+	EligibleForwardTargets(ctx context.Context, userID, sourceChannelID int64) ([]store.ChannelBinding, error)
+	// EligibleForwardTargetsForInvite 返回活动邀请申请可选的候选（以申请行
+	// 的归属/路由做同一套校验）；申请不存在/非本人/已终态返回 ErrNotFound。
+	EligibleForwardTargetsForInvite(ctx context.Context, userID, inviteID int64) ([]store.ChannelBinding, error)
+	// SetForwardTarget / ClearForwardTarget 设置/清除源的专属目标（仅申请人）。
+	SetForwardTarget(ctx context.Context, userID, sourceChannelID, targetChannelID int64) (store.WatchSource, error)
+	ClearForwardTarget(ctx context.Context, userID, sourceChannelID int64) (store.WatchSource, error)
+	// StageInviteForwardTarget / ClearInviteForwardTarget 在活动邀请申请上
+	// 暂存/清除专属目标（激活时复验转移）。
+	StageInviteForwardTarget(ctx context.Context, userID, inviteID, targetChannelID int64) (store.WatchInviteRequest, error)
+	ClearInviteForwardTarget(ctx context.Context, userID, inviteID int64) (store.WatchInviteRequest, error)
+	// ForwardTargetViewOf 计算源专属目标的展示状态（/watchlist 状态行）。
+	ForwardTargetViewOf(ctx context.Context, src store.WatchSource) watch.ForwardTargetView
+}
+
 // OwnerCheck 判定提交者是否号主（users 表全局唯一 owner）；未设 owner 时
 // 由装配方决定回退策略。nil 时 /join 对所有人按非 owner 处理。
 type OwnerCheck func(ctx context.Context, userID int64) (bool, error)
@@ -202,6 +227,9 @@ type Options struct {
 	// Watch 提供监听源指令能力（watch.Service：/watch 申请与 /unwatch 移除）；
 	// nil 时相关指令回复不可用。
 	Watch Watch
+	// WatchForward 提供监听源专属转发目标能力（/watchtarget、/watch 提交后
+	// 选择面板与 /watchlist 状态行）；nil 时相关能力降级，不影响 /watch 主流程。
+	WatchForward WatchForward
 	// OnSourceMessage 可选：监听源消息回调（channel_post 与超级群组消息）。
 	// listener 服务内做源白名单过滤、相册聚合与缓存频道转储；nil 时源消息
 	// 在本层直接丢弃。参数为消息、本 bot 的发送器与 bot 身份（受理 bot 是
@@ -221,6 +249,10 @@ type Options struct {
 	// PromptInput 发送无参命令的 ForceReply 输入提示、用法按钮与取消控制消息。
 	// updateHandler 会注入默认实现；测试或其他入口可覆盖。
 	PromptInput func(ctx context.Context, snd delivery.Sender, chatID int64, command, html, placeholder, usage string)
+	// ShowWatchTargetSelection 发送监听源专属目标选择面板（源或活动邀请申请
+	// 二选一）。updateHandler 注入默认实现并绑定输入提示器；测试或其他入口
+	// 可覆盖。nil 时 /watch 提交后不弹面板（/watchtarget 仍可用文字引导）。
+	ShowWatchTargetSelection func(ctx context.Context, snd delivery.Sender, sel watchTargetSelection, userID, chatID int64)
 	// SystemName 提供可配置的系统名称（internal/syscfg，settings 即时生效）；
 	// nil 或返回空串时回退 syscfg.DefaultName（帮助与欢迎文案用）。
 	SystemName         func(ctx context.Context) string
@@ -303,6 +335,7 @@ func RegisterCommands(ctx context.Context, b *tgbot.Bot) error {
 			{Command: "channels", Description: "查看我绑定的频道"},
 			{Command: "join", Description: "请系统账号加入私有频道（t.me/+ 邀请链接）"},
 			{Command: "watch", Description: "添加监听源频道/群组"},
+			{Command: "watchtarget", Description: "设置监听源的专属转发目标"},
 			{Command: "watchlist", Description: "查看我的监听源"},
 			{Command: "unwatch", Description: "移除我的监听源"},
 		},

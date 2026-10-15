@@ -115,7 +115,8 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 	// a.listener.OnMessage 作为方法值绑进 botapi.Options，方法值在创建时
 	// 捕获接收者；若此刻 a.listener 还是 nil，第一条监听群消息就会空指针
 	// 崩溃（2026-09-21 真机 SIGSEGV 回归）。dumpcache 的发送器按调用时
-	// 池状态惰性解析，提前创建安全。离线时聚合计时随 ctx 取消停止。
+	// 池状态惰性解析，提前创建安全；投递计划（watch 服务）与精确 Bot
+	// 通道（池按调用时状态解析）同样惰性。离线时聚合计时随 ctx 取消停止。
 	dumpSvc := a.newDumpService(ctx)
 	a.listener = listener.New(ctx, listener.Options{
 		Log:         a.log,
@@ -123,6 +124,17 @@ func (a *app) onMTProtoReady(ctx context.Context, api *tg.Client) error {
 		Dump:        dumpSvc,
 		EnqueueDump: a.access.EnqueueSourceDump,
 		ErrLog:      a.errLog, // 转储复制失败/回退入队失败落错误日志
+		// 按源解析额外转发目标（专属目标 + 条件全局镜像）：与受保护内容
+		// 回退镜像（watchDumpMirror）共用同一计划实现。
+		ForwardPlan: a.watch.ForwardTargets,
+		// 专属目标精确受理 Bot 通道（MemberByID 精确匹配；停用视为缺位，
+		// 绝不回退主 bot——绑定验证过的身份才有目标发言权）。
+		SenderForBot: func(botID int64) delivery.Sender {
+			if m := a.pool.MemberByID(botID); m != nil && !m.IsDisabled() {
+				return m.Sender
+			}
+			return nil
+		},
 	})
 
 	// 多机器人池：逐 token 构建 Bot 客户端与发送路由。单个 token 失效只产生
@@ -294,6 +306,9 @@ func (a *app) buildBot(ctx context.Context, api *tg.Client, bt botlist.Bot, prim
 		ChannelJoin: a.join,
 		// /watch、/unwatch：监听源申请/移除（watch 服务内做准入/审批/上限）
 		Watch: a.watch,
+		// /watchtarget、/watch 提交后选择面板：专属转发目标候选/设置/暂存
+		//（watch 服务内做归属/路由/循环校验）
+		WatchForward: a.watch,
 		// 监听源消息（channel_post 与超级群组）→ listener 聚合转储
 		OnSourceMessage: a.listener.OnMessage,
 		// /download：云盘状态与目的地解析（Manager 快照 + rclone 实时探测）
@@ -492,16 +507,20 @@ func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
 	return dumpSvc
 }
 
-// watchDumpMirror 把受保护源重传完成的缓存落点镜像到监听转发频道
+// watchDumpMirror 把受保护源重传完成的缓存落点镜像到额外转发目标
 // （queue.DumpMirror 实现）：按 requestID 反查监听事件行——查不到说明
-// 不是监听回退任务（管理端手动转存、历史恢复回填），直接跳过；命中则
-// 从缓存频道逐个转发频道服务端复制（bot 身份原样完整副本，中转后不再
-// 受源频道「禁止转发」限制），单目标失败只记日志与错误日志，最后把实际
-// 成功目标回写事件行。全程尽力而为，不影响任务结果。
-// 复制走主 bot（回退任务 BotID=0，重传上传同为主 bot 身份，坐标一致）。
+// 不是监听回退任务（管理端手动转存、历史恢复回填），直接跳过；命中则按
+// 源投递计划（与快路径同一 resolver：有效专属目标 + 条件全局镜像，含
+// 运行时循环过滤与缓存频道去重）从缓存频道逐目标服务端复制（bot 身份
+// 原样完整副本，中转后不再受源频道「禁止转发」限制），单目标失败只记
+// 日志与错误日志，最后把实际成功目标回写事件行。全程尽力而为，不影响
+// 任务结果。专属目标由源受理 Bot 精确复制（不回退主 bot）；全局镜像沿用
+// 主 bot（回退任务重传上传同为主 bot 身份，坐标一致）。
 type watchDumpMirror struct {
 	dump   *dumpcache.Service
 	st     *store.Store
+	pool   *botpool.Pool
+	plan   watch.PlanResolver
 	errLog *errlog.Service
 	log    *slog.Logger
 }
@@ -515,38 +534,66 @@ func (m watchDumpMirror) AfterSourceDump(ctx context.Context, requestID, dumpCha
 		m.log.Warn("监听转发镜像跳过：事件反查失败", "request_id", requestID, "error", err.Error())
 		return
 	}
-	forwards := syscfg.LoadWatchForwardChannels(ctx, m.st)
-	if len(forwards) == 0 {
+	src, err := m.st.GetWatchSource(ctx, ev.ChannelID)
+	if errors.Is(err, store.ErrNotFound) {
+		// 源行已删除（监听移除与回退完成的竞态）：无源即无投递计划
+		m.log.Info("监听转发镜像跳过：源已移除", "request_id", requestID, "channel_id", ev.ChannelID)
 		return
 	}
-	targets := make([]store.WatchEventTarget, 0, len(forwards)+1)
-	targets = append(targets, store.WatchEventTarget{ChannelID: dumpChannel,
+	if err != nil {
+		m.log.Warn("监听转发镜像跳过：源查询失败", "request_id", requestID, "error", err.Error())
+		return
+	}
+	cacheIDs := syscfg.EnabledDumpChannelIDs(syscfg.LoadEffectiveDumpChannels(ctx, m.st, 0))
+	targets := m.plan(ctx, src, cacheIDs)
+	if len(targets) == 0 {
+		return
+	}
+	written := make([]store.WatchEventTarget, 0, len(targets)+1)
+	written = append(written, store.WatchEventTarget{ChannelID: dumpChannel,
 		Title: dumpChannelTitle(syscfg.LoadEffectiveDumpChannels(ctx, m.st, 0), dumpChannel)})
 	okCount := 0
-	for _, f := range forwards {
-		if _, err := m.dump.CopyOutFrom(ctx, 0, f.ChannelID, dumpChannel, dumpIDs); err != nil {
-			m.log.Warn("监听转发频道镜像失败", "request_id", requestID,
-				"forward_channel", f.ChannelID, "source_event", ev.ID,
-				"messages", len(dumpIDs), "error", err.Error())
+	for _, f := range targets {
+		var err error
+		if f.Kind == watch.ForwardTargetUser {
+			// 专属目标：源受理 Bot 精确复制（未命中/停用即跳过，绝不回退
+			// 主 bot——它是绑定验证时确认过可向目标发消息的身份）
+			mem := m.pool.MemberByID(f.BotID)
+			if mem == nil || mem.IsDisabled() {
+				m.log.Warn("监听专属目标镜像跳过（不回退主 bot）", "request_id", requestID,
+					"forward_channel", f.ChannelID, "target_kind", string(f.Kind),
+					"delivery_bot_id", f.BotID,
+					"reason", fmt.Sprintf("受理 Bot（%d）不在池中或已停用", f.BotID))
+				continue
+			}
+			_, err = mem.Sender.CopyMessages(ctx, dumpChannel, f.ChannelID, dumpIDs)
+		} else {
+			// 全局镜像：dumpcache 主 bot 通道（既有语义，与重传上传身份一致）
+			_, err = m.dump.CopyOutFrom(ctx, 0, f.ChannelID, dumpChannel, dumpIDs)
+		}
+		if err != nil {
+			m.log.Warn("监听转发目标镜像失败", "request_id", requestID,
+				"forward_channel", f.ChannelID, "target_kind", string(f.Kind),
+				"source_event", ev.ID, "messages", len(dumpIDs), "error", err.Error())
 			m.errLog.Record(ctx, errlog.Record{
 				Source:  store.ErrorSourceWatch,
 				Code:    string(apperr.From(err).Code),
 				Stage:   "copy_forward",
 				Detail:  err.Error(),
-				Message: "监听转发频道镜像失败（缓存中转）：请求 " + fmt.Sprint(requestID) + " → " + f.Title,
+				Message: "监听转发目标镜像失败（" + string(f.Kind) + "，缓存中转）：请求 " + fmt.Sprint(requestID) + " → " + f.Title,
 				Context: map[string]any{"request_id": requestID, "forward_channel": f.ChannelID,
-					"messages": len(dumpIDs)},
+					"target_kind": string(f.Kind), "delivery_bot_id": f.BotID, "messages": len(dumpIDs)},
 			})
 			continue
 		}
-		targets = append(targets, store.WatchEventTarget{ChannelID: f.ChannelID, Title: f.Title})
+		written = append(written, store.WatchEventTarget{ChannelID: f.ChannelID, Title: f.Title})
 		okCount++
 	}
-	if _, err := m.st.UpdateWatchEventTargetsByRequest(ctx, requestID, targets); err != nil {
+	if _, err := m.st.UpdateWatchEventTargetsByRequest(ctx, requestID, written); err != nil {
 		m.log.Warn("监听事件转发目标回写失败", "request_id", requestID, "error", err.Error())
 	}
-	m.log.Info("监听源回退内容已镜像转发频道", "request_id", requestID,
-		"messages", len(dumpIDs), "forward_ok", okCount, "forward_total", len(forwards))
+	m.log.Info("监听源回退内容已镜像转发目标", "request_id", requestID,
+		"messages", len(dumpIDs), "forward_ok", okCount, "forward_total", len(targets))
 }
 
 // dumpChannelTitle 从缓存频道配置列表取指定频道的标题快照（事件目标展示
@@ -584,9 +631,11 @@ func (a *app) queueDeps(ctx context.Context, fetcher *mtproto.Fetcher, dumpSvc *
 			return m != nil && m.IsDisabled()
 		},
 		Dump: dumpSvc, // 缓存频道（未配置时 nil：无复用）
-		// 监听转发频道缓存中转镜像（受保护源回退任务重传成功后触发）
-		DumpMirror: watchDumpMirror{dump: dumpSvc, st: a.st, errLog: a.errLog, log: a.log},
-		Channels:   a.bindings, // 频道脚注：消息末尾织入该用户绑定频道的跳转链接
+		// 监听转发目标缓存中转镜像（受保护源回退任务重传成功后触发）；
+		// 与 listener 快路径共用 watch 投递计划，专属目标按源受理 Bot 精确路由。
+		DumpMirror: watchDumpMirror{dump: dumpSvc, st: a.st, pool: a.pool,
+			plan: a.watch.ForwardTargets, errLog: a.errLog, log: a.log},
+		Channels: a.bindings, // 频道脚注：消息末尾织入该用户绑定频道的跳转链接
 		// 云盘任务（/download）：上传通道与目的地解析；nil 防御在 worker 内
 		CloudSink: a.cloudSink,
 		CloudCfg:  a.cloud,

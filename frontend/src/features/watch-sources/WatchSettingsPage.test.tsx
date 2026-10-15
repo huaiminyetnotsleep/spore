@@ -8,7 +8,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchChannelBindings, fetchSettings, type SettingsView } from "../../api/admin";
+import { fetchChannelBindings, fetchSettings, type ChannelBindingRow, type SettingsView } from "../../api/admin";
 import { saveSettings } from "../../api/mutations";
 import { WatchSettingsPage } from "./WatchSettingsPage";
 
@@ -239,5 +239,32 @@ describe("监听源配置页", () => {
         watch_forward_channels: ["-100777", "@newchan"],
       });
     });
+  });
+
+  it("监听转发频道下拉候选仅列频道类型绑定（与后端校验一致）", async () => {
+    mockFetchSettings.mockResolvedValueOnce(sampleSettings());
+    mockFetchChannelBindings.mockResolvedValueOnce({
+      items: [
+        { channel_id: -100111, kind: "channel", user_id: 1, username: "chan_a", title: "频道A", bound_via: "web", bot_id: 0, status: "active" },
+        { channel_id: -100222, kind: "supergroup", user_id: 1, username: "group_b", title: "群组B", bound_via: "web", bot_id: 0, status: "active" },
+        { channel_id: -100333, kind: "channel", user_id: 1, username: "", title: "频道C", bound_via: "web", bot_id: 0, status: "unbound" },
+        { channel_id: -100444, kind: undefined, user_id: 1, username: "", title: "旧数据D", bound_via: "web", bot_id: 0, status: "active" },
+      ] as ChannelBindingRow[],
+    });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "保存转发频道" })).toBeInTheDocument();
+    });
+
+    // 打开下拉：仅「频道A」可选（群组/已解绑/缺失类型都不出现）
+    const selectRoot = document.querySelector('.ant-select[aria-label="监听转发频道"]') as HTMLElement;
+    fireEvent.mouseDown(selectRoot.querySelector(".ant-select-selector") as HTMLElement);
+    await waitFor(() => {
+      expect(screen.getByText("频道A（@chan_a）")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("群组B（@group_b）")).not.toBeInTheDocument();
+    expect(screen.queryByText("频道C")).not.toBeInTheDocument();
+    expect(screen.queryByText("旧数据D")).not.toBeInTheDocument();
   });
 });

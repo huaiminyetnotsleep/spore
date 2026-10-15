@@ -49,6 +49,8 @@ function sourceRow(overrides: Partial<WatchSourceRow> = {}): WatchSourceRow {
     user_display_name: "",
     bot_id: 999,
     bot_username: "test_bot",
+    global_mirror_enabled: false,
+    forward_target: null,
     reviewed_by: "",
     created_at: 1757000000000,
     updated_at: 1757000000000,

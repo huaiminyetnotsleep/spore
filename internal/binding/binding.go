@@ -387,6 +387,7 @@ func (s *Service) BindWithAdvice(ctx context.Context, in BindInput) (store.Chann
 		UserID:    in.UserID,
 		Username:  chat.Username,
 		Title:     chat.Title,
+		Kind:      string(chat.Type), // 聊天类型快照：管理端转发频道候选据此只列频道
 		BoundVia:  in.Via,
 		BotID:     routeBot,
 	})
@@ -594,7 +595,13 @@ func (s *Service) refreshBindings(ctx context.Context, rows []store.ChannelBindi
 		if chat.ID != r.ChannelID {
 			continue
 		}
-		if chat.Username == r.Username && chat.Title == r.Title {
+		// 聊天类型不变（同一 ID 恒为频道或群组），快照只用于回填 v28 前
+		// 的空值；类型异常（非频道/群组）不落库。
+		kind := string(chat.Type)
+		if kind != store.BindingKindChannel && kind != store.BindingKindSupergroup {
+			kind = ""
+		}
+		if chat.Username == r.Username && chat.Title == r.Title && (r.Kind != "" || kind == "") {
 			continue
 		}
 		updated, err := s.store.UpsertChannelBinding(ctx, store.ChannelBinding{
@@ -602,6 +609,7 @@ func (s *Service) refreshBindings(ctx context.Context, rows []store.ChannelBindi
 			UserID:    r.UserID,
 			Username:  chat.Username,
 			Title:     chat.Title,
+			Kind:      kind,
 			BoundVia:  r.BoundVia,
 			BotID:     r.BotID, // 刷新不改变路由归属
 		})

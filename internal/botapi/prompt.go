@@ -25,6 +25,7 @@ const (
 	promptAwaitInput promptStage = iota
 	promptAwaitDownloadDestination
 	promptAwaitPinMode
+	promptAwaitWatchTarget
 )
 
 type pendingPrompt struct {
@@ -40,6 +41,13 @@ type pendingPrompt struct {
 	destinations       []string
 	defaultDestination string
 	destinationPage    int
+	// /watchtarget 选择面板（锚点消息为 promptMessageID，按钮面板为控制消息）。
+	watchCandidates []watchTargetCandidate
+	watchPage       int
+	watchSourceID   int64  // 源路径：监听源频道 ID（0 = 邀请申请路径）
+	watchInviteID   int64  // 邀请路径：活动申请 ID（0 = 源路径）
+	watchCurrent    int64  // 当前专属目标频道 ID（0=未设置；⭐ 标记）
+	watchTitle      string // 源/申请展示名（面板与结果文案）
 }
 
 type inputPrompter struct {
@@ -298,6 +306,79 @@ func (p *inputPrompter) selectPinMode(messageID, userID int64) (pendingPrompt, b
 	return clonePendingPrompt(entry), true
 }
 
+// beginWatchTargetSelection 进入专属目标选择阶段：登记候选与面板上下文，
+// 刷新 TTL，pending 保留待内联按钮消费（面板消息即 promptMessageID，
+// 由 showWatchTargetSelection 先 register 再调用本方法）。
+func (p *inputPrompter) beginWatchTargetSelection(messageID, userID int64, sel watchTargetSelection) (pendingPrompt, bool) {
+	if p == nil || messageID == 0 || sel.sourceID == 0 && sel.inviteID == 0 || len(sel.candidates) == 0 {
+		return pendingPrompt{}, false
+	}
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.pending[messageID]
+	if !ok || now.After(entry.expiresAt) || entry.ownerID != userID || entry.command != "/watchtarget" {
+		if ok && now.After(entry.expiresAt) {
+			p.removeLocked(messageID)
+		}
+		return pendingPrompt{}, false
+	}
+	entry.stage = promptAwaitWatchTarget
+	entry.watchCandidates = append([]watchTargetCandidate(nil), sel.candidates...)
+	entry.watchPage = 0
+	entry.watchSourceID = sel.sourceID
+	entry.watchInviteID = sel.inviteID
+	entry.watchCurrent = sel.current
+	entry.watchTitle = sel.title
+	entry.expiresAt = now.Add(promptTTL)
+	p.pending[messageID] = entry
+	return clonePendingPrompt(entry), true
+}
+
+// setWatchTargetPage 翻页（阶段内原地更新，不消费 pending）。
+func (p *inputPrompter) setWatchTargetPage(messageID, userID int64, page int) (pendingPrompt, bool) {
+	if p == nil || messageID == 0 || page < 0 {
+		return pendingPrompt{}, false
+	}
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.pending[messageID]
+	if !ok || now.After(entry.expiresAt) || entry.ownerID != userID || entry.stage != promptAwaitWatchTarget {
+		if ok && now.After(entry.expiresAt) {
+			p.removeLocked(messageID)
+		}
+		return pendingPrompt{}, false
+	}
+	if page >= watchTargetPageCount(len(entry.watchCandidates)) {
+		return pendingPrompt{}, false
+	}
+	entry.watchPage = page
+	p.pending[messageID] = entry
+	return clonePendingPrompt(entry), true
+}
+
+// selectWatchTarget 原子消费选择结果（按钮只带 prompt ID + 候选序号，
+// 频道 ID 留在 pending 内，回放/伪造按钮拿不到目标）。
+func (p *inputPrompter) selectWatchTarget(messageID, userID int64, index int) (pendingPrompt, watchTargetCandidate, bool) {
+	if p == nil || messageID == 0 || index < 0 {
+		return pendingPrompt{}, watchTargetCandidate{}, false
+	}
+	now := p.clock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, ok := p.pending[messageID]
+	if !ok || now.After(entry.expiresAt) || entry.ownerID != userID || entry.stage != promptAwaitWatchTarget || index >= len(entry.watchCandidates) {
+		if ok && now.After(entry.expiresAt) {
+			p.removeLocked(messageID)
+		}
+		return pendingPrompt{}, watchTargetCandidate{}, false
+	}
+	candidate := entry.watchCandidates[index]
+	p.removeLocked(messageID)
+	return clonePendingPrompt(entry), candidate, true
+}
+
 func (p *inputPrompter) consume(messageID, userID int64) (pendingPrompt, bool) {
 	if p == nil || messageID == 0 {
 		return pendingPrompt{}, false
@@ -348,5 +429,6 @@ func (p *inputPrompter) removeLocked(messageID int64) {
 
 func clonePendingPrompt(entry pendingPrompt) pendingPrompt {
 	entry.destinations = append([]string(nil), entry.destinations...)
+	entry.watchCandidates = append([]watchTargetCandidate(nil), entry.watchCandidates...)
 	return entry
 }

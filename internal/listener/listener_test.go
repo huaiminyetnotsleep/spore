@@ -17,6 +17,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -86,8 +87,16 @@ func (e *enqueueLog) snapshot() []enqueueRecord {
 }
 
 // newFixture 构造带独立临时库的监听服务：dump 频道固定为 -100dump，
-// 源行与场景由各用例自行写入。
+// 源行与场景由各用例自行写入。投递计划接真实 watch.Service（与生产同构，
+// 仅缺 Bot 客户端——ForwardTargets 不触网）；精确 Bot 通道缺省返回 nil
+// （专属目标用例自行覆盖 senderForBot 字段）。
 func newFixture(t *testing.T) (*Service, *fakeCopySender, *store.Store, *enqueueLog) {
+	t.Helper()
+	return newFixtureLog(t, testLog())
+}
+
+// newFixtureLog 同 newFixture，但允许注入日志（跳过原因断言用捕获 logger）。
+func newFixtureLog(t *testing.T, log *slog.Logger) (*Service, *fakeCopySender, *store.Store, *enqueueLog) {
 	t.Helper()
 	ctx := context.Background()
 	st, err := store.Open(ctx, t.TempDir()+"/test.db", testLog())
@@ -99,14 +108,20 @@ func newFixture(t *testing.T) (*Service, *fakeCopySender, *store.Store, *enqueue
 	dump := dumpcache.New(nil, nil, st, func() []int64 { return []int64{dumpChannel} }, testLog())
 	snd := &fakeCopySender{}
 	enqueued := &enqueueLog{}
+	ws, err := watch.New(watch.Options{Store: st, Log: log})
+	if err != nil {
+		t.Fatalf("创建 watch 服务失败: %v", err)
+	}
 	l := New(ctx, Options{
-		Log:   testLog(),
+		Log:   log,
 		Store: st,
 		Dump:  dump,
 		EnqueueDump: func(_ context.Context, kind, key string, messageID int) (int64, error) {
 			enqueued.record(kind, key, messageID)
 			return 777, nil // 模拟关联 requests 行
 		},
+		ForwardPlan:  ws.ForwardTargets,
+		SenderForBot: func(int64) delivery.Sender { return nil },
 	})
 	return l, snd, st, enqueued
 }
@@ -181,6 +196,7 @@ func TestAlbumAggregatedCopyWithDualKeys(t *testing.T) {
 func TestPrivateSourceSingleMessages(t *testing.T) {
 	l, snd, st, _ := newFixture(t)
 	const chatID int64 = -1005678
+	seedUser(t, st, 7)
 	seedSource(t, st, store.WatchSource{
 		ChannelID: chatID, Title: "私有频道",
 		Status: store.WatchApproved, Enabled: true,
@@ -585,5 +601,145 @@ func TestDumpChannelAsSourceSkipped(t *testing.T) {
 	}
 	if calls := enqueued.snapshot(); len(calls) != 0 {
 		t.Fatalf("缓存频道的消息不应回退入队: %+v", calls)
+	}
+}
+
+func seedUser(t *testing.T, st *store.Store, id int64) {
+	t.Helper()
+	if _, err := st.CreateUser(context.Background(), store.User{ID: id, Status: store.UserEnabled}); err != nil {
+		t.Fatalf("建用户 %d 失败: %v", id, err)
+	}
+}
+
+// 专属目标快路径：用户源（记录受理 Bot）经计划解析出 user_binding 目标，
+// 由精确受理 Bot 从源复制（不是本批受理 bot 的 g.snd），缓存照常经本批
+// bot；全局镜像未开启时不投全局目标。
+func TestUserForwardTargetCopiedViaExactBot(t *testing.T) {
+	l, snd, st, _ := newFixture(t)
+	const chatID int64 = -1005678
+	seedUser(t, st, 7)
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "usersrc", Title: "用户源",
+		Status: store.WatchApproved, Enabled: true, AddedBy: 7, BotID: 42,
+	})
+	ctx := context.Background()
+	if _, err := st.UpsertChannelBinding(ctx, store.ChannelBinding{
+		ChannelID: -100321, UserID: 7, BoundVia: store.BoundViaBot, BotID: 42, Title: "用户目标",
+	}); err != nil {
+		t.Fatalf("写入绑定失败: %v", err)
+	}
+	if _, err := st.SetWatchSourceForwardBinding(ctx, chatID, -100321); err != nil {
+		t.Fatalf("设置专属目标失败: %v", err)
+	}
+	exact := &fakeCopySender{}
+	l.senderForBot = func(botID int64) delivery.Sender {
+		if botID == 42 {
+			return exact
+		}
+		return nil
+	}
+
+	l.OnMessage(mediaMsg(chatID, 91, ""), snd, 99, "other_bot")
+	waitFor(t, func() bool { return len(listEvents(t, l)) == 1 })
+
+	if copies := snd.snapshot(); len(copies) != 1 || copies[0].to != -100777 {
+		t.Fatalf("本批 bot 只应复制缓存频道: %+v", copies)
+	}
+	copies := exact.snapshot()
+	if len(copies) != 1 || copies[0].from != chatID || copies[0].to != -100321 {
+		t.Fatalf("专属目标应由受理 Bot 从源复制: %+v", copies)
+	}
+	ev := listEvents(t, l)[0]
+	if len(ev.Targets) != 2 || ev.Targets[0].ChannelID != -100777 || ev.Targets[1].ChannelID != -100321 {
+		t.Fatalf("事件目标应为缓存+专属目标: %+v", ev.Targets)
+	}
+}
+
+// 精确受理 Bot 不在池中（换绑/停用/装配缺失）：专属目标跳过并留痕，绝不
+// 回退主 bot 或本批 bot，缓存预热不受影响。
+func TestUserForwardTargetSkippedWhenExactBotMissing(t *testing.T) {
+	capture := newLogCapture()
+	l, snd, st, _ := newFixtureLog(t, slog.New(capture))
+	const chatID int64 = -1005679
+	seedUser(t, st, 7)
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "usersrc2", Title: "用户源二",
+		Status: store.WatchApproved, Enabled: true, AddedBy: 7, BotID: 42,
+	})
+	ctx := context.Background()
+	if _, err := st.UpsertChannelBinding(ctx, store.ChannelBinding{
+		ChannelID: -100322, UserID: 7, BoundVia: store.BoundViaBot, BotID: 42, Title: "用户目标",
+	}); err != nil {
+		t.Fatalf("写入绑定失败: %v", err)
+	}
+	if _, err := st.SetWatchSourceForwardBinding(ctx, chatID, -100322); err != nil {
+		t.Fatalf("设置专属目标失败: %v", err)
+	}
+	l.senderForBot = nil // 未装配：全部精确路由不可用
+
+	l.OnMessage(mediaMsg(chatID, 92, ""), snd, 42, "watcher_bot")
+	waitFor(t, func() bool { return len(listEvents(t, l)) == 1 })
+	if copies := snd.snapshot(); len(copies) != 1 || copies[0].to != -100777 {
+		t.Fatalf("应只复制缓存频道（专属目标跳过且不回退）: %+v", copies)
+	}
+	if !l.containsSkip("不回退主 Bot") {
+		t.Fatalf("应留痕跳过原因")
+	}
+	ev := listEvents(t, l)[0]
+	if len(ev.Targets) != 1 || ev.Targets[0].ChannelID != -100777 {
+		t.Fatalf("事件目标应仅缓存频道: %+v", ev.Targets)
+	}
+}
+
+// 专属目标与全局镜像并存（管理员逐源开关开启）：缓存 + 专属（精确 Bot）
+// + 全局（本批 bot）各一份；重合目标只投一份（去重在计划层完成）。
+func TestUserTargetAndGlobalMirrorCoexist(t *testing.T) {
+	l, snd, st, _ := newFixture(t)
+	const chatID int64 = -1005680
+	seedUser(t, st, 7)
+	seedSource(t, st, store.WatchSource{
+		ChannelID: chatID, Username: "mixsrc", Title: "混合源",
+		Status: store.WatchApproved, Enabled: true, AddedBy: 7, BotID: 42,
+	})
+	ctx := context.Background()
+	if _, err := st.UpsertChannelBinding(ctx, store.ChannelBinding{
+		ChannelID: -100323, UserID: 7, BoundVia: store.BoundViaBot, BotID: 42, Title: "用户目标",
+	}); err != nil {
+		t.Fatalf("写入绑定失败: %v", err)
+	}
+	if _, err := st.SetWatchSourceForwardBinding(ctx, chatID, -100323); err != nil {
+		t.Fatalf("设置专属目标失败: %v", err)
+	}
+	if err := syscfg.SaveWatchForwardChannels(ctx, st, []syscfg.WatchForwardChannel{
+		{ChannelID: -100323, Title: "与专属目标重合"}, {ChannelID: -100995, Title: "全局目标"},
+	}); err != nil {
+		t.Fatalf("写入转发频道配置失败: %v", err)
+	}
+	if _, err := st.SetWatchSourceGlobalMirror(ctx, chatID, true); err != nil {
+		t.Fatalf("开启全局镜像失败: %v", err)
+	}
+	exact := &fakeCopySender{}
+	l.senderForBot = func(botID int64) delivery.Sender {
+		if botID == 42 {
+			return exact
+		}
+		return nil
+	}
+
+	l.OnMessage(mediaMsg(chatID, 93, ""), snd, 99, "other_bot")
+	waitFor(t, func() bool {
+		events := listEvents(t, l)
+		return len(events) == 1 && len(events[0].Targets) == 3
+	})
+	// 本批 bot：缓存 + 全局目标（重合项已去重）
+	targets := map[int64]int{}
+	for _, c := range snd.snapshot() {
+		targets[c.to]++
+	}
+	if targets[-100777] != 1 || targets[-100995] != 1 || targets[-100323] != 0 {
+		t.Fatalf("本批 bot 应只复制缓存与全局目标: %+v", targets)
+	}
+	if copies := exact.snapshot(); len(copies) != 1 || copies[0].to != -100323 {
+		t.Fatalf("专属目标应由精确 Bot 复制一次: %+v", copies)
 	}
 }

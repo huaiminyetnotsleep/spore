@@ -96,7 +96,7 @@ func TestAPIChannelBindingsList(t *testing.T) {
 	e, j, fake, _ := newBindingsEnv(t)
 	fake.listRows = []store.ChannelBindingWithUser{{
 		ChannelBinding: store.ChannelBinding{ChannelID: -1001234567890, UserID: 7,
-			Username: "mychan", Title: "我的频道", BoundVia: "bot",
+			Username: "mychan", Title: "我的频道", Kind: store.BindingKindChannel, BoundVia: "bot",
 			CreatedAt: 1757030400000, UpdatedAt: 1757030400000},
 		UserUsername:    "alice",
 		UserDisplayName: "Alice",
@@ -117,6 +117,9 @@ func TestAPIChannelBindingsList(t *testing.T) {
 	if row.ChannelID != -1001234567890 || row.UserID != 7 || row.UserUsername != "alice" ||
 		row.BoundVia != "bot" || row.CreatedAt != 1757030400000 {
 		t.Fatalf("列表行不符: %+v", row)
+	}
+	if row.Kind != "channel" {
+		t.Fatalf("列表应下发聊天类型 kind: %+v", row)
 	}
 }
 

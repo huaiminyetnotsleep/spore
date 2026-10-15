@@ -65,6 +65,7 @@ func helpText(name string, cloud bool) string {
 /channels — 查看我的绑定
 /join 邀请链接 — 请系统账号加入私有频道（t.me/+… 链接）
 /watch 频道 — 添加监听源（写法同 /bind）
+/watchtarget 频道 — 为我的监听源选择专属转发目标
 /watchlist — 查看我的监听源与申请状态
 /unwatch 频道 — 移除监听源
 
@@ -73,7 +74,7 @@ func helpText(name string, cloud bool) string {
 
 <b>绑定后</b>，每次提取的内容除发给你外，还会同步一份到绑定目标；/pin 提交的任务会自动置顶。
 
-<b>监听源</b>生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。
+<b>监听源</b>生效后，源内新消息会自动转存一份到缓存频道：之后任何人把该消息链接发给我都能秒回（无需重新下载上传）。监听源申请是否需要审批由管理员配置。可用 /watchtarget 为你的监听源选择一个专属转发目标（自己的频道/群组，需先 /bind 绑定）。
 
 💬 不带参数的操作命令会弹出输入提示；回复提示消息输入内容即可执行，也可以回复“取消”或点击取消按钮。
 
@@ -160,6 +161,11 @@ func updateHandler(opt Options) tgbot.HandlerFunc {
 				sendPromptInput(ctx, localOpt, snd, prompter, chatID, command, html, placeholder, usage)
 			}
 		}
+		if localOpt.ShowWatchTargetSelection == nil {
+			localOpt.ShowWatchTargetSelection = func(ctx context.Context, snd delivery.Sender, sel watchTargetSelection, userID, chatID int64) {
+				showWatchTargetSelection(ctx, localOpt, snd, prompter, sel, userID, chatID)
+			}
+		}
 		// 引用回复交互：命令作为对 bot 消息的回复发送时（Telegram 原生
 		// 用法），把被回复消息 ID 传入分流层供 /pin、/cancel 反查锚点。
 		// 私聊中被回复消息必在同一 chat，无需另传 chat。
@@ -241,6 +247,8 @@ func handleUpdate(ctx context.Context, opt Options, snd delivery.Sender, from mo
 		handleJoin(ctx, opt, snd, from, chatID, text)
 	case "/watch":
 		handleWatch(ctx, opt, snd, from, chatID, text)
+	case "/watchtarget":
+		handleWatchTarget(ctx, opt, snd, from, chatID, text)
 	case "/watchlist":
 		handleWatchlist(ctx, opt, snd, from.ID, chatID)
 	case "/unwatch":
@@ -968,9 +976,15 @@ func handleWatch(ctx context.Context, opt Options, snd delivery.Sender, from mod
 	case watch.SubmitDumpChannelConflict:
 		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
 			"「%s」是缓存频道，不能同时作为监听源：预热副本写回会触发循环转发。请换一个频道，或先在「频道设置」移除该缓存频道。", title))
+	case watch.SubmitForwardConflict:
+		sendText(ctx, opt, snd, chatID, fmt.Sprintf(
+			"「%s」已被配置为转发目标（专属转发目标或全局监听转发频道），不能同时作为监听源：预热副本写回会触发循环转发。请换一个频道；若是你在其他监听源上选的专属转发目标，可先用 /watchtarget 清除后重试，全局监听转发频道请联系管理员移除。", title))
 	default:
 		sendText(ctx, opt, snd, chatID, apperr.UserText(apperr.CodeInternal))
 	}
+	// 成功结果（含 pending）立即弹出专属目标选择面板（仅用户源且受理 Bot
+	// 为当前 Bot；私有邀请活动申请走暂存）。候选为空时给绑定引导。
+	maybeOfferWatchTarget(ctx, opt, snd, from.ID, chatID, botInfo.ID, outcome)
 }
 
 // handleWatchlist 列出本人监听源与私有邀请申请。
@@ -1022,6 +1036,17 @@ func handleWatchlist(ctx context.Context, opt Options, snd delivery.Sender, user
 				}
 				fmt.Fprintf(&b, "• %s（%s）\n", name, state)
 			}
+			// 专属转发目标状态行（仅用户源；/watchtarget 重选入口提示）
+			if opt.WatchForward != nil {
+				switch v := opt.WatchForward.ForwardTargetViewOf(ctx, r); v.State {
+				case watch.ForwardTargetSet:
+					fmt.Fprintf(&b, "  ↳ 专属转发：%s\n", v.Title)
+				case watch.ForwardTargetStale:
+					fmt.Fprintf(&b, "  ↳ 专属转发：目标已失效（%d），发送 /watchtarget 重选\n", v.ChannelID)
+				default:
+					b.WriteString("  ↳ 专属转发：未设置（/watchtarget 可选择）\n")
+				}
+			}
 		}
 	}
 	if len(invites) > 0 {
@@ -1034,7 +1059,11 @@ func handleWatchlist(ctx context.Context, opt Options, snd delivery.Sender, user
 			if name == "" {
 				name = "邀请 " + r.MaskedHash
 			}
-			fmt.Fprintf(&b, "• %s（%s）\n", name, watchInviteStatusText(r.Status))
+			staged := ""
+			if r.ForwardBindingChannelID != 0 {
+				staged = "，已选专属目标"
+			}
+			fmt.Fprintf(&b, "• %s（%s%s）\n", name, watchInviteStatusText(r.Status), staged)
 		}
 	}
 	sendText(ctx, opt, snd, chatID, b.String())

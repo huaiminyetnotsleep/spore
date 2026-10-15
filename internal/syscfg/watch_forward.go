@@ -57,7 +57,9 @@ func LoadWatchForwardChannels(ctx context.Context, st *store.Store) []WatchForwa
 }
 
 // SaveWatchForwardChannels 校验并整体写入转发频道列表；写前先校验保证
-// 不落非法值（数量上限、按 ID 去重）。空列表合法（清空 = 仅缓存兜底）。
+// 不落非法值（数量上限、按 ID 去重、循环转发防护——监听源不能同时作为
+// 全局转发目标，否则预热副本写回会再次触发该"源"的监听形成转发环）。
+// 空列表合法（清空 = 仅缓存兜底）。
 func SaveWatchForwardChannels(ctx context.Context, st *store.Store, channels []WatchForwardChannel) error {
 	if st == nil {
 		return errors.New("syscfg: Store 为必填项")
@@ -70,6 +72,11 @@ func SaveWatchForwardChannels(ctx context.Context, st *store.Store, channels []W
 	for _, c := range channels {
 		if c.ChannelID == 0 || seen[c.ChannelID] {
 			continue
+		}
+		if _, err := st.GetWatchSource(ctx, c.ChannelID); err == nil {
+			return fmt.Errorf("频道 %d 已是监听源，不能同时作为全局转发目标（循环转发防护）", c.ChannelID)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
 		}
 		seen[c.ChannelID] = true
 		clean = append(clean, c)

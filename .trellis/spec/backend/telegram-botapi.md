@@ -7,7 +7,7 @@
 ### 1. Scope / Trigger
 
 - 触发：改动 `RegisterCommands`、公开命令列表、`/start` 行为，或排障「/help 有命令但快捷菜单缺命令」时，必须遵守本契约。
-- `RegisterCommands`（`internal/botapi/bot.go`）只写 **default scope + 空语言** 的十五条公开命令（含 `/download`、`/pin`、`/watch`、`/watchlist`、`/unwatch`）；启动注册失败仅 Warn 后继续长轮询（有意设计——命令文本分流不依赖菜单），无独立重试；MTProto 每次进入 ready 回调都会重新注册一次。
+- `RegisterCommands`（`internal/botapi/bot.go`）只写 **default scope + 空语言** 的十六条公开命令（含 `/download`、`/pin`、`/watch`、`/watchtarget`、`/watchlist`、`/unwatch`）；启动注册失败仅 Warn 后继续长轮询（有意设计——命令文本分流不依赖菜单），无独立重试；MTProto 每次进入 ready 回调都会重新注册一次。
 - Telegram 命令菜单按 `(scope, language_code)` 独立存储，**chat scope 覆盖 default**：更新 default 永远不会清除其他 scope 的残留——重启、重发 `setMyCommands`、换客户端都无法修复残留的 chat 菜单（真机 2026-09-07）。
 - 兼容修复：私聊 `/start` 先完成原回复，再尽力 `deleteMyCommands`——请求必须**显式** `scope=chat + 实际 msg.Chat.ID`（不是 `from.ID`），语言集合 = 空语言 + 用户语言经 `golang.org/x/text/language` 归一后的两字母码（非法/无法归一跳过，不透传原始标签）；失败仅 Warn 受控字段（`chat_id`/`language_code`/`category`，不记原始错误——SDK 错误可能包含带 token 的请求 URL）；实例内按 `(chatID, language)` 去重，成功记住、失败留待下次 `/start` 重试，总预算 2s。
 - 红线：绝不删除 default / `all_private_chats` / 其他 chat；绝不用 `SetMyCommands` 往 chat scope 写命令来「修复显示」（制造新覆盖）；`language_code` 空串不是通配符，只代表空语言槽位。
@@ -20,7 +20,7 @@
 
 ### 3. Tests Required
 
-- `internal/botapi/commands_test.go`：全部删除请求断言 `scope.type=chat` 与实际 chatID（构造 chatID≠userID 的消息）、语言归一表驱动、成功去重/部分失败重试/并发不重复（`-race`）、父 ctx 取消不污染回复 context、日志脱敏、default 十五条注册回归（含 `/download`、`/pin`、`/watch`、`/watchlist`、`/unwatch`）。
+- `internal/botapi/commands_test.go`：全部删除请求断言 `scope.type=chat` 与实际 chatID（构造 chatID≠userID 的消息）、语言归一表驱动、成功去重/部分失败重试/并发不重复（`-race`）、父 ctx 取消不污染回复 context、日志脱敏、default 十六条注册回归（含 `/download`、`/pin`、`/watch`、`/watchtarget`、`/watchlist`、`/unwatch`）。
 
 ## Scenario: 无参命令 ForceReply 与 `/download` 目的地选择
 

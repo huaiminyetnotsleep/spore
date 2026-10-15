@@ -22,6 +22,7 @@ type apiChannelBindingRow struct {
 	UserID          int64  `json:"user_id"`
 	Username        string `json:"username"`                // 频道公开用户名（无 @），私有频道为空
 	Title           string `json:"title"`                   // 绑定时取得的频道标题
+	Kind            string `json:"kind,omitempty"`          // 聊天类型（channel / supergroup；v28 前历史行缺省）
 	BoundVia        string `json:"bound_via"`               // bot | web
 	BotID           int64  `json:"bot_id"`                  // 路由 bot：仅它受理的任务投递到此；0 = 通配
 	Status          string `json:"status"`                  // active / unbound（v24 软解绑）
@@ -76,6 +77,7 @@ func (s *Server) handleAPIChannelBindingsList(w http.ResponseWriter, r *http.Req
 			UserID:          row.UserID,
 			Username:        row.Username,
 			Title:           row.Title,
+			Kind:            row.Kind,
 			BoundVia:        row.BoundVia,
 			BotID:           row.BotID,
 			Status:          row.Status,

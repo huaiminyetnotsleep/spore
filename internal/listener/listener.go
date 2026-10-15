@@ -18,10 +18,13 @@
 // 一源可能多个 bot 都收到帖：转储前逐频道查 dump_entries 去重，漏网的
 // 并发重复副本无害（复用按最新条目命中）。
 //
-// 缓存频道之外可配置监听转发频道（syscfg watch_forward_channels，独立于
-// 缓存频道）：非保护源在缓存复制成功后从源直接镜像；保护源由重传管线
-// 进缓存后从缓存中转镜像（queue DumpMirror，按 request_id 回写事件目标）。
-// 镜像逐目标尽力而为，事件只记实际成功写入的目标（含各启用缓存频道）。
+// 缓存频道之外还有按源解析的额外转发目标（watch.Service.ForwardTargets
+// 经 Options.ForwardPlan 注入）：源申请人的专属绑定目标（受理 Bot 精确
+// 投递，不回退主 bot）与逐源开关控制的全局监听转发频道镜像（syscfg
+// watch_forward_channels）。非保护源在缓存复制成功后从源直接镜像；保护源
+// 由重传管线进缓存后从缓存中转镜像（queue DumpMirror，按 request_id 回写
+// 事件目标），两路径共用同一计划（目标、循环过滤、去重一致）。镜像逐目标
+// 尽力而为，事件只记实际成功写入的目标（含各启用缓存频道）。
 package listener
 
 import (
@@ -43,6 +46,7 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/store"
 	"github.com/huaiminyetnotsleep/spore/internal/syscfg"
+	"github.com/huaiminyetnotsleep/spore/internal/watch"
 )
 
 const (
@@ -61,6 +65,19 @@ const (
 // 返回关联的 requests 行 ID（0 = 未建行：号主未设置或队列满）。
 type EnqueueDump func(ctx context.Context, sourceKind, channelKey string, messageID int) (int64, error)
 
+// ForwardPlan 按源实时解析缓存频道之外的额外转发目标（watch.Service.
+// ForwardTargets）：有效专属目标（精确 Bot 路由）+ 条件全局镜像，已含
+// 运行时循环过滤与缓存频道去重。nil 目标/nil 函数都表示本批无额外目标。
+// 注入而非本包自算：计划语义（绑定复验/镜像开关/循环不变量）属于 watch
+// 领域，快路径与受保护内容回退路径共用同一实现。
+type ForwardPlan func(ctx context.Context, src store.WatchSource, cacheChannels []int64) []watch.ForwardTarget
+
+// SenderForBot 按精确 Bot ID 取发送通道（botpool.MemberByID 语义：未命中
+// 返回 nil，绝不回退主 bot）。专属目标复制必须由源受理 Bot 执行——它是
+// 绑定验证时确认过可向目标发消息的身份，回退主 Bot 会造成越权误投。
+// nil 函数等价于"任何精确 Bot 都不可用"（专属目标全部跳过）。
+type SenderForBot func(botID int64) delivery.Sender
+
 // Options 构造参数。
 type Options struct {
 	Log         *slog.Logger
@@ -70,6 +87,10 @@ type Options struct {
 	// ErrLog 错误日志写入门面（可选，nil 安全）：转储复制失败与回退入队
 	// 失败此前只进日志，接入后逐条落 error_logs 供管理端查询。
 	ErrLog *errlog.Service
+	// ForwardPlan 额外转发目标计划（可选，nil = 仅缓存预热，不额外镜像）。
+	ForwardPlan ForwardPlan
+	// SenderForBot 专属目标精确 Bot 发送通道（可选，nil = 专属目标跳过）。
+	SenderForBot SenderForBot
 }
 
 // Service 是监听源消息处理器。ctx 是生命周期上下文（MTProto 就绪作用域）：
@@ -77,12 +98,14 @@ type Options struct {
 // 调用（多 bot 并发），只做缓存查询与聚合登记，网络调用全部在计时器
 // goroutine 里执行，不阻塞轮询。
 type Service struct {
-	ctx         context.Context
-	log         *slog.Logger
-	st          *store.Store
-	dump        *dumpcache.Service
-	enqueueDump EnqueueDump
-	errLog      *errlog.Service
+	ctx          context.Context
+	log          *slog.Logger
+	st           *store.Store
+	dump         *dumpcache.Service
+	enqueueDump  EnqueueDump
+	errLog       *errlog.Service
+	forwardPlan  ForwardPlan
+	senderForBot SenderForBot
 
 	mu      sync.Mutex
 	pending map[aggKey]*aggGroup // 聚合中的批次（相册/单条）
@@ -124,6 +147,7 @@ func New(ctx context.Context, opt Options) *Service {
 	return &Service{
 		ctx: ctx, log: opt.Log, st: opt.Store, dump: opt.Dump,
 		enqueueDump: opt.EnqueueDump, errLog: opt.ErrLog,
+		forwardPlan: opt.ForwardPlan, senderForBot: opt.SenderForBot,
 		pending:  make(map[aggKey]*aggGroup),
 		srcCache: make(map[int64]srcCacheEntry),
 	}
@@ -270,9 +294,8 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 		return
 	}
 	// 启用缓存频道即预热目标（配置顺序，标题取配置快照：settings 驱动的
-	// 标题，env 兜底部署无标题快照则展示回退数字 ID）；监听转发频道是
-	// 独立于缓存频道的额外镜像目标，随批读取最新配置并过滤与缓存频道
-	// 重复的 ID。
+	// 标题，env 兜底部署无标题快照则展示回退数字 ID）；额外转发目标（专属
+	// 目标 + 条件全局镜像）由注入的投递计划按源解析，随批读取最新配置。
 	cfg := syscfg.LoadEffectiveDumpChannels(ctx, s.st, 0)
 	titles := make(map[int64]string, len(cfg))
 	for _, c := range cfg {
@@ -280,7 +303,6 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 			titles[c.ChannelID] = c.Title
 		}
 	}
-	forwards := forwardTargets(ctx, s.st, channels)
 	media := make([]*models.Message, 0, len(g.msgs))
 	for _, m := range g.msgs {
 		if hasMedia(m) {
@@ -396,10 +418,14 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 	if len(written) > 0 {
 		s.dump.WriteRecovered(ctx)
 	}
-	// 转发频道镜像：缓存复制成功后从源逐个服务端复制（原样完整副本），
-	// 逐目标尽力而为——单目标失败只记日志与错误日志，不影响缓存结果与
-	// 其他目标；事件 targets 只记实际成功写入的目标（启用缓存频道优先：
-	// 本批跳过的频道本就已有副本，复制成功的按 written 记）。
+	// 额外转发目标镜像：缓存复制成功后按源投递计划逐目标从源复制（原样
+	// 完整副本），逐目标尽力而为——单目标失败只记日志与错误日志，不影响
+	// 缓存结果与其他目标；事件 targets 只记实际成功写入的目标（启用缓存
+	// 频道优先：本批跳过的频道本就已有副本，复制成功的按 written 记）。
+	// 专属目标（user_binding）由源受理 Bot 精确投递（绑定验证过的身份；
+	// 未命中/停用即跳过，绝不回退主 bot 或本批受理 bot）；全局镜像沿用
+	// 本批受理 bot 既有语义。
+	forwards := s.batchForwardTargets(ctx, g.src, channels)
 	eventTargets := make([]store.WatchEventTarget, 0, len(dumpTargets)+len(forwards))
 	for _, t := range dumpTargets {
 		if !containsChannel(need, t.ChannelID) || written[t.ChannelID] {
@@ -407,17 +433,39 @@ func (s *Service) process(ctx context.Context, g *aggGroup) {
 		}
 	}
 	for _, f := range forwards {
-		if _, err := g.snd.CopyMessages(ctx, g.chat.ID, f.ChannelID, ids); err != nil {
-			s.log.Warn("监听转发频道复制失败", "channel_id", g.chat.ID,
-				"forward_channel", f.ChannelID, "messages", len(ids),
+		snd := g.snd
+		if f.Kind == watch.ForwardTargetUser {
+			var missing string
+			switch {
+			case s.senderForBot == nil:
+				missing = "精确 Bot 通道未装配"
+			default:
+				if exact := s.senderForBot(f.BotID); exact == nil {
+					missing = fmt.Sprintf("受理 Bot（%d）不在池中或已停用", f.BotID)
+				} else {
+					snd = exact
+				}
+			}
+			if missing != "" {
+				s.log.Warn("监听专属目标跳过（不回退主 Bot）", "channel_id", g.chat.ID,
+					"forward_channel", f.ChannelID, "target_kind", string(f.Kind),
+					"delivery_bot_id", f.BotID, "reason", missing)
+				continue
+			}
+		}
+		if _, err := snd.CopyMessages(ctx, g.chat.ID, f.ChannelID, ids); err != nil {
+			s.log.Warn("监听转发目标复制失败", "channel_id", g.chat.ID,
+				"forward_channel", f.ChannelID, "target_kind", string(f.Kind),
+				"messages", len(ids),
 				"bot_id", g.botID, "bot_username", g.botUsername, "error", err.Error())
 			s.errLog.Record(ctx, errlog.Record{
 				Source:  store.ErrorSourceWatch,
 				Code:    string(apperr.From(err).Code),
 				Stage:   "copy_forward",
 				Detail:  err.Error(),
-				Message: "监听转发频道复制失败：" + keyOf(usernameKey, numericKey) + " → " + f.Title,
+				Message: "监听转发目标复制失败（" + string(f.Kind) + "）：" + keyOf(usernameKey, numericKey) + " → " + f.Title,
 				Context: map[string]any{"channel_id": g.chat.ID, "forward_channel": f.ChannelID,
+					"target_kind": string(f.Kind), "delivery_bot_id": f.BotID,
 					"messages": len(ids), "bot_id": g.botID, "bot_username": g.botUsername},
 			})
 			continue
@@ -486,21 +534,13 @@ func keyOf(usernameKey, numericKey string) string {
 	return numericKey
 }
 
-// forwardTargets 读取监听转发频道配置（随批取最新值），过滤与任一启用
-// 缓存频道重复的项——启用缓存频道始终单独作为预热目标，不重复复制。
-func forwardTargets(ctx context.Context, st *store.Store, cacheChannels []int64) []syscfg.WatchForwardChannel {
-	cache := make(map[int64]bool, len(cacheChannels))
-	for _, c := range cacheChannels {
-		cache[c] = true
+// batchForwardTargets 解析本批的额外转发目标（计划未装配时为空——仅
+// 缓存预热）。channels 为本批启用的缓存频道（计划据此去重）。
+func (s *Service) batchForwardTargets(ctx context.Context, src store.WatchSource, channels []int64) []watch.ForwardTarget {
+	if s.forwardPlan == nil {
+		return nil
 	}
-	all := syscfg.LoadWatchForwardChannels(ctx, st)
-	out := make([]syscfg.WatchForwardChannel, 0, len(all))
-	for _, f := range all {
-		if !cache[f.ChannelID] {
-			out = append(out, f)
-		}
-	}
-	return out
+	return s.forwardPlan(ctx, src, channels)
 }
 
 // containsChannel 报告频道是否在列表中（预热事件目标确认用）。

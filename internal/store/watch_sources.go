@@ -40,8 +40,15 @@ type WatchSource struct {
 	BotID       int64  `json:"bot_id"`       // 用户 /watch 的受理 bot ID；0 = Web 管理端添加
 	BotUsername string `json:"bot_username"` // 受理 bot 用户名快照（展示自持，bot 移出池后历史仍可读）
 	ReviewedBy  string `json:"reviewed_by"`  // 审批人标识（idHash 或 admin）；未审批为空
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	// ForwardBindingChannelID 是源申请人选择的专属转发目标（channel_bindings
+	// 引用，仅用户源可设置）；0 = 未设置。引用有效性（active/归属/路由）由
+	// watch 服务在设置时校验、在投递时复查。
+	ForwardBindingChannelID int64 `json:"forward_binding_channel_id"`
+	// GlobalMirrorEnabled 是管理员逐源控制的「额外镜像到全局监听转发频道」
+	// 开关：管理员源（added_by=0）默认开以保持历史行为，用户源默认关。
+	GlobalMirrorEnabled bool  `json:"global_mirror_enabled"`
+	CreatedAt           int64 `json:"created_at"`
+	UpdatedAt           int64 `json:"updated_at"`
 }
 
 // WatchSourceWithUser 是 Web 管理端列表行：监听源 + 申请人展示资料
@@ -54,19 +61,25 @@ type WatchSourceWithUser struct {
 
 const selectWatchSource = `SELECT channel_id,
 	COALESCE(kind, ''), COALESCE(username, ''), COALESCE(title, ''), status, enabled,
-	added_by, bot_id, bot_username, COALESCE(reviewed_by, ''), created_at, updated_at
+	added_by, bot_id, bot_username, COALESCE(reviewed_by, ''),
+	COALESCE(forward_binding_channel_id, 0), global_mirror_enabled,
+	created_at, updated_at
 FROM watch_sources`
 
 func scanWatchSource(row scanner) (WatchSource, error) {
 	var s WatchSource
 	err := row.Scan(&s.ChannelID, &s.Kind, &s.Username, &s.Title, &s.Status, &s.Enabled,
-		&s.AddedBy, &s.BotID, &s.BotUsername, &s.ReviewedBy, &s.CreatedAt, &s.UpdatedAt)
+		&s.AddedBy, &s.BotID, &s.BotUsername, &s.ReviewedBy,
+		&s.ForwardBindingChannelID, &s.GlobalMirrorEnabled,
+		&s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
 
 const selectWatchSourceWithUser = `SELECT w.channel_id,
 	COALESCE(w.kind, ''), COALESCE(w.username, ''), COALESCE(w.title, ''), w.status, w.enabled,
-	w.added_by, w.bot_id, w.bot_username, COALESCE(w.reviewed_by, ''), w.created_at, w.updated_at,
+	w.added_by, w.bot_id, w.bot_username, COALESCE(w.reviewed_by, ''),
+	COALESCE(w.forward_binding_channel_id, 0), w.global_mirror_enabled,
+	w.created_at, w.updated_at,
 	COALESCE(u.username, ''), COALESCE(u.display_name, '')
 FROM watch_sources w
 LEFT JOIN users u ON u.id = w.added_by`
@@ -74,13 +87,18 @@ LEFT JOIN users u ON u.id = w.added_by`
 func scanWatchSourceWithUser(row scanner) (WatchSourceWithUser, error) {
 	var s WatchSourceWithUser
 	err := row.Scan(&s.ChannelID, &s.Kind, &s.Username, &s.Title, &s.Status, &s.Enabled,
-		&s.AddedBy, &s.BotID, &s.BotUsername, &s.ReviewedBy, &s.CreatedAt, &s.UpdatedAt,
+		&s.AddedBy, &s.BotID, &s.BotUsername, &s.ReviewedBy,
+		&s.ForwardBindingChannelID, &s.GlobalMirrorEnabled,
+		&s.CreatedAt, &s.UpdatedAt,
 		&s.UserUsername, &s.UserDisplayName)
 	return s, err
 }
 
 // UpsertWatchSource 写入或刷新监听源（幂等）：同一频道重复添加只刷新
 // username/title/status/enabled/added_by 与 updated_at，保留 created_at。
+// 首次插入按 added_by 推导策略默认值（管理员源全局镜像开、用户源关，
+// 专属目标恒空）；冲突更新路径不触碰 forward_binding_channel_id 与
+// global_mirror_enabled——重复 /watch 不得覆盖用户目标选择或管理员开关。
 func (s *Store) UpsertWatchSource(ctx context.Context, in WatchSource) (WatchSource, error) {
 	if !watchStatusSet[in.Status] {
 		return WatchSource{}, wrapDB("写入监听源", errors.New("非法状态 "+in.Status))
@@ -90,8 +108,9 @@ func (s *Store) UpsertWatchSource(ctx context.Context, in WatchSource) (WatchSou
 	}
 	in.UpdatedAt = nowMillis()
 	_, err := s.ex.ExecContext(ctx, `INSERT INTO watch_sources
-		(channel_id, kind, username, title, status, enabled, added_by, bot_id, bot_username, reviewed_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		(channel_id, kind, username, title, status, enabled, added_by, bot_id, bot_username,
+		 reviewed_by, created_at, updated_at, forward_binding_channel_id, global_mirror_enabled)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)
 		ON CONFLICT(channel_id) DO UPDATE SET
 			kind = excluded.kind,
 			username = excluded.username,
@@ -104,7 +123,8 @@ func (s *Store) UpsertWatchSource(ctx context.Context, in WatchSource) (WatchSou
 			reviewed_by = excluded.reviewed_by,
 			updated_at = excluded.updated_at`,
 		in.ChannelID, in.Kind, nullStr(in.Username), nullStr(in.Title), in.Status, in.Enabled,
-		in.AddedBy, in.BotID, in.BotUsername, nullStr(in.ReviewedBy), in.CreatedAt, in.UpdatedAt)
+		in.AddedBy, in.BotID, in.BotUsername, nullStr(in.ReviewedBy), in.CreatedAt, in.UpdatedAt,
+		in.AddedBy == 0)
 	if err != nil {
 		return WatchSource{}, wrapDB("写入监听源", err)
 	}
@@ -263,6 +283,47 @@ func (s *Store) SetWatchSourceEnabled(ctx context.Context, channelID int64, enab
 		return WatchSource{}, ErrNotFound
 	}
 	return s.GetWatchSource(ctx, channelID)
+}
+
+// SetWatchSourceForwardBinding 设置（bindingChannelID>0）或清空（=0）源的
+// 专属转发目标引用。DAO 只落引用不做有效性校验——active/归属/路由/循环
+// 校验由 watch 服务在调用前完成。行不存在返回 ErrNotFound。
+func (s *Store) SetWatchSourceForwardBinding(ctx context.Context, channelID, bindingChannelID int64) (WatchSource, error) {
+	res, err := s.ex.ExecContext(ctx,
+		"UPDATE watch_sources SET forward_binding_channel_id = ?, updated_at = ? WHERE channel_id = ?",
+		nullInt64(bindingChannelID), nowMillis(), channelID)
+	if err := affected(res, err, "更新监听源专属目标"); err != nil {
+		return WatchSource{}, err
+	}
+	return s.GetWatchSource(ctx, channelID)
+}
+
+// SetWatchSourceGlobalMirror 管理员逐源切换「额外镜像到全局监听转发频道」
+// 开关；行不存在返回 ErrNotFound。
+func (s *Store) SetWatchSourceGlobalMirror(ctx context.Context, channelID int64, enabled bool) (WatchSource, error) {
+	res, err := s.ex.ExecContext(ctx,
+		"UPDATE watch_sources SET global_mirror_enabled = ?, updated_at = ? WHERE channel_id = ?",
+		enabled, nowMillis(), channelID)
+	if err := affected(res, err, "更新监听源全局镜像开关"); err != nil {
+		return WatchSource{}, err
+	}
+	return s.GetWatchSource(ctx, channelID)
+}
+
+// ForwardTargetInUse 报告 channelID 是否被任一监听源选为专属转发目标，或
+// 被任一活动私有邀请申请暂存为目标（循环防护：这样的频道不能再成为监听
+// 源，否则「源 → 目标（另一源）」形成转发环）。
+func (s *Store) ForwardTargetInUse(ctx context.Context, channelID int64) (bool, error) {
+	var inUse bool
+	err := s.ex.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM watch_sources WHERE forward_binding_channel_id = ?)
+		OR EXISTS(SELECT 1 FROM watch_invite_requests WHERE forward_binding_channel_id = ? AND `+
+		activeWatchInviteWhere("status")+")",
+		append([]any{channelID, channelID}, activeWatchInviteArgs()...)...).Scan(&inUse)
+	if err != nil {
+		return false, wrapDB("查询专属目标占用", err)
+	}
+	return inUse, nil
 }
 
 // DeleteWatchSource 删除监听源并返回删除前的记录；不存在返回 ErrNotFound。

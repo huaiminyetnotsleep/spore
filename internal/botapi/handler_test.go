@@ -3,6 +3,7 @@ package botapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -170,6 +171,7 @@ type fakeSender struct {
 	deleted     []int
 	nextID      int
 	markupEdits []models.ReplyMarkup
+	editTexts   []string
 }
 
 func (f *fakeSender) SendMessage(ctx context.Context, chatID int64, html string) (int, error) {
@@ -205,11 +207,19 @@ func (f *fakeSender) EditMessageText(ctx context.Context, chatID int64, messageI
 	return f.EditMessageTextWithMarkup(ctx, chatID, messageID, html, nil)
 }
 
-func (f *fakeSender) EditMessageTextWithMarkup(_ context.Context, _ int64, _ int, _ string, markup models.ReplyMarkup) error {
+func (f *fakeSender) EditMessageTextWithMarkup(_ context.Context, _ int64, messageID int, html string, markup models.ReplyMarkup) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markupEdits = append(f.markupEdits, markup)
+	f.editTexts = append(f.editTexts, fmt.Sprintf("%d:%s", messageID, html))
 	return nil
+}
+
+// editedTexts 返回 "messageID:html" 形式的编辑记录（面板收尾文案断言用）。
+func (f *fakeSender) editedTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.editTexts...)
 }
 
 func (f *fakeSender) DeleteMessage(_ context.Context, _ int64, messageID int) error {

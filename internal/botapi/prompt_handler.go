@@ -14,13 +14,16 @@ import (
 )
 
 const (
-	promptCancelCallbackPrefix      = "pi:cancel:"
-	promptUsageCallbackPrefix       = "pi:usage:"
-	promptDestinationCallbackPrefix = "pi:dest:"
-	promptPageCallbackPrefix        = "pi:page:"
-	promptPinModeCallbackPrefix     = "pi:pinmode:"
-	downloadDestinationPageSize     = 8
-	expiredDownloadSelectionText    = "本次目的地选择已失效，请重新发送 /download。"
+	promptCancelCallbackPrefix           = "pi:cancel:"
+	promptUsageCallbackPrefix            = "pi:usage:"
+	promptDestinationCallbackPrefix      = "pi:dest:"
+	promptPageCallbackPrefix             = "pi:page:"
+	promptPinModeCallbackPrefix          = "pi:pinmode:"
+	promptWatchTargetCallbackPrefix      = "pi:wtgt:"
+	promptWatchTargetPageCallbackPrefix  = "pi:wtpage:"
+	promptWatchTargetClearCallbackPrefix = "pi:wtclr:"
+	downloadDestinationPageSize          = 8
+	expiredDownloadSelectionText         = "本次目的地选择已失效，请重新发送 /download。"
 )
 
 func sendPromptInput(ctx context.Context, opt Options, snd delivery.Sender, prompter *inputPrompter, chatID int64, command, html, placeholder, usage string) {
@@ -285,6 +288,60 @@ func handlePromptCallback(ctx context.Context, opt Options, snd delivery.Sender,
 			"<blockquote>☁️ 已选择目的地 <b>"+destination+"</b>，正在提交。</blockquote>")
 		handleUpdate(ctx, opt, snd, callback.From, chatID,
 			"/download "+destination+" "+entry.input, 0)
+	case strings.HasPrefix(callback.Data, promptWatchTargetCallbackPrefix):
+		promptID, index, ok := parsePromptIndexedCallback(callback.Data, promptWatchTargetCallbackPrefix)
+		if !ok {
+			return
+		}
+		entry, candidate, ok := prompter.selectWatchTarget(promptID, callback.From.ID, index)
+		if !ok {
+			sendPromptCallbackNotice(ctx, opt, snd, callback, expiredWatchTargetText)
+			return
+		}
+		chatID := callbackChatID(callback, entry.chatID)
+		if callback.Message.Message != nil {
+			entry.controlMessageID = callback.Message.Message.ID
+		}
+		if opt.WatchForward == nil {
+			finishPromptSubmission(ctx, opt, snd, chatID, entry,
+				"<blockquote>⚠️ 该功能当前未启用，请联系管理员开通。</blockquote>")
+			return
+		}
+		applyWatchTargetSelection(ctx, opt, snd, callback.From.ID, chatID, entry, candidate)
+	case strings.HasPrefix(callback.Data, promptWatchTargetClearCallbackPrefix):
+		promptID, ok := parsePromptCallbackID(callback.Data, promptWatchTargetClearCallbackPrefix)
+		if !ok {
+			return
+		}
+		entry, ok := prompter.consume(promptID, callback.From.ID)
+		if !ok {
+			sendPromptCallbackNotice(ctx, opt, snd, callback, expiredWatchTargetText)
+			return
+		}
+		chatID := callbackChatID(callback, entry.chatID)
+		if callback.Message.Message != nil {
+			entry.controlMessageID = callback.Message.Message.ID
+		}
+		if opt.WatchForward == nil {
+			finishPromptSubmission(ctx, opt, snd, chatID, entry,
+				"<blockquote>⚠️ 该功能当前未启用，请联系管理员开通。</blockquote>")
+			return
+		}
+		applyWatchTargetClear(ctx, opt, snd, callback.From.ID, chatID, entry)
+	case strings.HasPrefix(callback.Data, promptWatchTargetPageCallbackPrefix):
+		promptID, page, ok := parsePromptIndexedCallback(callback.Data, promptWatchTargetPageCallbackPrefix)
+		if !ok {
+			return
+		}
+		entry, ok := prompter.setWatchTargetPage(promptID, callback.From.ID, page)
+		if !ok {
+			sendPromptCallbackNotice(ctx, opt, snd, callback, expiredWatchTargetText)
+			return
+		}
+		if callback.Message.Message != nil {
+			entry.controlMessageID = callback.Message.Message.ID
+		}
+		showWatchTargetPanel(ctx, opt, snd, prompter, entry)
 	case strings.HasPrefix(callback.Data, promptPageCallbackPrefix):
 		promptID, page, ok := parsePromptIndexedCallback(callback.Data, promptPageCallbackPrefix)
 		if !ok {

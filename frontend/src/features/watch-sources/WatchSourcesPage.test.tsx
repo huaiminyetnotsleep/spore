@@ -9,9 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  fetchSettings,
   fetchWatchSources,
-  type SettingsView,
   type WatchInviteRequestRow,
   type WatchSourceRow,
 } from "../../api/admin";
@@ -24,6 +22,7 @@ import {
   retryWatchInviteRequest,
   reviewWatchSource,
   toggleWatchSource,
+  toggleWatchSourceGlobalMirror,
 } from "../../api/mutations";
 import { WatchSourcesPage } from "./WatchSourcesPage";
 
@@ -32,7 +31,6 @@ vi.mock("../../api/admin", async () => {
   return {
     ...actual,
     fetchWatchSources: vi.fn(),
-    fetchSettings: vi.fn(),
   };
 });
 
@@ -48,11 +46,11 @@ vi.mock("../../api/mutations", async () => {
     retryWatchInviteRequest: vi.fn(),
     reviewWatchSource: vi.fn(),
     toggleWatchSource: vi.fn(),
+    toggleWatchSourceGlobalMirror: vi.fn(),
   };
 });
 
 const mockFetchSources = vi.mocked(fetchWatchSources);
-const mockFetchSettings = vi.mocked(fetchSettings);
 const mockAdd = vi.mocked(addWatchSource);
 const mockApproveInvite = vi.mocked(approveWatchInviteRequest);
 const mockDeleteInvite = vi.mocked(deleteWatchInviteRequest);
@@ -60,18 +58,8 @@ const mockRejectInvite = vi.mocked(rejectWatchInviteRequest);
 const mockRetryInvite = vi.mocked(retryWatchInviteRequest);
 const mockReview = vi.mocked(reviewWatchSource);
 const mockToggle = vi.mocked(toggleWatchSource);
+const mockMirror = vi.mocked(toggleWatchSourceGlobalMirror);
 const mockDeleteSource = vi.mocked(deleteWatchSource);
-
-/** 「转发目标」列数据源的最小设置夹具（仅页面消费的字段参与断言）。 */
-function sampleSettings(overrides: Partial<SettingsView> = {}): SettingsView {
-  return {
-    watch_forward_channels: [],
-    dump_channel_id: 0,
-    dump_channel_title: "",
-    dump_channels: [],
-    ...overrides,
-  } as SettingsView;
-}
 
 function sampleSource(overrides: Partial<WatchSourceRow> = {}): WatchSourceRow {
   return {
@@ -86,6 +74,8 @@ function sampleSource(overrides: Partial<WatchSourceRow> = {}): WatchSourceRow {
     user_display_name: "",
     bot_id: 999,
     bot_username: "test_bot",
+    global_mirror_enabled: false,
+    forward_target: null,
     reviewed_by: "",
     created_at: 1757000000000,
     updated_at: 1757000000000,
@@ -109,6 +99,7 @@ function sampleInviteRequest(
     enabled: true,
     bot_id: 999,
     bot_username: "test_bot",
+    forward_binding_channel_id: 0,
     reviewed_by: "",
     note: "",
     created_at: 1757000000000,
@@ -136,27 +127,66 @@ describe("监听源管理页", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetchSources.mockReset();
-    // 「转发目标」列数据源（查询失败不阻塞列表；缺省已配置缓存频道）
-    mockFetchSettings.mockResolvedValue(sampleSettings());
   });
 
-  it("转发目标列展示监听转发频道汇总或缓存兜底", async () => {
-    mockFetchSources.mockResolvedValueOnce({ items: [sampleSource()] });
-    mockFetchSettings.mockResolvedValueOnce(
-      sampleSettings({
-        dump_channel_id: -100777,
-        dump_channel_title: "缓存频道",
-        dump_channels: [{ channel_id: -100777, title: "缓存频道", enabled: true }],
-        watch_forward_channels: [
-          { channel_id: -100888, title: "转发一" },
-          { channel_id: -100999, title: "转发二" },
-        ],
-      }),
-    );
+  it("转发目标列按源展示专属目标状态，全局镜像开关调用逐源接口", async () => {
+    mockFetchSources.mockResolvedValueOnce({
+      items: [
+        // 用户源：专属目标已设置
+        sampleSource({
+          channel_id: -100111,
+          title: "用户源A",
+          added_by: 42,
+          forward_target: { state: "set", channel_id: -100888, title: "我的频道" },
+          global_mirror_enabled: false,
+        }),
+        // 用户源：专属目标失效
+        sampleSource({
+          channel_id: -100222,
+          title: "用户源B",
+          added_by: 42,
+          forward_target: { state: "stale", channel_id: -100999 },
+          global_mirror_enabled: true,
+        }),
+        // 用户源：未选择专属目标
+        sampleSource({ channel_id: -100223, title: "用户源C", added_by: 42, forward_target: null }),
+        // 管理员源：无专属目标，仅全局镜像（默认开）
+        sampleSource({ channel_id: -100333, title: "管理员源", added_by: 0, global_mirror_enabled: true }),
+      ],
+    });
+    mockMirror.mockResolvedValueOnce({
+      ok: true,
+      source: sampleSource({ channel_id: -100333, global_mirror_enabled: true }),
+    });
+
     renderPage();
-    await screen.findByText("添加监听源");
-    // 设置查询异步返回后再断言单元格
-    expect(await screen.findByText("转发一 +1")).toBeInTheDocument();
+    await screen.findByText("用户源A");
+    expect(screen.getByText("专属：我的频道")).toBeInTheDocument();
+    expect(screen.getByText(/专属目标已失效/)).toBeInTheDocument();
+    expect(screen.getByText("专属目标未设置")).toBeInTheDocument();
+    expect(screen.getByText("—（管理员源）")).toBeInTheDocument();
+
+    // 全局镜像开关：用户源B 镜像开（checked）；管理员源开 → 关触发逐源接口
+    const switches = screen.getAllByRole("switch");
+    expect(switches.length).toBe(4);
+    expect(switches[1]).toBeChecked(); // 用户源B 镜像开
+    fireEvent.click(switches[3]); // 管理员源：开 → 关
+    await waitFor(() => {
+      expect(mockMirror).toHaveBeenCalledWith(-100333, false);
+    });
+  });
+
+  it("邀请申请展示暂存的专属目标", async () => {
+    mockFetchSources.mockResolvedValueOnce({
+      items: [],
+      invite_requests: [
+        sampleInviteRequest({ id: 31, channel_title: "私邀A", forward_binding_channel_id: -100777 }),
+        sampleInviteRequest({ id: 32, channel_title: "私邀B" }),
+      ],
+    });
+    renderPage();
+    await screen.findByText("私邀A");
+    expect(screen.getByText(/已暂存专属目标（-100777）/)).toBeInTheDocument();
   });
 
   it("渲染唯一 H1 页面标题「监听源管理」并提供添加输入框", async () => {

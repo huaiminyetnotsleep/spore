@@ -29,7 +29,7 @@
 | 访问层 | `internal/store` 是唯一入口（`store.Open`）；业务 SQL 不出现在其他包 |
 | 连接 | 连接池固定 1 连接（SQLite 单写者，从根上消除写锁竞争） |
 | 连接级 PRAGMA | `journal_mode=WAL`、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL` |
-| schema 版本 | `PRAGMA user_version`（当前 **26**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
+| schema 版本 | `PRAGMA user_version`（当前 **28**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
 | 迁移规则 | 版本化、内嵌、**只增不改**：每个版本在独立事务内执行 DDL 并同事务写入 `user_version`；已发布迁移永不修改，新变更一律追加新版本 |
 
 容量目标：≤100 用户、约 5,000 请求/日（约 180 万行/年），远低于 SQLite 单文件上限，不引入 PostgreSQL/Redis 等外部数据库。
@@ -42,7 +42,7 @@
 
 ## 2. Schema 总览
 
-当前版本 v26 包含 **20 张业务表、25 个显式索引、5 个数据库外键**：
+当前版本 v28 包含 **20 张业务表、27 个显式索引、6 个数据库外键**：
 
 - 无触发器、无视图；恢复任务与条目的状态枚举另有 CHECK 约束，其他状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
 - `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`、`error_logs`）自动维护的内部表，**不属于业务 schema**。v26 的 `recovery_jobs`、`recovery_items` 同样使用 AUTOINCREMENT。
@@ -214,6 +214,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `user_id` | INTEGER | NOT NULL，FK → `users(id)` | 归属用户 |
 | `username` | TEXT | 可空 | 频道公开用户名（私有频道为空） |
 | `title` | TEXT | 可空 | 绑定时取得的频道标题 |
+| `kind` | TEXT | NOT NULL DEFAULT '' | 聊天类型快照（v28）：`channel` / `supergroup`，绑定时记录；空串为历史行，经重绑或信息刷新回填。管理端"监听转发频道"候选据此只列频道类型（与全局转发仅接受频道的校验一致） |
 | `bound_via` | TEXT | NOT NULL DEFAULT 'bot' | 绑定来源：`bot`（用户 `/bind`）/ `web`（管理端） |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 路由 bot（v21）：绑定经哪台 bot 建立并通过硬校验；仅它受理的任务投递副本/置顶到此；0 = 通配（Web 绑定与历史行），任意受理 bot 均尝试 |
 | `status` | TEXT | NOT NULL DEFAULT 'active' | 软解绑状态机（v24）：`active` 有效 / `unbound` 已解绑留痕（解绑不删行；重新绑定同频道即复活，unbound 行也允许其他用户接管） |
@@ -316,6 +317,8 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `added_by` | INTEGER | NOT NULL DEFAULT 0 | 0 = 管理员 Web 添加；>0 = 申请人用户 ID |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 用户 /watch 的受理 bot ID（与 `requests.bot_id` v15 同语义；0 = Web 添加） |
 | `bot_username` | TEXT | NOT NULL DEFAULT '' | 受理 bot 用户名快照（展示自持，bot 移出池后历史仍可读） |
+| `forward_binding_channel_id` | INTEGER | NULL → channel_bindings(channel_id) ON DELETE SET NULL（v28） | 申请人选择的专属转发目标绑定频道 ID；NULL = 未设置。物理删除绑定时自动清空；软解绑保留引用、运行时复查状态（active + 归属 + 受理 Bot 同路由才投递，失效只停专属副本不回退全局） |
+| `global_mirror_enabled` | INTEGER | NOT NULL DEFAULT 0（v28 回填：added_by=0 → 1） | 管理员逐源开关：是否额外镜像到全局 `watch_forward_channels`。管理员源默认开（保持历史行为）、用户源默认关（隐私收紧）；普通 source upsert 不覆盖本列 |
 | `reviewed_by` | TEXT | NULL | 审批人（session idHash 或 admin）；未审批为空 |
 | `created_at` | INTEGER | NOT NULL | 首次写入时间（Upsert 冲突更新不重置） |
 | `updated_at` | INTEGER | NOT NULL | 最近更新时间 |
@@ -332,6 +335,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `message_id` | INTEGER | NOT NULL | 定位消息 ID（相册取首条成员） |
 | `member_ids_json` | TEXT | NOT NULL | 转发的源消息 ID 数组（相册为全部成员） |
 | `dump_ids_json` | TEXT | NOT NULL | 缓存频道落点消息 ID 数组（fallback 为空数组） |
+| `targets_json` | TEXT | NOT NULL DEFAULT '[]'（v27） | 本批消息实际写入的目标快照 `{channel_id,title}[]`：缓存频道优先，其后为成功的监听转发目标（v28 起含专属目标与按源全局镜像）；只记成功落点，回退路径在镜像完成后按 `request_id` 回写 |
 | `request_id` | INTEGER | NOT NULL DEFAULT 0 | 关联 `requests` 行（仅 fallback；0 = 无） |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 执行转储的 bot |
 | `bot_username` | TEXT | NOT NULL DEFAULT '' | bot 用户名快照 |
@@ -359,6 +363,7 @@ Telegram 用户主档，主键即 Telegram User ID。状态流转：`/start` 创
 | `note` | TEXT | NOT NULL DEFAULT '' | 备注（状态更新时覆盖写入，空串即清除） |
 | `bot_id` | INTEGER | NOT NULL DEFAULT 0 | 受理 bot ID |
 | `bot_username` | TEXT | NOT NULL DEFAULT '' | 受理 bot 用户名快照 |
+| `forward_binding_channel_id` | INTEGER | NULL（v28，无外键；读取经 COALESCE 归一为 0） | 活动申请暂存的专属目标频道 ID（满足私有邀请「提交后立即选择」）；激活时服务层复验（归属/路由/循环）后转移到 `watch_sources`，终态清空。无外键：等待期内绑定被物理删除时保留脏 ID，由复验兜底 |
 | `requested_at` | INTEGER | NOT NULL | 申请时间（Unix 毫秒；模型 JSON 字段 `created_at`） |
 | `updated_at` | INTEGER | NOT NULL | 最近状态、频道信息、审批人或 hash 清理更新时间 |
 
@@ -494,6 +499,8 @@ API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skippe
 | `idx_recovery_one_running` | `recovery_jobs` | (status) UNIQUE WHERE status='running' | v26 | 限制单运行任务 |
 | `idx_recovery_items_job` | `recovery_items` | (job_id, status, id) | v26 | 进度、执行与分页 |
 | `idx_recovery_items_identity` | `recovery_items` | (identity_key, status) | v26 | 同目标成功恢复去重 |
+| `idx_watch_sources_forward_binding` | `watch_sources` | (forward_binding_channel_id) WHERE forward_binding_channel_id IS NOT NULL | v28 | 专属目标引用定位（目标占用查重与清理） |
+| `idx_watch_invite_requests_forward_binding` | `watch_invite_requests` | (forward_binding_channel_id) WHERE forward_binding_channel_id IS NOT NULL | v28 | 活动申请暂存目标定位与清理 |
 
 隐式索引：`events.key` 的 UNIQUE 索引，以及各主键索引（含 `usage_daily` 复合主键）。
 
@@ -633,3 +640,5 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v24 | `dump_entries.dump_channel_id`（副本所在缓存频道，0 = 存量永不命中）；`channel_bindings` 软解绑状态机（status/unbind_reason/unbound_at，解绑不删行） |
 | v25 | `error_logs` 错误日志中心表与四索引（来源/错误码/请求/时间）；`cloud_uploads.error_detail`（单文件上传失败根因，对称 requests v23） |
 | v26 | `recovery_jobs` / `recovery_items` 历史恢复任务与逐项坐标/结果；单运行任务唯一部分索引、逐项分页及身份去重索引；状态 CHECK 和 job_id 外键 |
+| v27 | `watch_events.targets_json`（监听事件转发目标快照：缓存频道优先 + 成功的监听转发目标；旧行空数组） |
+| v28 | 监听源专属转发目标：`watch_sources.forward_binding_channel_id`（FK ON DELETE SET NULL）与 `global_mirror_enabled`（回填：管理员源开、用户源关）及部分索引；`watch_invite_requests.forward_binding_channel_id` 暂存列（无外键）与部分索引；`channel_bindings.kind` 聊天类型快照列（历史行为空串） |

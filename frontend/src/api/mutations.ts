@@ -412,6 +412,16 @@ export const toggleWatchSource = (
 ): Promise<WatchSourceOpResult> =>
   postJSON<WatchSourceOpResult>(`/api/v1/watch-sources/${channelId}/toggle`, { enabled });
 
+/**
+ * 切换「额外镜像到全局监听转发频道」逐源开关（管理员操作）。
+ * 用户源默认关（隐私收紧）、管理员源默认开（保持历史行为）；专属目标不受影响。
+ */
+export const toggleWatchSourceGlobalMirror = (
+  channelId: number,
+  enabled: boolean,
+): Promise<WatchSourceOpResult> =>
+  postJSON<WatchSourceOpResult>(`/api/v1/watch-sources/${channelId}/global-mirror`, { enabled });
+
 /** 删除监听源行（任意状态）。 */
 export const deleteWatchSource = (channelId: number): Promise<WriteOK> =>
   postJSON<WriteOK>(`/api/v1/watch-sources/${channelId}/delete`);

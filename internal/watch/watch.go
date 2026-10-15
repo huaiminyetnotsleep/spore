@@ -148,6 +148,7 @@ const (
 	SubmitInviteInvalid         SubmitOutcomeKind = "invite_invalid"          // 邀请无效/过期/指向普通群组
 	SubmitReaderUnavailable     SubmitOutcomeKind = "reader_unavailable"      // MTProto 读取账号暂不可用
 	SubmitDumpChannelConflict   SubmitOutcomeKind = "dump_channel_conflict"   // 目标是缓存频道（监听源与缓存频道互斥，防循环转发）
+	SubmitForwardConflict       SubmitOutcomeKind = "forward_conflict"        // 目标已被用作转发目标（专属/全局，防循环转发）
 )
 
 // ErrDumpChannelConflict 是「目标是缓存频道」的哨兵错误（AdminAdd 返回，
@@ -171,6 +172,9 @@ type SubmitOutcome struct {
 	Count   int               // 触发上限时的现有数量（上限提示用）
 	Limit   int               // 触发上限时生效的上限值
 	Channel store.WatchSource // 终态行（成功/幂等路径）
+	// RequestID 是私有邀请申请 ID（邀请路径的活动申请结果填充，Bot 端据此
+	// 立即打开专属目标选择面板并暂存到该申请；普通源路径与已激活的邀请为 0）。
+	RequestID int64
 }
 
 // Submit 处理用户 /watch 申请：用户准入（enabled）→ 配置开关 → 解析与
@@ -201,7 +205,7 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 	if hash, ok := tmeurl.ParseInviteLink(target); ok {
 		return s.submitInvite(ctx, userID, isOwner, hash, botID, botUsername, cfg)
 	}
-	chat, err := s.verifyTarget(ctx, target)
+	chat, err := s.verifyTarget(ctx, target, botID)
 	if err != nil {
 		switch apperr.From(err).Code {
 		case apperr.CodeChannelTargetInvalid:
@@ -215,6 +219,15 @@ func (s *Service) Submit(ctx context.Context, userID int64, isOwner bool, target
 	// "源"的 channel_post，监听再次预热形成死循环）
 	if title, conflict := s.dumpChannelConflict(ctx, chat.ID); conflict {
 		return SubmitOutcome{Kind: SubmitDumpChannelConflict, Title: title}, nil
+	}
+	// 循环转发防护（另一侧）：已被用作转发目标（专属/全局）的频道不能
+	// 成为监听源，否则「源 → 目标（另一源）」成环。查询失败按瞬态错误
+	// 上抛（Bot 端回落受控 5xx 文案），不误报"换一个频道"。
+	if cerr := s.sourceChannelBlockedAsTarget(ctx, chat.ID); cerr != nil {
+		if !errors.Is(cerr, ErrForwardTargetConflict) {
+			return SubmitOutcome{}, cerr
+		}
+		return SubmitOutcome{Kind: SubmitForwardConflict, Title: chat.Title}, nil
 	}
 	// 查重：本人幂等刷新；他人（含管理员）已添加则拒绝。
 	existing, err := s.st.GetWatchSource(ctx, chat.ID)
@@ -286,7 +299,7 @@ func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bo
 	if hash, ok := tmeurl.ParseInviteLink(target); ok {
 		return s.adminAddInvite(ctx, actor, hash, enabled)
 	}
-	chat, err := s.verifyTarget(ctx, target)
+	chat, err := s.verifyTarget(ctx, target, 0)
 	if err != nil {
 		return AdminAddResult{}, err
 	}
@@ -295,6 +308,10 @@ func (s *Service) AdminAdd(ctx context.Context, actor, target string, enabled bo
 		return AdminAddResult{}, fmt.Errorf(
 			"%w：频道「%s」（%d）已配置为缓存频道，预热副本写回会触发循环转发；请换一个频道，或先在「频道设置」移除该缓存频道。",
 			ErrDumpChannelConflict, title, chat.ID)
+	}
+	// 循环转发防护（另一侧）：已被用作转发目标的频道不能成为监听源
+	if cerr := s.sourceChannelBlockedAsTarget(ctx, chat.ID); cerr != nil {
+		return AdminAddResult{}, cerr
 	}
 	row, err := s.st.UpsertWatchSource(ctx, store.WatchSource{
 		ChannelID:  chat.ID,
@@ -329,26 +346,28 @@ func (s *Service) dumpChannelConflict(ctx context.Context, channelID int64) (str
 	return "", false
 }
 
-// verifyTarget 解析并校验源目标：频道或超级群组，且 bot（主 bot 校验）
-// 须为其管理员/创建者。返回校验后的 ChatFullInfo。
-func (s *Service) verifyTarget(ctx context.Context, target string) (models.ChatFullInfo, error) {
+// verifyTarget 解析并校验源目标：频道或超级群组，且 bot 须为其管理员/
+// 创建者。返回校验后的 ChatFullInfo。botID>0 时由该受理 Bot 执行校验
+// （用户 /watch 路径——watch_sources.bot_id 必须代表"可读源"的稳定路由，
+// 用别的 bot 校验会落一个不可用的投递身份）；0 用主 bot（管理员 Web 路径）。
+func (s *Service) verifyTarget(ctx context.Context, target string, botID int64) (models.ChatFullInfo, error) {
 	tgt, err := binding.ParseChannelTarget(target)
 	if err != nil {
 		return models.ChatFullInfo{}, err
 	}
-	bots := s.currentBotClients()
-	if len(bots) == 0 {
-		return models.ChatFullInfo{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
+	b, err := s.verifyBot(botID)
+	if err != nil {
+		return models.ChatFullInfo{}, err
 	}
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := bots[0].GetChat(vctx, tgt.ChatParams())
+	chat, err := b.GetChat(vctx, tgt.ChatParams())
 	if err != nil {
 		// 网络故障/限流透传真实原因；其余失败 = bot 看不见目标聊天，统一按
 		// "需先拉 bot 为管理员"提示
 		return models.ChatFullInfo{}, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
-	return s.verifyChatAdmin(vctx, bots[0], *chat)
+	return s.verifyChatAdmin(vctx, b, *chat)
 }
 
 // verifyChatAdmin 校验 chat 类型与 bot 管理员身份：频道/超级群组 + owner/
@@ -372,22 +391,43 @@ func (s *Service) verifyChatAdmin(ctx context.Context, b botClient, chat models.
 		"机器人不是该聊天的管理员（请先把本机器人加为频道/群管理员）")
 }
 
-// verifyBotAdmin 按 Bot API 频道 ID（-100 形态）校验主 Bot 的管理员身份，
-// 返回 GetChat 结果。权限不足统一归为 CodeChannelNotPostable（邀请激活路径
+// verifyBotAdmin 按 Bot API 频道 ID（-100 形态）校验 Bot 的管理员身份，
+// 返回 GetChat 结果。botID>0 时校验该受理 Bot（用户邀请申请——激活后的
+// 监听由该 Bot 承载，管理员身份必须落在它身上）；0 用主 bot（管理员路径
+// 与存量任务）。权限不足统一归为 CodeChannelNotPostable（邀请激活路径
 // 据此转入 waiting_bot）；网络故障/限流透传真实错误码，由调用方按瞬态失败
 // 重试（对账循环下轮重试），不因网络抖动提前转入 waiting_bot。
-func (s *Service) verifyBotAdmin(ctx context.Context, channelID int64) (models.ChatFullInfo, error) {
-	bots := s.currentBotClients()
-	if len(bots) == 0 {
-		return models.ChatFullInfo{}, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
+func (s *Service) verifyBotAdmin(ctx context.Context, channelID, botID int64) (models.ChatFullInfo, error) {
+	b, err := s.verifyBot(botID)
+	if err != nil {
+		return models.ChatFullInfo{}, err
 	}
 	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	chat, err := bots[0].GetChat(vctx, &tgbot.GetChatParams{ChatID: channelID})
+	chat, err := b.GetChat(vctx, &tgbot.GetChatParams{ChatID: channelID})
 	if err != nil {
 		return models.ChatFullInfo{}, binding.ClassifyVerifyError(err, apperr.CodeChannelNotPostable)
 	}
-	return s.verifyChatAdmin(vctx, bots[0], *chat)
+	return s.verifyChatAdmin(vctx, b, *chat)
+}
+
+// verifyBot 取校验用 Bot 客户端：botID>0 精确匹配（不回退主 bot——受理
+// 身份与校验身份必须一致）；0 用列表首位（主 bot）。
+func (s *Service) verifyBot(botID int64) (botClient, error) {
+	bots := s.currentBotClients()
+	if len(bots) == 0 {
+		return nil, apperr.New(apperr.CodeInternal, "Bot 客户端尚未就绪，请稍后重试")
+	}
+	if botID != 0 {
+		for _, b := range bots {
+			if b.ID() == botID {
+				return b, nil
+			}
+		}
+		return nil, apperr.New(apperr.CodeInternal,
+			fmt.Sprintf("受理 Bot（%d）不在池中，请稍后重试或联系管理员", botID))
+	}
+	return bots[0], nil
 }
 
 // Unwatch 用户移除自己的监听源（任意状态）；目标不存在或不属于该用户
@@ -410,6 +450,24 @@ func (s *Service) Unwatch(ctx context.Context, userID int64, isOwner bool, targe
 	}
 	s.log.Info("监听源已移除", "channel_id", channelID, "user_id", userID)
 	return removed, nil
+}
+
+// UserSourceByTarget 把目标标识（@用户名/t.me 链接/-100 ID）解析为该用户
+// 名下的监听源行（Bot /watchtarget 选择器入口）。他人源/管理员源一律
+// ErrNotFound（不泄露存在性）；目标无法解析返回对应受控错误。
+func (s *Service) UserSourceByTarget(ctx context.Context, userID int64, target string) (store.WatchSource, error) {
+	channelID, err := s.resolveTarget(ctx, target)
+	if err != nil {
+		return store.WatchSource{}, err
+	}
+	row, err := s.st.GetWatchSource(ctx, channelID)
+	if err != nil {
+		return store.WatchSource{}, err
+	}
+	if row.AddedBy != userID {
+		return store.WatchSource{}, store.ErrNotFound
+	}
+	return row, nil
 }
 
 // resolveTarget 把目标标识解析为频道数字 ID（username 形态需 GetChat）。
@@ -441,13 +499,15 @@ func (s *Service) ListByUser(ctx context.Context, userID int64) ([]store.WatchSo
 
 // SourceView 是 Web 管理端列表行：源 + 申请人资料 + 预热统计（健康度
 // 展示——最近预热时间停更意味着监听可能已静默失效，如 bot 被移出源
-// 管理员）。
+// 管理员）+ 专属目标状态（管理员可查看但不能替申请人选择）。
 type SourceView struct {
 	store.WatchSourceWithUser
 	// PrewarmCount 是该源累计写入缓存频道的条目数（双键合并计数）。
 	PrewarmCount int `json:"prewarm_count"`
 	// PrewarmLastAt 是最近一次预热时间（0 = 从未预热）。
 	PrewarmLastAt int64 `json:"prewarm_last_at"`
+	// ForwardTarget 是专属目标展示视图（null = 用户源未设置/管理员源不适用）。
+	ForwardTarget *ForwardTargetView `json:"forward_target,omitempty"`
 }
 
 // ListAll 返回全部监听源（含申请人资料与预热统计，Web 管理端列表）。
@@ -485,6 +545,11 @@ func (s *Service) ListAll(ctx context.Context) ([]SourceView, error) {
 					view.PrewarmLastAt = max64(view.PrewarmLastAt, st.LastAt)
 				}
 			}
+		}
+		// 专属目标状态：用户源展示 set/unset/stale；管理员源不适用（无字段）
+		if r.AddedBy > 0 {
+			ft := s.ForwardTargetViewOf(ctx, r.WatchSource)
+			view.ForwardTarget = &ft
 		}
 		out = append(out, view)
 	}

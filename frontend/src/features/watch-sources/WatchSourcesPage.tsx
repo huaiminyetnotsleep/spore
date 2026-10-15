@@ -2,20 +2,19 @@
  * 监听源管理页（/watch-sources）：添加源频道/超级群组，并在同页处理邀请链接申请。
  * direct source 保持原有审批、暂停与删除流程；私有邀请链接先让读取账号加入，
  * Bot 管理员权限仍由管理员在 Telegram 中人工配置。
+ * 转发目标按源展示：申请人专属目标（只读状态）+ 管理员全局镜像逐源开关。
  * 两张表均支持「查询条件 + 查询按钮」（草稿态筛选，客户端过滤）；
  * 监听源列表支持批量操作（逐条复用单条端点，allSettled 汇总结果）。
  */
 import { useState } from "react";
-import type { Key } from "react";
+import type { Key, ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Button, Input, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { Button, Input, Select, Space, Switch, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import {
-  fetchSettings,
   fetchWatchSources,
-  type SettingsView,
   type WatchInviteRequestRow,
   type WatchSourceRow,
 } from "../../api/admin";
@@ -28,6 +27,7 @@ import {
   retryWatchInviteRequest,
   reviewWatchSource,
   toggleWatchSource,
+  toggleWatchSourceGlobalMirror,
 } from "../../api/mutations";
 import { fmtTime } from "../../shared/format";
 import { useAdminAction, useConfirmAction } from "../shared/actions";
@@ -102,36 +102,74 @@ function matchesKeyword(keyword: string, fields: (string | number)[]): boolean {
 }
 
 /**
- * 转发目标单元格：监听消息的转发目的由全局配置决定（无按源目标）——
- * 有监听转发频道时展示其汇总（Tooltip 全量）；未配置时回落缓存频道；
- * 缓存频道未配置时监听整体跳过，给出警示。查询失败不阻塞列表（显示 —）。
+ * 转发目标单元格（按源）：申请人选择的专属目标状态（管理员只读，用户在
+ * Bot 中 /watchtarget 自助选择/重选）+ 全局镜像逐源开关（管理员操作；用户
+ * 源默认关、管理员源默认开，开启后新消息额外镜像到全局「监听转发频道」）。
  */
-function ForwardTargetCell({ settings }: { settings?: SettingsView }) {
-  if (!settings) {
-    return <Text type="secondary">—</Text>;
-  }
-  const forwards = settings.watch_forward_channels ?? [];
-  if (forwards.length > 0) {
-    const [first, ...rest] = forwards;
-    const label = first.title || String(first.channel_id);
+function ForwardTargetCell({
+  row,
+  mirror,
+}: {
+  row: WatchSourceRow;
+  mirror: { pending: boolean; actingId?: number; toggle: (id: number, enabled: boolean) => void };
+}) {
+  if (row.added_by === 0) {
     return (
-      <Tooltip title={forwards.map((f) => f.title || f.channel_id).join("、")}>
-        <Text>{rest.length > 0 ? `${label} +${rest.length}` : label}</Text>
-      </Tooltip>
+      <Space direction="vertical" size={2}>
+        <Text type="secondary">—（管理员源）</Text>
+        <GlobalMirrorSwitch row={row} mirror={mirror} />
+      </Space>
     );
   }
-  // 多缓存频道：任一启用频道即可兜底（预热写入全部启用频道）
-  const hasEnabledDump = (settings.dump_channels ?? []).some((c) => c.enabled);
-  if (hasEnabledDump) {
-    return (
-      <Tooltip title="未配置监听转发频道：监听消息仅预热启用的缓存频道（供链接复用秒回）">
-        <Text>缓存频道（兜底）</Text>
+  let target: ReactNode;
+  if (row.forward_target?.state === "set") {
+    target = (
+      <Tooltip
+        title={`申请人选择的专属目标：${row.forward_target.title ?? ""}（${row.forward_target.channel_id}）；源内新消息会转发一份到该目标`}
+      >
+        <Text>专属：{row.forward_target.title || row.forward_target.channel_id}</Text>
+      </Tooltip>
+    );
+  } else if (row.forward_target?.state === "stale") {
+    target = (
+      <Tooltip title="已设置但绑定已失效（解绑/归属或路由变更）：失效期间仅停止专属副本，缓存预热不受影响；申请人可在 Bot 中 /watchtarget 重选">
+        <Text type="warning">专属目标已失效（{row.forward_target.channel_id}）</Text>
+      </Tooltip>
+    );
+  } else {
+    target = (
+      <Tooltip title="申请人尚未选择专属目标（可在 Bot 中发送 /watchtarget 选择）">
+        <Text type="secondary">专属目标未设置</Text>
       </Tooltip>
     );
   }
   return (
-    <Tooltip title="缓存频道与监听转发频道均未配置，监听消息会被跳过；请先在「频道设置」配置缓存频道">
-      <Text type="warning">未配置缓存频道</Text>
+    <Space direction="vertical" size={2}>
+      {target}
+      <GlobalMirrorSwitch row={row} mirror={mirror} />
+    </Space>
+  );
+}
+
+/** 全局镜像逐源开关：开启 = 额外镜像到全局监听转发频道（缓存预热与专属目标不受影响）。 */
+function GlobalMirrorSwitch({
+  row,
+  mirror,
+}: {
+  row: WatchSourceRow;
+  mirror: { pending: boolean; actingId?: number; toggle: (id: number, enabled: boolean) => void };
+}) {
+  return (
+    <Tooltip title="开启后该源新消息除缓存预热与专属目标外，还会镜像一份到全局「监听转发频道」（在监听设置中配置）">
+      <Space size={4}>
+        <Switch
+          size="small"
+          checked={row.global_mirror_enabled}
+          loading={mirror.pending && mirror.actingId === row.channel_id}
+          onChange={(checked) => mirror.toggle(row.channel_id, checked)}
+        />
+        <Text type="secondary">全局镜像</Text>
+      </Space>
     </Tooltip>
   );
 }
@@ -155,8 +193,6 @@ export function WatchSourcesPage() {
   const [selectedSourceKeys, setSelectedSourceKeys] = useState<Key[]>([]);
 
   const sources = useQuery({ queryKey: ["watch-sources"], queryFn: fetchWatchSources });
-  // 运行设置只用于「转发目标」列展示（全局监听转发频道/缓存频道）；查询失败不阻塞列表。
-  const settings = useQuery({ queryKey: ["settings"], queryFn: fetchSettings });
 
   const add = useAdminAction({
     action: (value: string) => addWatchSource(value),
@@ -190,6 +226,23 @@ export function WatchSourcesPage() {
         ? `「${result.source?.title || vars.id}」已恢复监听。`
         : `「${result.source?.title || vars.id}」已暂停监听（配置保留）。`,
   });
+
+  // 全局镜像逐源开关（进行中的那一行显示 loading）
+  const [actingMirrorId, setActingMirrorId] = useState<number | null>(null);
+  const mirrorToggle = useAdminAction({
+    action: ({ id, enabled }: { id: number; enabled: boolean }) => toggleWatchSourceGlobalMirror(id, enabled),
+    invalidate: [["watch-sources"]],
+    successText: (result, vars) =>
+      vars.enabled
+        ? `「${result.source?.title || vars.id}」已开启全局镜像（新消息额外转发到全局监听转发频道）。`
+        : `「${result.source?.title || vars.id}」已关闭全局镜像。`,
+  });
+  const runMirrorToggle = (id: number, enabled: boolean) => {
+    setActingMirrorId(id);
+    return mirrorToggle
+      .run({ id, enabled })
+      .finally(() => setActingMirrorId(null));
+  };
 
   const remove = useAdminAction({
     action: (id: number) => deleteWatchSource(id),
@@ -378,8 +431,17 @@ export function WatchSourcesPage() {
     {
       title: "转发目标",
       key: "forward_targets",
-      width: 150,
-      render: () => <ForwardTargetCell settings={settings.data} />,
+      width: 180,
+      render: (_, row) => (
+        <ForwardTargetCell
+          row={row}
+          mirror={{
+            pending: mirrorToggle.pending,
+            actingId: actingMirrorId ?? undefined,
+            toggle: (id, enabled) => void runMirrorToggle(id, enabled),
+          }}
+        />
+      ),
     },
     { title: "添加时间", dataIndex: "created_at", render: (v: number) => fmtTime(v) },
     {
@@ -436,6 +498,11 @@ export function WatchSourcesPage() {
             {row.channel_id ? row.channel_id : row.masked_hash}
           </Text>
           {row.participants > 0 ? <Text type="secondary">约 {row.participants} 名成员</Text> : null}
+          {row.forward_binding_channel_id !== 0 ? (
+            <Tooltip title="申请人已暂存专属转发目标（激活时复验并自动转移到源；拒绝/删除不保留）">
+              <Text type="secondary">已暂存专属目标（{row.forward_binding_channel_id}）</Text>
+            </Tooltip>
+          ) : null}
         </Space>
       ),
     },

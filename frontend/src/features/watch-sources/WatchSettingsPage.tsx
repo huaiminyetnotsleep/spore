@@ -62,13 +62,15 @@ export function WatchSettingsPage() {
   const forwards = draftForwards ?? serverForwards;
   const forwardsDirty = draftForwards != null && draftForwards.join("\n") !== serverForwards.join("\n");
 
-  // 下拉候选：已绑定频道/群组（active）按数字 ID 去重；值为 -100 数字 ID
-  // 字符串（服务端可直接解析校验），label 带标题与 @用户名便于辨认。
+  // 下拉候选：已绑定频道（active，仅频道类型——与后端 VerifyChannel 的
+  //「仅频道」校验一致，超级群组不能作为全局转发目标）按数字 ID 去重；
+  // 值为 -100 数字 ID 字符串（服务端可直接解析校验），label 带标题与
+  // @用户名便于辨认。
   const boundChannelOptions = useMemo(() => {
     const seen = new Set<number>();
     const options: { value: string; label: string }[] = [];
     for (const row of bindings.data?.items ?? []) {
-      if (row.status !== "active" || seen.has(row.channel_id)) {
+      if (row.status !== "active" || row.kind !== "channel" || seen.has(row.channel_id)) {
         continue;
       }
       seen.add(row.channel_id);
@@ -197,7 +199,7 @@ export function WatchSettingsPage() {
                 value={forwards}
                 onChange={(values) => setDraftForwards(values)}
                 options={boundChannelOptions}
-                placeholder="从已绑定的频道/群组中选择，或直接输入 @用户名 / t.me 链接 / -100 数字 ID"
+                placeholder="从已绑定的频道中选择，或直接输入 @用户名 / t.me 链接 / -100 数字 ID"
                 aria-label="监听转发频道"
                 maxCount={10}
                 tokenSeparators={[","]}
@@ -217,10 +219,10 @@ export function WatchSettingsPage() {
                 </Button>
               </FormActions>
               <Text type="secondary">
-                下拉枚举已绑定的频道/群组，也支持直接输入任意目标。转发频道独立于缓存频道：监听消息始终预热缓存频道，并原样转发一份到这里的每个频道（媒体/相册/caption
+                下拉枚举已绑定的频道（仅频道类型，与后端校验一致；超级群组不支持），也支持直接输入任意目标。转发频道独立于缓存频道：监听消息始终预热缓存频道，开启全局镜像的监听源还会原样转发一份到这里的每个频道（媒体/相册/caption
                 完整、无脚注）；受保护内容（禁止转发的源）经缓存频道中转后同样进入转发频道。每个受理
                 bot 都需被设为转发频道管理员（可发帖）；最多 10 个，保存时逐个校验解析，既有条目以数字
-                ID 形态展示。使用前需先配置缓存频道（「请求与频道 → 频道设置」）。
+                ID 形态展示。监听源与缓存频道不能同时作为转发目标（防循环转发）。使用前需先配置缓存频道（「请求与频道 → 频道设置」）。
               </Text>
             </Space>
           </PageSection>

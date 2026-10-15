@@ -105,6 +105,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/approve", s.handleAPIWatchSourceReview(true))
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/reject", s.handleAPIWatchSourceReview(false))
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/toggle", s.handleAPIWatchSourceToggle)
+	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/global-mirror", s.handleAPIWatchSourceGlobalMirror)
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/delete", s.handleAPIWatchSourceDelete)
 	s.mountAPIWrite(mux, "/api/v1/watch-sources/{id}/leave", s.handleAPIWatchSourceLeave)
 	s.mountAPIWrite(mux, "/api/v1/watch-invite-requests/{id}/approve", s.handleAPIWatchInviteReview(true))

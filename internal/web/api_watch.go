@@ -284,6 +284,46 @@ func (s *Server) handleAPIWatchSourceToggle(w http.ResponseWriter, r *http.Reque
 	}{apiWriteOK{OK: true}, row})
 }
 
+// handleAPIWatchSourceGlobalMirror 切换单个监听源向全局监听转发频道镜像的
+// 开关（业务透传 watch 服务，写入失败保持原值）；本层确保会话、CSRF
+// （由路由挂载）和仅含数值 ID/布尔值的审计。
+func (s *Server) handleAPIWatchSourceGlobalMirror(w http.ResponseWriter, r *http.Request, _ session) {
+	const op = "api.watch_sources.global_mirror"
+	if !s.apiRequireWatch(w, r, op) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		s.apiBadRequest(w, r, op, "路径中的频道 ID 无效。")
+		return
+	}
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !s.apiReadJSON(w, r, op, &in) {
+		return
+	}
+	if in.Enabled == nil {
+		s.apiBadRequest(w, r, op, "请提供 enabled 字段。")
+		return
+	}
+	row, err := s.watch.SetGlobalMirror(r.Context(), id, *in.Enabled)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.apiBadRequest(w, r, op, "监听源不存在。")
+			return
+		}
+		s.writeAPIAppErr(w, r, op, err)
+		return
+	}
+	s.audit(r.Context(), "watch_source.global_mirror", "channel:"+strconv.FormatInt(id, 10),
+		map[string]any{"global_mirror_enabled": *in.Enabled})
+	writeAPIJSON(w, http.StatusOK, struct {
+		apiWriteOK
+		Source store.WatchSource `json:"source"`
+	}{apiWriteOK{OK: true}, row})
+}
+
 // handleAPIWatchSourceDelete 删除监听源行（任意状态，含待审批）。
 func (s *Server) handleAPIWatchSourceDelete(w http.ResponseWriter, r *http.Request, sess session) {
 	const op = "api.watch_sources.delete"

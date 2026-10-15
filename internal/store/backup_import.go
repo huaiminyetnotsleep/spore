@@ -102,6 +102,9 @@ func ValidateBackup(ctx context.Context, path string) error {
 		{version: 11, table: "users", column: "cloud_download"},
 		{version: 19, table: "watch_invite_requests", column: "id"},
 		{version: 22, table: "sent_messages", column: "request_id"},
+		{version: 28, table: "watch_sources", column: "forward_binding_channel_id"},
+		{version: 28, table: "watch_sources", column: "global_mirror_enabled"},
+		{version: 28, table: "watch_invite_requests", column: "forward_binding_channel_id"},
 	} {
 		columns := requestColumns
 		if requirement.table != "requests" {

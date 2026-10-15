@@ -422,7 +422,7 @@ func TestRegisterCommandsDefaultList(t *testing.T) {
 		if err := json.Unmarshal([]byte(r.FormValue("commands")), &commands); err != nil {
 			t.Error(err)
 		}
-		want := []string{"start", "help", "status", "health", "usage", "cancel", "download", "pin", "bind", "unbind", "channels", "join", "watch", "watchlist", "unwatch"}
+		want := []string{"start", "help", "status", "health", "usage", "cancel", "download", "pin", "bind", "unbind", "channels", "join", "watch", "watchtarget", "watchlist", "unwatch"}
 		var got []string
 		for _, cmd := range commands {
 			got = append(got, cmd.Command)

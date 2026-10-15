@@ -139,6 +139,9 @@ func TestBindSuccess(t *testing.T) {
 	if bound.ChannelID != testChannelD || bound.UserID != 100 || bound.Title != "我的频道" || bound.Username != "mychan" {
 		t.Fatalf("绑定记录不符: %+v", bound)
 	}
+	if bound.Kind != store.BindingKindChannel {
+		t.Fatalf("绑定应记录聊天类型快照 channel: %+v", bound)
+	}
 	// 重复绑定幂等
 	if _, err := svc.Bind(ctx, BindInput{UserID: 100, Target: "-1001234567890", Via: store.BoundViaWeb}); err != nil {
 		t.Fatalf("重复绑定应幂等: %v", err)
@@ -328,6 +331,37 @@ func TestRefreshChannelBecomesPrivate(t *testing.T) {
 	}
 	if links[0].URL != "https://t.me/c/1234567890/1" || links[0].Label != "我的频道" {
 		t.Fatalf("转私有后脚注链接不符: %+v", links[0])
+	}
+}
+
+// TestRefreshBackfillsLegacyKind v28 前历史绑定行的 kind 为空串：信息刷新
+// （即使 username/title 无变化）应借机回填聊天类型快照。
+func TestRefreshBackfillsLegacyKind(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	mustUser(t, s, 100)
+
+	// 直接落库一条空 kind 的"历史行"（绕过 Bind 的类型记录）
+	if _, err := s.UpsertChannelBinding(ctx, store.ChannelBinding{
+		ChannelID: testChannelD, UserID: 100, Username: "mychan",
+		Title: "我的频道", BoundVia: store.BoundViaBot,
+	}); err != nil {
+		t.Fatalf("写入历史绑定失败: %v", err)
+	}
+
+	b, _ := newTestBot(t, channelChatJSON, adminMemberJSON, http.StatusOK)
+	svc, _ := New(Options{Store: s, Log: testLog()})
+	svc.SetBots([]*tgbot.Bot{b})
+
+	rows, err := svc.ListByUser(ctx, 100)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("列表失败: %v %v", rows, err)
+	}
+	if rows[0].Kind != store.BindingKindChannel {
+		t.Fatalf("刷新应回填历史行的 kind: %+v", rows[0])
+	}
+	if got, _ := s.GetChannelBinding(ctx, testChannelD); got.Kind != store.BindingKindChannel {
+		t.Fatalf("回填应持久化: %+v", got)
 	}
 }
 

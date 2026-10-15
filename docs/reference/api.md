@@ -953,6 +953,7 @@ cloud-drive.json.enc
 | `user_id` | int64 | 绑定归属用户的 Telegram ID |
 | `username` | string | 频道公开用户名（无 @），私有频道为空串 |
 | `title` | string | 绑定时取得的频道标题 |
+| `kind` | string \| 缺省 | 聊天类型快照：`channel` \| `supergroup`（v28 起绑定时记录；历史行为空缺省，经重绑或信息刷新回填） |
 | `bound_via` | string | `bot`（用户 /bind 指令）\| `web`（管理端） |
 | `status` | string | `active` 有效 \| `unbound` 已解绑留痕（v24 软解绑：解绑不删行，重新绑定同频道即复活，unbound 行允许其他用户接管） |
 | `unbind_reason` | string \| 缺省 | 解绑原因：`manual`（手动）\| `channel_gone`（频道已失效自动解绑）；`active` 行省略 |
@@ -1072,15 +1073,15 @@ cloud-drive.json.enc
 
 ### GET /api/v1/watch-sources
 
-监听源配置列表（认证），不分页；待审批排最前。行包含源标识/类型/状态、申请人资料、受理 Bot 快照及预热条数/最近预热时间。响应另含 `invite_requests`：全部私有邀请链接申请（`watch_invite_requests`，pending 优先，其余按申请时间倒序）。行字段：`id`、`user_id`（0 = 管理员发起）、`masked_hash`（脱敏邀请码，完整邀请链接绝不下发）、`status`（`pending` / `waiting_telegram` / `waiting_bot` / `approved` / `rejected` / `failed`）、`channel_id`（解析成功后的 Bot API `-100` ID，0 = 未解析）、`channel_title`、`participants`、`enabled`、`bot_id` / `bot_username`、`reviewed_by`、`note`、`created_at` / `updated_at`、`user_username` / `user_display_name`。
+监听源配置列表（认证），不分页；待审批排最前。行包含源标识/类型/状态、申请人资料、受理 Bot 快照、转发策略（专属目标 + 全局镜像开关）及预热条数/最近预热时间：`forward_target`（申请人选择的专属转发目标展示视图，服务端实时复查绑定有效性后输出；管理员源省略该字段，用户源始终返回——未设置为 `state:"unset"`。state 为 `set`（已设置且有效，含 `channel_id` / `title`）/ `stale`（已设置但绑定失效——解绑、归属或路由变更，仅含 `channel_id`）/ `unset`）与 `global_mirror_enabled`（管理员逐源开关：是否额外镜像到全局监听转发频道；管理员源默认开、用户源默认关）。响应另含 `invite_requests`：全部私有邀请链接申请（`watch_invite_requests`，pending 优先，其余按申请时间倒序）。行字段：`id`、`user_id`（0 = 管理员发起）、`masked_hash`（脱敏邀请码，完整邀请链接绝不下发）、`status`（`pending` / `waiting_telegram` / `waiting_bot` / `approved` / `rejected` / `failed`）、`channel_id`（解析成功后的 Bot API `-100` ID，0 = 未解析）、`channel_title`、`participants`、`enabled`、`bot_id` / `bot_username`、`forward_binding_channel_id`（活动申请暂存的专属目标频道 ID，0 = 未暂存；激活时复验转移）、`reviewed_by`、`note`、`created_at` / `updated_at`、`user_username` / `user_display_name`。
 
 ### POST /api/v1/watch-sources/add
 
 管理员直接添加监听源（认证 + CSRF）。请求体 `{"target":"@用户名/t.me 链接/-100 ID 或 t.me/+… 私有邀请链接","enabled":true}`；不走用户准入/上限/审批。普通标识目标必须是频道或超级群组，且 Bot 已是管理员，响应含 `source`。`target` 为私有邀请链接时走邀请流程：读取账号加入 → Bot 管理员校验；响应含 `invite_request`（等待状态时）或同时含 `invite_request` + `source`（已激活）。邀请无效返回 `INVALID_INVITE_URL`（400），读取账号离线返回 `MTPROTO_OFFLINE`（503）。
 
-### POST /api/v1/watch-sources/{id}/approve · /reject · /toggle · /delete · /leave
+### POST /api/v1/watch-sources/{id}/approve · /reject · /toggle · /global-mirror · /delete · /leave
 
-监听源管理写操作（认证 + CSRF）：审批申请、暂停/恢复、仅删配置，或把池内全部 Bot `leaveChat` 退出源并删配置。已缓存副本保留。
+监听源管理写操作（认证 + CSRF）：审批申请、暂停/恢复、切换逐源全局镜像开关（请求体 `{"enabled":bool}`，即时生效——仅控制是否额外镜像到全局监听转发频道，缓存预热与申请人专属目标不受影响；写 `watch_source.global_mirror` 审计）、仅删配置，或把池内全部 Bot `leaveChat` 退出源并删配置。已缓存副本保留。
 
 ### POST /api/v1/watch-invite-requests/{id}/approve · /reject · /retry · /delete
 

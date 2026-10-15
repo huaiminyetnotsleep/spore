@@ -490,6 +490,37 @@ CREATE INDEX idx_recovery_items_identity ON recovery_items(identity_key,status);
 	// 缓存频道，重传镜像完成后按 request_id 回写。旧行为空数组，管理端
 	// 展示为「—」。只存频道 ID 与标题快照，不存消息内容（数据范围红线）。
 	`ALTER TABLE watch_events ADD COLUMN targets_json TEXT NOT NULL DEFAULT '[]';`,
+
+	// v28：监听源专属转发目标——用户源可引用自己的一条频道绑定，并由
+	// 管理员逐源控制是否额外镜像到全局 watch_forward_channels。绑定引用
+	// 可空，连接级 PRAGMA foreign_keys 已开启（dsn 统一设置），物理删除
+	// 绑定时由 ON DELETE SET NULL 自动清空引用；软解绑保留引用，运行时
+	// 再检查其状态。旧管理员源（added_by=0）保持此前全局镜像行为，旧用户
+	// 源默认收紧为不镜像。私有邀请申请在激活成源前用同名列暂存目标选择
+	//（无外键：等待期内绑定被物理删除时保留脏 ID，激活时由服务层复验），
+	// 激活时由服务层转移。后续普通 source upsert 不得覆盖这两个独立策略
+	// 字段。channel_bindings 追加聊天类型快照 kind（channel/supergroup，
+	// 绑定时记录），管理端"监听转发频道"候选只列频道类型（与全局转发仅
+	// 接受频道的校验一致）；v28 前历史行为空串，经重绑或信息刷新回填。
+	`ALTER TABLE watch_sources ADD COLUMN forward_binding_channel_id INTEGER
+		REFERENCES channel_bindings(channel_id) ON DELETE SET NULL;
+
+	ALTER TABLE watch_sources ADD COLUMN global_mirror_enabled INTEGER NOT NULL DEFAULT 0;
+
+	UPDATE watch_sources
+	SET global_mirror_enabled = CASE WHEN added_by = 0 THEN 1 ELSE 0 END;
+
+	CREATE INDEX idx_watch_sources_forward_binding
+	ON watch_sources(forward_binding_channel_id)
+	WHERE forward_binding_channel_id IS NOT NULL;
+
+	ALTER TABLE watch_invite_requests ADD COLUMN forward_binding_channel_id INTEGER;
+
+	CREATE INDEX idx_watch_invite_requests_forward_binding
+	ON watch_invite_requests(forward_binding_channel_id)
+	WHERE forward_binding_channel_id IS NOT NULL;
+
+	ALTER TABLE channel_bindings ADD COLUMN kind TEXT NOT NULL DEFAULT '';`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

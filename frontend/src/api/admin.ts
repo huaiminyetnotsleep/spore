@@ -1026,6 +1026,11 @@ export function fetchDumpMigrate(): Promise<DumpMigrateView> {
 export interface ChannelBindingRow {
   /** Bot API 频道数字 ID（-100…），主键。 */
   channel_id: number;
+  /**
+   * 目标聊天类型。旧服务端尚未提供时缺省；监听全局转发候选只能使用
+   * broadcast channel，不能把缺失类型推断为频道。
+   */
+  kind?: "channel" | "supergroup";
   /** 绑定归属用户的 Telegram ID。 */
   user_id: number;
   /** 频道公开用户名（无 @），私有频道为空串。 */
@@ -1127,6 +1132,18 @@ export function fetchJoinedChannels(): Promise<{ items: JoinedChannelRow[] }> {
 // ---- 监听源（/watch，预热缓存频道） ----
 
 /**
+ * 监听源专属转发目标展示视图（服务端实时复查绑定有效性后输出）。
+ */
+export interface WatchForwardTargetView {
+  /** set=已设置且当前有效 / unset=未设置 / stale=已设置但绑定失效。 */
+  state: "set" | "unset" | "stale";
+  /** 目标频道 ID（set/stale 时存在）。 */
+  channel_id?: number;
+  /** 目标标题快照（set 时存在）。 */
+  title?: string;
+}
+
+/**
  * 监听源列表行（GET /api/v1/watch-sources）：含各状态（pending/approved/
  * rejected，待审批排最前）与申请人展示资料（管理员添加 added_by=0 时为空）。
  */
@@ -1148,6 +1165,13 @@ export interface WatchSourceRow {
   bot_id: number;
   /** 受理 bot 用户名快照（bot 移出池后历史仍可读）。 */
   bot_username: string;
+  /** 是否额外镜像到全局监听转发频道（管理员逐源开关；管理员源默认开）。 */
+  global_mirror_enabled: boolean;
+  /**
+   * 申请人选择的专属转发目标状态（管理员可查看不可代改）；
+   * 用户源始终返回（未设置为 state="unset"），管理员源省略该字段。
+   */
+  forward_target: WatchForwardTargetView | null | undefined;
   reviewed_by: string;
   created_at: number;
   updated_at: number;
@@ -1183,6 +1207,8 @@ export interface WatchInviteRequestRow {
   enabled: boolean;
   bot_id: number;
   bot_username: string;
+  /** 申请人暂存的专属转发目标频道 ID（0 = 未暂存；激活时复验转移）。 */
+  forward_binding_channel_id: number;
   reviewed_by: string;
   note: string;
   created_at: number;

@@ -49,6 +49,11 @@ type fakeWatchManager struct {
 	deleteID  int64
 	deleteErr error
 
+	mirrorID  int64
+	mirrorOn  bool
+	mirrorRow store.WatchSource
+	mirrorErr error
+
 	eventDeleteIDs []int64
 	eventDeleted   int64
 	eventDeleteErr error
@@ -85,6 +90,11 @@ func (f *fakeWatchManager) RetryInviteRequest(_ context.Context, id int64) (stor
 func (f *fakeWatchManager) DeleteInviteRequest(_ context.Context, id int64) error {
 	f.deleteID = id
 	return f.deleteErr
+}
+
+func (f *fakeWatchManager) SetGlobalMirror(_ context.Context, id int64, enabled bool) (store.WatchSource, error) {
+	f.mirrorID, f.mirrorOn = id, enabled
+	return f.mirrorRow, f.mirrorErr
 }
 
 func (f *fakeWatchManager) DeleteEvents(_ context.Context, ids []int64) (int64, error) {
@@ -305,5 +315,43 @@ func TestAPIWatchEventsDelete(t *testing.T) {
 	}
 	if resp := e.apiPost(j, "/api/v1/watch-events/delete", "", `{"ids":[3]}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("缺 CSRF 应 403，得到 %d", resp.StatusCode)
+	}
+}
+
+// TestAPIWatchSourceGlobalMirrorToggle 逐源全局镜像开关：参数透传、响应
+// 信封、审计留痕与受控错误（缺 CSRF/缺字段/不存在源）。
+func TestAPIWatchSourceGlobalMirrorToggle(t *testing.T) {
+	e, j, fake, csrf := newWatchEnv(t)
+	fake.mirrorRow = store.WatchSource{ChannelID: -1001234567801, GlobalMirrorEnabled: true}
+
+	resp := e.apiPost(j, "/api/v1/watch-sources/-1001234567801/global-mirror", csrf, `{"enabled":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("切换应 200，得到 %d: %s", resp.StatusCode, bodyOf(t, resp))
+	}
+	if fake.mirrorID != -1001234567801 || !fake.mirrorOn {
+		t.Fatalf("参数未透传: id=%d enabled=%v", fake.mirrorID, fake.mirrorOn)
+	}
+	var got struct {
+		OK     bool              `json:"ok"`
+		Source store.WatchSource `json:"source"`
+	}
+	decodeAPIJSON(t, bodyOf(t, resp), &got)
+	if !got.OK || got.Source.ChannelID != -1001234567801 || !got.Source.GlobalMirrorEnabled {
+		t.Fatalf("响应信封不符: %+v", got)
+	}
+	if !e.containsAction("watch_source.global_mirror") {
+		t.Error("切换全局镜像应写审计 watch_source.global_mirror")
+	}
+
+	// 缺 CSRF → 403；缺 enabled → 400；不存在源 → 400
+	if resp := e.apiPost(j, "/api/v1/watch-sources/-1001234567801/global-mirror", "", `{"enabled":true}`); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("缺 CSRF 应 403，得到 %d", resp.StatusCode)
+	}
+	if resp := e.apiPost(j, "/api/v1/watch-sources/-1001234567801/global-mirror", csrf, `{}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("缺 enabled 应 400，得到 %d", resp.StatusCode)
+	}
+	fake.mirrorErr = store.ErrNotFound
+	if resp := e.apiPost(j, "/api/v1/watch-sources/-1001234567802/global-mirror", csrf, `{"enabled":false}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("不存在源应 400，得到 %d", resp.StatusCode)
 	}
 }

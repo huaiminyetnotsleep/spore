@@ -66,6 +66,36 @@ func TestUpsertChannelBindingValidation(t *testing.T) {
 	if _, err := s.UpsertChannelBinding(ctx, ChannelBinding{ChannelID: -1001, UserID: 100, BoundVia: "magic"}); err == nil {
 		t.Fatal("非法 bound_via 应报错")
 	}
+	if _, err := s.UpsertChannelBinding(ctx, ChannelBinding{ChannelID: -1001,
+		UserID: 100, BoundVia: BoundViaBot, Kind: "group"}); err == nil {
+		t.Fatal("非法 kind 应报错")
+	}
+}
+
+// TestUpsertChannelBindingKind 测试聊天类型快照：绑定时落库、同用户刷新
+// 不携带 kind（空串）时保留既有值、回读经列表路径一致。
+func TestUpsertChannelBindingKind(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	mustUser(t, s, 100)
+
+	got, err := s.UpsertChannelBinding(ctx, ChannelBinding{ChannelID: -1002,
+		UserID: 100, BoundVia: BoundViaBot, Kind: BindingKindChannel})
+	if err != nil || got.Kind != BindingKindChannel {
+		t.Fatalf("写入频道类型失败: %+v err=%v", got, err)
+	}
+	// 刷新路径未携带类型（空串）：不得抹掉已回填的 kind
+	refreshed, err := s.UpsertChannelBinding(ctx, ChannelBinding{ChannelID: -1002,
+		UserID: 100, Title: "新标题", BoundVia: BoundViaBot})
+	if err != nil || refreshed.Kind != BindingKindChannel || refreshed.Title != "新标题" {
+		t.Fatalf("刷新应保留既有 kind: %+v err=%v", refreshed, err)
+	}
+	// 群组类型同样落库
+	sg, err := s.UpsertChannelBinding(ctx, ChannelBinding{ChannelID: -1003,
+		UserID: 100, BoundVia: BoundViaBot, Kind: BindingKindSupergroup})
+	if err != nil || sg.Kind != BindingKindSupergroup {
+		t.Fatalf("写入群组类型失败: %+v err=%v", sg, err)
+	}
 }
 
 func TestListChannelBindingsByUserAndAll(t *testing.T) {

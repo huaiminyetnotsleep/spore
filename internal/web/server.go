@@ -182,6 +182,8 @@ type WatchManager interface {
 	DeleteInviteRequest(ctx context.Context, id int64) error
 	// SetEnabled 切换 approved 行的暂停开关。
 	SetEnabled(ctx context.Context, channelID int64, enabled bool) (store.WatchSource, error)
+	// SetGlobalMirror 管理员逐源切换「额外镜像到全局监听转发频道」开关。
+	SetGlobalMirror(ctx context.Context, channelID int64, enabled bool) (store.WatchSource, error)
 	// Delete 删除任意状态的监听源行。
 	Delete(ctx context.Context, channelID int64) (store.WatchSource, error)
 	// Leave 把池内全部 bot 退出源聊天并删除监听源行。

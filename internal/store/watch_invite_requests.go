@@ -72,8 +72,12 @@ type WatchInviteRequest struct {
 	Note            string `json:"note"`
 	BotID           int64  `json:"bot_id"`
 	BotUsername     string `json:"bot_username"`
-	RequestedAt     int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	// ForwardBindingChannelID 暂存申请人已选的专属转发目标（满足私有邀请
+	// 「提交后立即选择」）；激活成源时由服务层转移到 watch_sources，终态
+	// 申请不保留可投递策略。0 = 未暂存。
+	ForwardBindingChannelID int64 `json:"forward_binding_channel_id"`
+	RequestedAt             int64 `json:"created_at"`
+	UpdatedAt               int64 `json:"updated_at"`
 }
 
 const selectWatchInviteRequest = `SELECT r.id, r.user_id,
@@ -81,7 +85,8 @@ const selectWatchInviteRequest = `SELECT r.id, r.user_id,
 	COALESCE(r.invite_hash, ''), r.masked_hash, r.status,
 	r.channel_id, r.kind, r.username, r.title,
 	r.participants, r.enabled, r.reviewed_by, r.note,
-	r.bot_id, r.bot_username, r.requested_at, r.updated_at
+	r.bot_id, r.bot_username, COALESCE(r.forward_binding_channel_id, 0),
+	r.requested_at, r.updated_at
 FROM watch_invite_requests r
 LEFT JOIN users u ON u.id = r.user_id`
 
@@ -93,7 +98,7 @@ func scanWatchInviteRequest(row scanner) (WatchInviteRequest, error) {
 	err := row.Scan(&r.ID, &r.UserID, &r.UserUsername, &r.UserDisplayName,
 		&r.InviteHash, &r.MaskedHash, &r.Status, &r.ChannelID, &r.Kind,
 		&r.Username, &r.Title, &r.Participants, &enabled, &r.ReviewedBy, &r.Note,
-		&r.BotID, &r.BotUsername, &r.RequestedAt, &r.UpdatedAt)
+		&r.BotID, &r.BotUsername, &r.ForwardBindingChannelID, &r.RequestedAt, &r.UpdatedAt)
 	r.Enabled = enabled == 1
 	return r, err
 }
@@ -316,6 +321,20 @@ func (s *Store) UpdateWatchInviteRequestChannel(ctx context.Context, id, channel
 		channel_id = ?, kind = ?, username = ?, title = ?, updated_at = ? WHERE id = ?`,
 		channelID, kind, username, title, updatedAt, id)
 	if err := affected(res, err, "更新监听邀请申请频道信息"); err != nil {
+		return WatchInviteRequest{}, err
+	}
+	return s.GetWatchInviteRequest(ctx, id)
+}
+
+// SetWatchInviteRequestForwardBinding 暂存（bindingChannelID>0）或清空（=0）
+// 申请人已选的专属转发目标。DAO 不校验申请状态或绑定有效性——服务层在
+// 活动申请上设置、在激活转移后与终态（rejected/failed）时清空；不存在返回
+// ErrNotFound。
+func (s *Store) SetWatchInviteRequestForwardBinding(ctx context.Context, id, bindingChannelID int64) (WatchInviteRequest, error) {
+	res, err := s.ex.ExecContext(ctx,
+		"UPDATE watch_invite_requests SET forward_binding_channel_id = ?, updated_at = ? WHERE id = ?",
+		nullInt64(bindingChannelID), nowMillis(), id)
+	if err := affected(res, err, "暂存监听邀请申请专属目标"); err != nil {
 		return WatchInviteRequest{}, err
 	}
 	return s.GetWatchInviteRequest(ctx, id)
