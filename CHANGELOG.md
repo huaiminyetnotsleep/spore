@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.40.2](https://github.com/huaiminyetnotsleep/spore/compare/v1.40.1...v1.40.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* **notifycfg:** discord 提及指定用户不生效，改为 content 拼接 mention 语法 ([253c95e](https://github.com/huaiminyetnotsleep/spore/commit/253c95e0d1cf7797cf9b5f7ba3653d7c8b50471d))
+
 ## [1.40.1](https://github.com/huaiminyetnotsleep/spore/compare/v1.40.0...v1.40.1) (2026-10-10)
 
 
