@@ -2,6 +2,13 @@
 
 所有重要变更会记录在这里。版本号遵循 [Semantic Versioning](https://semver.org/)；带 `v` 的 Git tag 会触发容器镜像发布。
 
+## [1.42.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.41.0...v1.42.0) (2026-11-10)
+
+
+### Features
+
+* **dumpcache:** 迁移进度持久化与逐条明细页面，支持暂停继续取消 ([221ac67](https://github.com/huaiminyetnotsleep/spore/commit/221ac6771408efa3b811472c1ce58682e399811a))
+
 ## [1.41.0](https://github.com/huaiminyetnotsleep/spore/compare/v1.40.2...v1.41.0) (2026-10-15)
 
 
