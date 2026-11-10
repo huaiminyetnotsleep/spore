@@ -1086,3 +1086,24 @@ docs-deploy 拆为 docs-build-check（push/PR 仅构建）与 docs-release（发
 ### Status
 
 [OK] **Completed**
+
+
+## Session 48: 缓存迁移进度持久化、明细页面与暂停继续
+
+**Date**: 2026-11-10
+**Task**: 缓存迁移进度持久化、明细页面与暂停继续
+**Branch**: `main`
+
+### Summary
+
+迁移旧缓存升级为持久化运行：v29 新增 dump_migrate_runs/dump_migrate_items（唯一部分索引保单活跃运行，保留 20 条），迁移执行改为 DB 状态轮询门（控制信号不入内存，跨 MT 生命周期安全；Reconcile 中断语义支持幂等续迁），web 新增 runs/items 查询与 pause/resume/cancel 控制端点（409），GET/POST 保持 v24 兼容；前端新增 /admin/dump-migrate 迁移页与运行详情页（逐条明细+状态过滤），频道设置页联动暂停态。全量门禁绿（go test -race、前端 lint/typecheck/单测、e2e 冒烟），docs 四篇同步，spec 新增 dump-migrate 契约并补 web-serving mountAPIWrite gotcha。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `221ac67` | (see git log) |
+
+### Status
+
+[OK] **Completed**
