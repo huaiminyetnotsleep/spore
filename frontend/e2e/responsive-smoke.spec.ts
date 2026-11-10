@@ -475,6 +475,51 @@ const mtprotoFixture = {
   bot_updated_at: 1_700_000_100_000,
 };
 
+// 缓存迁移：进度视图 + 运行/明细 fixtures（与 src/api/admin.ts 类型同构）
+const dumpMigrateRunFixture = {
+  id: 12,
+  status: "completed",
+  from_channel_id: -100111,
+  to: [-100222],
+  total: 423,
+  created_at: 1_700_000_000_000,
+  updated_at: 1_700_000_100_000,
+  finished_at: 1_700_000_100_000,
+  last_error: "",
+  done: 418,
+  skipped: 4,
+  failed: 1,
+};
+const dumpMigrateItemFixture = {
+  id: 1,
+  run_id: 12,
+  channel_key: "fixture-channel",
+  message_id: 101,
+  status: "migrated",
+  results: [{ channel_id: -100222, message_ids: [701, 702] }],
+  error: "",
+  created_at: 1_700_000_050_000,
+};
+const dumpMigrateProgressFixture = {
+  configured: true,
+  channel_id: -100222,
+  progress: {
+    running: false,
+    paused: false,
+    run_id: 12,
+    from: -100111,
+    to: [-100222],
+    total: 423,
+    done: 418,
+    failed: 1,
+    skipped: 4,
+    started_at: 1_700_000_000_000,
+    finished_at: 1_700_000_100_000,
+    last_error: "",
+  },
+  suggest_from: 0,
+};
+
 const botsFixture = {
   bots: [
     {
@@ -631,6 +676,18 @@ async function mockAdminAPI(page: Page) {
       case "/api/v1/recovery/jobs/71/items":
         await fulfillJSON(route, 200, recoveryEnvelope([recoveryItemFixture]));
         return;
+      case "/api/v1/dumpcache/migrate":
+        await fulfillJSON(route, 200, dumpMigrateProgressFixture);
+        return;
+      case "/api/v1/dumpcache/migrate/runs":
+        await fulfillJSON(route, 200, recoveryEnvelope([dumpMigrateRunFixture]));
+        return;
+      case "/api/v1/dumpcache/migrate/runs/12":
+        await fulfillJSON(route, 200, dumpMigrateRunFixture);
+        return;
+      case "/api/v1/dumpcache/migrate/runs/12/items":
+        await fulfillJSON(route, 200, recoveryEnvelope([dumpMigrateItemFixture]));
+        return;
       case "/api/v1/bots":
         await fulfillJSON(route, 200, botsFixture);
         return;
@@ -661,6 +718,8 @@ const protectedRoutes: Array<{ path: string; heading: string }> = [
   { path: "/admin/channels/fixture-channel", heading: "频道详情" },
   { path: "/admin/channel-bindings", heading: "频道绑定" },
   { path: "/admin/channel-settings", heading: "频道设置" },
+  { path: "/admin/dump-migrate", heading: "缓存迁移" },
+  { path: "/admin/dump-migrate/runs/12", heading: "迁移运行详情" },
   { path: "/admin/cloud-drive", heading: "云盘下载" },
   { path: "/admin/recovery", heading: "历史恢复" },
   { path: "/admin/recovery/jobs/71", heading: "恢复任务详情" },

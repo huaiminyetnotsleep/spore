@@ -80,3 +80,7 @@ if !verifyLoginCSRF(r) { writeAPICSRFInvalid(w); return }
 ### Gotcha
 
 > **Warning**：GitHub OAuth **绑定成功会失效全部会话**，`?oauth=bound` 横幅实际会落在登录页（302 链）而不可见——这是安全设计的已知取舍；错误分支（不清会话）横幅可见。
+
+### Gotcha
+
+> **Warning**：`mountAPIWrite` 会给同路径额外挂一个 GET 405 方法回退。**同一路径若还有真实 GET 语义**（如 `/api/v1/dumpcache/migrate` 的 GET 进度、`/api/v1/users`），不得用它注册 POST——会与真实 GET 注册冲突直接 panic。此类路径 GET 直接 `s.apiAuth(...)`、POST 直接 `s.apiAuth(s.apiCSRF(...))` 分开注册（见 `registerAPIDumpCacheRoutes`）。

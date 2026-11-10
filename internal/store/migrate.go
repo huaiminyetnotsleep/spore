@@ -521,6 +521,40 @@ CREATE INDEX idx_recovery_items_identity ON recovery_items(identity_key,status);
 	WHERE forward_binding_channel_id IS NOT NULL;
 
 	ALTER TABLE channel_bindings ADD COLUMN kind TEXT NOT NULL DEFAULT '';`,
+
+	// v29：缓存迁移持久化——dump_migrate_runs 记录每次管理端迁移的快照
+	// 与终态（running/paused/completed/cancelled/interrupted），状态由
+	// Handler 即写、goroutine 批间感知；重启经 ReconcileDumpMigrate 把
+	// 遗留 running/paused 标记 interrupted（可重发，幂等续跑语义不变）。
+	// dump_migrate_items 逐条记录处理结果：来源坐标 + 状态
+	//（migrated/skipped/failed）+ results_json（各目标频道的新消息 ID 或
+	// 错误），聚合计数经查询得出，run 行不存冗余。只存频道/消息 ID、状态
+	// 与错误文本，不存正文/媒体 URL（数据范围红线）。发起新运行时同事务
+	// 清理早于最近 20 次的记录，防无限增长。
+	`CREATE TABLE dump_migrate_runs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ status TEXT NOT NULL CHECK(status IN ('running','paused','completed','cancelled','interrupted')),
+ from_channel_id INTEGER NOT NULL,
+ to_json TEXT NOT NULL,
+ total INTEGER NOT NULL DEFAULT 0,
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ finished_at INTEGER NOT NULL DEFAULT 0,
+ last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE dump_migrate_items (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ run_id INTEGER NOT NULL REFERENCES dump_migrate_runs(id),
+ channel_key TEXT NOT NULL,
+ message_id INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('migrated','skipped','failed')),
+ results_json TEXT NOT NULL DEFAULT '[]',
+ error TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_dump_migrate_items_run ON dump_migrate_items(run_id, status, id);
+CREATE UNIQUE INDEX idx_dump_migrate_one_active
+ON dump_migrate_runs(status) WHERE status IN ('running','paused');`,
 }
 
 // migrate 把数据库推进到 migrations 的最新版本，幂等：已应用的版本跳过。

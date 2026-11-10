@@ -29,7 +29,7 @@
 | 访问层 | `internal/store` 是唯一入口（`store.Open`）；业务 SQL 不出现在其他包 |
 | 连接 | 连接池固定 1 连接（SQLite 单写者，从根上消除写锁竞争） |
 | 连接级 PRAGMA | `journal_mode=WAL`、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL` |
-| schema 版本 | `PRAGMA user_version`（当前 **28**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
+| schema 版本 | `PRAGMA user_version`（当前 **29**）；启动时自动迁移，数据库版本高于程序支持时拒绝启动 |
 | 迁移规则 | 版本化、内嵌、**只增不改**：每个版本在独立事务内执行 DDL 并同事务写入 `user_version`；已发布迁移永不修改，新变更一律追加新版本 |
 
 容量目标：≤100 用户、约 5,000 请求/日（约 180 万行/年），远低于 SQLite 单文件上限，不引入 PostgreSQL/Redis 等外部数据库。
@@ -42,7 +42,7 @@
 
 ## 2. Schema 总览
 
-当前版本 v28 包含 **20 张业务表、27 个显式索引、6 个数据库外键**：
+当前版本 v29 包含 **22 张业务表、29 个显式索引、7 个数据库外键**：
 
 - 无触发器、无视图；恢复任务与条目的状态枚举另有 CHECK 约束，其他状态枚举与取值白名单由应用层（DAO）校验，见各表说明。
 - `sqlite_sequence` 是 SQLite 为 `AUTOINCREMENT`（`cloud_uploads`、`dump_entries`、`watch_invite_requests`、`sent_messages`、`error_logs`）自动维护的内部表，**不属于业务 schema**。v26 的 `recovery_jobs`、`recovery_items` 同样使用 AUTOINCREMENT。
@@ -71,6 +71,8 @@
 
 | `recovery_jobs` | 独立历史恢复任务：固定范围、目标、Bot、控制状态 | v26 |
 | `recovery_items` | 恢复单元的来源/缓存快照、执行状态与新目标输出坐标 | v26 |
+| `dump_migrate_runs` | 缓存迁移运行记录：快照、状态机与结束原因（保留 20 次） | v29 |
+| `dump_migrate_items` | 迁移逐条结果：来源坐标 → 各目标频道新消息 ID 或错误 | v29 |
 
 ## 3. 表数据字典
 
@@ -440,16 +442,50 @@ API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skippe
 
 发送前写 processing。重启将 processing 变为 uncertain、running任务变为paused；uncertain 不自动重试。结果不发布为普通 dump_entries 缓存索引，数据库备份不能单独还原消息或媒体。
 
+### 3.21 dump_migrate_runs
+
+缓存迁移工具的运行记录（v29）：管理端「迁移旧缓存」每次发起一条，持久化进度与控制状态。唯一部分索引限制最多一个活跃（running/paused）运行。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 运行 ID |
+| `status` | TEXT NOT NULL + CHECK | running / paused / completed / cancelled / interrupted（重启/服务重建中断，可重新发起幂等续跑） |
+| `from_channel_id` | INTEGER NOT NULL | 源缓存频道 ID |
+| `to_json` | TEXT NOT NULL | 目标启用缓存频道 ID 数组（发起时快照，源频道除外） |
+| `total` | INTEGER NOT NULL DEFAULT 0 | 发起时源频道条目总数 |
+| `created_at` / `updated_at` | INTEGER NOT NULL | 开始时间 / 最近批间心跳 |
+| `finished_at` | INTEGER NOT NULL DEFAULT 0 | 结束时间（未结束为 0） |
+| `last_error` | TEXT NOT NULL DEFAULT '' | 结束原因（源频道不可读、管理员取消、重启中断等）；正常完成为空。`completed` + 非空 = 异常结束 |
+
+状态机：暂停/继续/取消由 Web Handler 即写（执行循环批间感知），自然结束由执行 goroutine 写 completed（带状态守卫，已被取消则 no-op）；interrupted 仅由启动收敛（`ReconcileDumpMigrate`，同时覆盖上一进程崩溃遗留与 MTProto 生命周期重建）。API 的 done/skipped/failed 为明细实时聚合，不是本表列。创建审计与运行行同事务；保留最近 20 次，发起新运行时同事务清理更早运行及其明细。数据范围红线：只存频道/消息 ID、状态与错误文本，不存消息正文/媒体 URL。
+
+### 3.22 dump_migrate_items
+
+迁移运行的单条处理结果（v29）：一条源条目一行，目标级落地明细在 `results_json`。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 明细 ID |
+| `run_id` | INTEGER NOT NULL + FK | dump_migrate_runs.id（随保留清理删除） |
+| `channel_key` / `message_id` | TEXT / INTEGER NOT NULL | 来源坐标 |
+| `status` | TEXT NOT NULL + CHECK | migrated（全部目标成功）/ skipped（目标均已有现行条目）/ failed（任一目标失败；按条目计） |
+| `results_json` | TEXT NOT NULL DEFAULT '[]' | [{channel_id, message_ids?, error?}]：成功目标带新消息 ID，失败目标带错误串（截断 200 字符） |
+| `error` | TEXT NOT NULL DEFAULT '' | 条目级失败摘要 |
+| `created_at` | INTEGER NOT NULL | 处理时间 |
+
 ## 4. 表关系与约束
 
-### 4.1 数据库外键（均指向 `users(id)`，均 NO ACTION）
+### 4.1 数据库外键（共 7 个；删除行为见末列，未注明即 NO ACTION）
 
-| 表.列 | 引用 |
-| --- | --- |
-| `requests.user_id` | `users(id)` |
-| `channel_bindings.user_id` | `users(id)` |
-| `join_requests.user_id` | `users(id)` |
-| `joined_channels.joined_by` | `users(id)` |
+| 表.列 | 引用 | 删除行为 |
+| --- | --- | --- |
+| `requests.user_id` | `users(id)` | |
+| `channel_bindings.user_id` | `users(id)` | |
+| `join_requests.user_id` | `users(id)` | |
+| `joined_channels.joined_by` | `users(id)` | |
+| `recovery_items.job_id` | `recovery_jobs(id)` | |
+| `watch_sources.forward_binding_channel_id` | `channel_bindings(channel_id)` | SET NULL（v28，绑定物理删除清引用） |
+| `dump_migrate_items.run_id` | `dump_migrate_runs(id)` | NO ACTION（保留清理由发起事务先删明细再删运行，v29） |
 
 ### 4.2 逻辑关联（有意不设外键）
 
@@ -501,6 +537,8 @@ API 的 total/pending/processing/succeeded/failed/unrecoverable/uncertain/skippe
 | `idx_recovery_items_identity` | `recovery_items` | (identity_key, status) | v26 | 同目标成功恢复去重 |
 | `idx_watch_sources_forward_binding` | `watch_sources` | (forward_binding_channel_id) WHERE forward_binding_channel_id IS NOT NULL | v28 | 专属目标引用定位（目标占用查重与清理） |
 | `idx_watch_invite_requests_forward_binding` | `watch_invite_requests` | (forward_binding_channel_id) WHERE forward_binding_channel_id IS NOT NULL | v28 | 活动申请暂存目标定位与清理 |
+| `idx_dump_migrate_items_run` | `dump_migrate_items` | (run_id, status, id) | v29 | 运行聚合计数与明细分页 |
+| `idx_dump_migrate_one_active` | `dump_migrate_runs` | (status) UNIQUE WHERE status IN ('running','paused') | v29 | 同时至多一个活跃迁移运行（并发发起硬保证） |
 
 隐式索引：`events.key` 的 UNIQUE 索引，以及各主键索引（含 `usage_daily` 复合主键）。
 
@@ -642,3 +680,4 @@ Bot 与 worker 侧的关键写入（无 HTTP 端点，补全全景）：
 | v26 | `recovery_jobs` / `recovery_items` 历史恢复任务与逐项坐标/结果；单运行任务唯一部分索引、逐项分页及身份去重索引；状态 CHECK 和 job_id 外键 |
 | v27 | `watch_events.targets_json`（监听事件转发目标快照：缓存频道优先 + 成功的监听转发目标；旧行空数组） |
 | v28 | 监听源专属转发目标：`watch_sources.forward_binding_channel_id`（FK ON DELETE SET NULL）与 `global_mirror_enabled`（回填：管理员源开、用户源关）及部分索引；`watch_invite_requests.forward_binding_channel_id` 暂存列（无外键）与部分索引；`channel_bindings.kind` 聊天类型快照列（历史行为空串） |
+| v29 | `dump_migrate_runs` / `dump_migrate_items` 缓存迁移持久化（运行状态机 + 逐条明细，聚合计数实时求和）；唯一活跃部分索引、明细分页索引与 run_id 外键；保留 20 次自动清理 |

@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Input, InputNumber, Space, Switch, Tag, Typography } from "antd";
+import { Link } from "react-router-dom";
 
 import { fetchDumpMigrate, fetchSettings, DumpChannelView } from "../../api/admin";
 import { DumpChannelInput, saveSettings, startDumpMigrate } from "../../api/mutations";
@@ -40,11 +41,11 @@ export function ChannelSettingsPage() {
   const [migrateFrom, setMigrateFrom] = useState("");
   const confirm = useConfirmAction();
 
-  // 迁移进度：运行中 2 秒轮询，空闲不轮询
+  // 迁移进度：运行/暂停中 2 秒轮询，空闲不轮询
   const migrate = useQuery({
     queryKey: ["dumpcache", "migrate"],
     queryFn: fetchDumpMigrate,
-    refetchInterval: (query) => (query.state.data?.progress.running ? 2000 : false),
+    refetchInterval: (query) => (query.state.data?.progress.running || query.state.data?.progress.paused ? 2000 : false),
     refetchIntervalInBackground: false,
   });
   useEffect(() => {
@@ -312,20 +313,26 @@ export function ChannelSettingsPage() {
                       {migrate.data?.progress.running ? "迁移中…" : "开始迁移"}
                     </Button>
                   </Space.Compact>
-                  {migrate.data && (migrate.data.progress.running || migrate.data.progress.total > 0) ? (
+                  {migrate.data && (migrate.data.progress.running || migrate.data.progress.paused || migrate.data.progress.total > 0) ? (
                     <Alert
                       data-testid="dump-migrate-progress"
-                      type={migrate.data.progress.last_error ? "warning" : "info"}
+                      type={migrate.data.progress.last_error && !migrate.data.progress.running && !migrate.data.progress.paused ? "warning" : "info"}
                       showIcon
                       message={
-                        migrate.data.progress.running
-                          ? `迁移进行中：${migrate.data.progress.done}/${migrate.data.progress.total} 已迁移` +
-                            (migrate.data.progress.skipped ? `，跳过 ${migrate.data.progress.skipped}` : "") +
-                            (migrate.data.progress.failed ? `，失败 ${migrate.data.progress.failed}` : "")
-                          : migrate.data.progress.last_error
-                            ? `迁移中止：${migrate.data.progress.last_error}`
-                            : `迁移完成：成功 ${migrate.data.progress.done}、跳过 ${migrate.data.progress.skipped}、失败 ${migrate.data.progress.failed}`
+                        <Space size="small" wrap>
+                          <span>
+                            {migrate.data.progress.running || migrate.data.progress.paused
+                              ? `${migrate.data.progress.paused ? "迁移已暂停" : "迁移进行中"}：${migrate.data.progress.done}/${migrate.data.progress.total} 已迁移` +
+                                (migrate.data.progress.skipped ? `，跳过 ${migrate.data.progress.skipped}` : "") +
+                                (migrate.data.progress.failed ? `，失败 ${migrate.data.progress.failed}` : "")
+                              : migrate.data.progress.last_error
+                                ? `迁移中止：${migrate.data.progress.last_error}`
+                                : `迁移完成：成功 ${migrate.data.progress.done}、跳过 ${migrate.data.progress.skipped}、失败 ${migrate.data.progress.failed}`}
+                          </span>
+                          <Link to="/dump-migrate">查看进度与明细</Link>
+                        </Space>
                       }
+                      description={migrate.data.progress.paused ? "已暂停的迁移可在缓存迁移页继续或取消。" : undefined}
                     />
                   ) : null}
                 </Space>

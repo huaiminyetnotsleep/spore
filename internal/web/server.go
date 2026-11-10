@@ -18,7 +18,6 @@ import (
 	"github.com/huaiminyetnotsleep/spore/internal/branding"
 	"github.com/huaiminyetnotsleep/spore/internal/cloudarchive"
 	"github.com/huaiminyetnotsleep/spore/internal/config"
-	"github.com/huaiminyetnotsleep/spore/internal/dumpcache"
 	"github.com/huaiminyetnotsleep/spore/internal/errlog"
 	"github.com/huaiminyetnotsleep/spore/internal/joinmgr"
 	"github.com/huaiminyetnotsleep/spore/internal/monitor"
@@ -114,12 +113,13 @@ type BotIdentityProvider interface {
 
 // DumpCacheMigrator 是缓存频道迁移工具对 Web 的最小依赖（internal/dumpcache
 // 的 Service 实现；跨 MTProto 生命周期由装配层持有器委托当前实例）。
+// 运行/明细/控制的持久化数据（v29）经 Server 持有的 store 直读直写，
+// 执行状态由 dumpcache 执行循环轮询 DB 感知，不经本接口。
 type DumpCacheMigrator interface {
 	Enabled() bool
 	// Channels 返回当前启用的缓存频道 ID 列表（多缓存频道；未配置时 false）。
 	Channels() ([]int64, bool)
 	StartMigrate(ctx context.Context, fromChannelID int64) error
-	MigrateProgress() dumpcache.MigrateProgress
 }
 
 // UserProfileLookup 是 Web 手动刷新用户资料的最小生命周期感知接口。

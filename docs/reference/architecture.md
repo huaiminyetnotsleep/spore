@@ -392,7 +392,7 @@ MTProto 的 `MessageEntity` 偏移以 **UTF-16 code unit** 计（emoji 占 2 uni
 
 **选型**：`modernc.org/sqlite`（纯 Go 驱动，无 CGO，保住 `make linux` 交叉编译）+ 标准库 `database/sql`。连接级 PRAGMA 挂在 DSN 上（WAL、`busy_timeout=5000`、`foreign_keys=ON`、`synchronous=NORMAL`），连接数固定为 1——SQLite 单写者，容量目标（≤100 用户、约 5,000 请求/日，约 180 万行/年）远低于其上限，不需要外部数据库服务。
 
-**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v18）共 **15 张业务表**——`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`、`watch_sources`、`watch_events`。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
+**表清单**（数据库文件 `DATA_DIR/spore.db`，迁移内嵌于 `internal/store/migrate.go`，以 `PRAGMA user_version` 版本化、只增不改）：当前 schema（v29）共 **22 张业务表**（`users`、`requests`、`usage_daily`、`audit_log`、`events`、`settings`、`web_sessions`、`channel_bindings`、`join_requests`、`joined_channels`、`system_metric_samples`、`cloud_uploads`、`dump_entries`、`watch_sources`、`watch_events`、`watch_invite_requests`、`sent_messages`、`error_logs`、`recovery_jobs`、`recovery_items`、`dump_migrate_runs`、`dump_migrate_items`）。每张表的字段、索引、外键与生命周期，以及 `settings` 的逻辑键、API 与持久化映射，以 **[数据库设计参考](./database-schema.md)为唯一权威来源**，此处不重复维护。
 
 **数据红线**：消息正文、caption、媒体本体与明文凭据（Token/Session/手机号）不入库；通知通道与 GitHub OAuth 的可轮换外部凭据以 AES-256-GCM 密文存于 `settings`，Web 访问密钥只存 SHA-256 哈希；云盘凭据在 `data/cloud-drive.json` 文件中，不进数据库。`data/session.json`、`data/peers.json`、`data/tmp/` 维持文件管理方式，不随数据库备份导出。时间字段统一为 Unix 毫秒时间戳。
 
@@ -1001,7 +1001,7 @@ flowchart TB
 | 存缓存（干净副本） | `tg_reuse_enabled`（副本只服务复用） | 无署名干净副本写进缓存频道并记录索引；另有"仅缓存补写"任务形态（不打扰用户）用于复制失败后的自愈补写 |
 | 云盘下载 | `/download [目的地]` 或配对提交 | 慢车道，避免占用临时目录挤占普通任务；不发媒体、不写缓存、不转发绑定频道 |
 | 缓存预热（/watch 监听频道） | 申请审批生效 | 频道新消息自动存进缓存频道，之后任何人发该链接直接秒回；同一条消息再按源投递计划转发——申请人专属目标（`forward_binding_channel_id`，绑定失效即停、不泄漏到全局）+ 管理员逐源全局镜像（`global_mirror_enabled`，用户源默认关），按目标去重、目标是监听源即运行时过滤防循环；受保护内容回退走同一份计划 |
-| 缓存迁移（迁移旧缓存） | 管理端触发 | 换缓存频道后把旧频道可读副本整批搬入并回写索引；后台执行、断点续跑 |
+| 缓存迁移（迁移旧缓存） | 管理端触发（频道设置页发起） | 换缓存频道后把旧频道可读副本整批搬入并回写索引；后台执行、断点续跑；v29 起运行与逐条明细持久化（`dump_migrate_runs/items`，保留 20 次），支持暂停/继续/取消（端点即写 DB 状态、执行循环批间感知），管理端「缓存迁移」页可看运行历史、进度与逐条明细；重启把遗留活跃运行收敛为 interrupted，可重新发起幂等续跑 |
 | 历史恢复 | 管理端发起 | 优先从缓存复制到指定目标，缓存不可读才重新提取；结果独立保存、不回写普通缓存，部分失败标 `uncertain` 不自动重试 |
 
 ### 12.2 维护约定（功能变更必读）

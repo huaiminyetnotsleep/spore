@@ -14,6 +14,7 @@
 | [Web 服务与 SPA 契约](./web-serving.md) | internal/web 服务形态（SPA 壳/302/公开面）、登录 API 安全语义、CSP | 已填写 |
 | [媒体双路径（引用/上传）](./telegram-media.md) | gotd fileid 桥接、Sender 引用契约与错误三分类、delivery_mode 观测 | 已填写 |
 | [已处理历史恢复](./history-recovery.md) | 恢复任务/API/SQLite/运行器/页面契约，部分发送与安全续跑边界 | 已填写 |
+| [缓存迁移](./dump-migrate.md) | 迁移运行持久化/状态机/DB 轮询控制门/明细页面契约，控制信号不放内存 | 已填写 |
 | [Bot 命令菜单与 botapi 契约](./telegram-botapi.md) | 命令注册、scope 覆盖语义、`/start` 兼容清理、`/join` 创建者保护与排障 | 已填写 |
 | [监听源专属转发目标](./watch-forwarding.md) | 投递计划（快路径/回退共用）、精确 Bot 路由、双向循环防护、`/watchtarget` 面板与 v28 策略列契约 | 已填写 |
 

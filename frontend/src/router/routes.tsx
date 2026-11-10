@@ -28,6 +28,7 @@ import {
   LineChartOutlined,
   LinkOutlined,
   SettingOutlined,
+  SwapOutlined,
   TeamOutlined,
   UserOutlined,
   UsergroupAddOutlined,
@@ -70,6 +71,16 @@ const BindingsPage = lazy(() =>
 const ChannelSettingsPage = lazy(() =>
   import("../features/channel-settings/ChannelSettingsPage").then((m) => ({
     default: m.ChannelSettingsPage,
+  })),
+);
+const DumpMigratePage = lazy(() =>
+  import("../features/dump-migrate/DumpMigratePage").then((m) => ({
+    default: m.DumpMigratePage,
+  })),
+);
+const DumpMigrateRunDetailPage = lazy(() =>
+  import("../features/dump-migrate/DumpMigrateRunDetailPage").then((m) => ({
+    default: m.DumpMigrateRunDetailPage,
   })),
 );
 const WatchSourcesPage = lazy(() =>
@@ -253,6 +264,25 @@ export const routeMeta = [
     groupKey: "request-channels",
     icon: <SettingOutlined />,
     menuVisible: true,
+  },
+  {
+    key: "dump-migrate",
+    path: "/dump-migrate",
+    label: "缓存迁移",
+    title: "缓存迁移",
+    groupKey: "request-channels",
+    icon: <SwapOutlined />,
+    menuVisible: true,
+  },
+  {
+    key: "dump-migrate-run-detail",
+    path: "/dump-migrate/runs/:id",
+    label: "迁移运行详情",
+    title: "迁移运行详情",
+    groupKey: "request-channels",
+    icon: <SwapOutlined />,
+    menuVisible: false,
+    parentKey: "dump-migrate",
   },
   {
     key: "recovery",
@@ -455,7 +485,7 @@ export const navigationGroups = [
   {
     key: "request-channels",
     label: "请求与频道",
-    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings", "recovery"],
+    routeKeys: ["requests", "channels", "channel-bindings", "channel-settings", "dump-migrate", "recovery"],
   },
   {
     key: "watch-group",
@@ -579,6 +609,8 @@ export function AppRoutes() {
         <Route path="/channels/:key" element={<ChannelDetailPage />} />
         <Route path="/channel-bindings" element={<BindingsPage />} />
         <Route path="/channel-settings" element={<ChannelSettingsPage />} />
+        <Route path="/dump-migrate" element={<DumpMigratePage />} />
+        <Route path="/dump-migrate/runs/:id" element={<DumpMigrateRunDetailPage />} />
         <Route path="/watch-sources" element={<WatchSourcesPage />} />
         <Route path="/watch-settings" element={<WatchSettingsPage />} />
         <Route path="/watch-events" element={<WatchEventsPage />} />

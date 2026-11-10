@@ -192,8 +192,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	s.mountAPIWrite(mux, "/api/v1/backup/import/json", s.handleAPIBackupImportJSON)
 	s.mountAPIWrite(mux, "/api/v1/backup/import/all-json", s.handleAPIBackupImportAllJSON)
 	s.mountAPIWrite(mux, "/api/v1/restart", s.handleAPIRestart)
-	mux.Handle("GET /api/v1/dumpcache/migrate", s.apiAuth(s.handleAPIDumpCacheMigrateGet))
-	mux.Handle("POST /api/v1/dumpcache/migrate", s.apiAuth(s.apiCSRF(s.handleAPIDumpCacheMigrateStart)))
+	// 缓存迁移：进度/发起（兼容旧端点）+ 运行历史/明细查询 + 暂停/继续/取消
+	s.registerAPIDumpCacheRoutes(mux)
 	mux.Handle("GET /api/v1/mtproto/status", s.apiAuth(s.handleAPIMTProtoStatus))
 	s.mountAPIWrite(mux, "/api/v1/mtproto/relogin", s.handleAPIMTProtoRelogin)
 	s.mountAPIWrite(mux, "/api/v1/mtproto/clear-session", s.handleAPIMTProtoClearSession)

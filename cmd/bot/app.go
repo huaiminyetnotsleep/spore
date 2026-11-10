@@ -473,13 +473,6 @@ func (h *dumpCacheHolder) StartMigrate(ctx context.Context, from int64) error {
 	return errors.New("缓存频道服务未就绪（MTProto 未连接）")
 }
 
-func (h *dumpCacheHolder) MigrateProgress() dumpcache.MigrateProgress {
-	if s := h.get(); s != nil {
-		return s.MigrateProgress()
-	}
-	return dumpcache.MigrateProgress{}
-}
-
 // dumpChannelsClosure 返回启用缓存频道 ID 列表解析闭包（syscfg
 // dump_channels 单一来源，旧单频道键/env 自动折算）：空列表 = 复用关闭。
 // 闭包读 settings，严禁在 store 事务视图内调用（单连接死锁）。
@@ -494,6 +487,12 @@ func (a *app) dumpChannelsClosure(ctx context.Context) func() []int64 {
 // 性校验与启用频道解析注入 access（缓存补写资格判定与缓存频道同源过滤）。
 func (a *app) newDumpService(ctx context.Context) *dumpcache.Service {
 	dumpChannels := a.dumpChannelsClosure(ctx)
+	// 遗留迁移运行收敛（v29）：上一进程崩溃遗留或上一 MTProto 生命周期
+	// 仍在执行的 running/paused 运行标记 interrupted——旧实例的执行循环
+	// 经 DB 状态感知后退出；管理员可重新发起（幂等续跑）。
+	if err := a.st.ReconcileDumpMigrate(ctx); err != nil {
+		a.log.Warn("收敛遗留缓存迁移运行失败", "error", err.Error())
+	}
 	dumpSvc := dumpcache.New(a.pool.SenderFor(0), a.pool.SenderFor, a.st, dumpChannels, a.log)
 	// 写失败/恢复上报事件中心（dump.channel_write_failed）：缓存频道被封
 	// 不中断服务，写失败是唯一信号，不能只有进程日志。

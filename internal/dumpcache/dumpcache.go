@@ -71,10 +71,6 @@ type Service struct {
 	events   Events // 写入失败/恢复事件上报；nil 跳过（SetEvents 在服务发布前调用）
 
 	hintOnce sync.Once // 首次写失败的配置提示只打一次
-
-	// migrate 是管理端迁移工具的进度态（nil = 从未发起）；见 migrate.go
-	migrateMu sync.Mutex
-	migrate   *MigrateProgress
 }
 
 // New 创建缓存频道服务；channels 闭包返回空时 Enabled() 恒为 false。

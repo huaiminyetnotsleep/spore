@@ -1614,9 +1614,11 @@ MTProto 状态响应（`GET /api/v1/mtproto/status`）在 `state=offline` 时附
 
 ---
 
-## 12b. 缓存频道迁移（v24）
+## 12b. 缓存频道迁移（v24；v29 持久化与控制）
 
-把旧缓存频道中仍可读的副本整批复制到当前**全部启用**的缓存频道（免重新提取，逐频道落新消息坐标），供新增/切换缓存频道或升级后重建秒级复用。业务核心在 `internal/dumpcache`：分批限速执行、后台运行、断点可续（重启后重新发起继续）；目标频道已有现行条目自动跳过；源频道不可读时中止（剩余条目由复用自愈重建）。
+把旧缓存频道中仍可读的副本整批复制到当前**全部启用**的缓存频道（免重新提取，逐频道落新消息坐标），供新增/切换缓存频道或升级后重建秒级复用。业务核心在 `internal/dumpcache`：分批限速执行、后台运行、断点可续（重启后重新发起继续）；目标频道已有现行条目自动跳过；源频道不可读时结束并记录原因（剩余条目由复用自愈重建）。
+
+v29 起运行与逐条明细持久化（`dump_migrate_runs` / `dump_migrate_items`）：每次发起一条运行记录（running/paused/completed/cancelled/interrupted 状态机），逐条处理结果落明细（来源坐标 → 各目标频道新消息 ID 或错误），聚合计数由明细求和得出；保留最近 20 次运行（发起新运行时自动清理更早记录）。暂停/继续/取消由端点即写 DB 状态、执行循环批间感知（秒级生效）；重启把遗留 running/paused 收敛为 interrupted（可重新发起，幂等续跑）。明细只存频道/消息 ID、状态与错误文本，不存消息正文/媒体 URL（数据范围红线）。管理端页面：频道设置页发起（唯一入口），「缓存迁移」页（`/dump-migrate`）查看运行历史、进度与逐条明细并执行暂停/继续/取消。
 
 ### GET /api/v1/dumpcache/migrate
 
@@ -1627,11 +1629,45 @@ MTProto 状态响应（`GET /api/v1/mtproto/status`）在 `state=offline` 时附
 | `configured` | bool | 当前是否存在启用的缓存频道 |
 | `channel_id` | int64 | 首个启用缓存频道 ID（兼容派生值；多频道以 `progress.to` 为准） |
 | `suggest_from` | int64 | 建议源频道：settings 键 `dump_channel_legacy_id`（首次查询时若存在 `dump_channel_id=0` 的升级前存量条目，按当时生效频道记录一次） |
-| `progress` | object | `{running, from, to, total, done, failed, skipped, started_at, finished_at?, last_error?}`；`to` 为目标启用缓存频道 ID 数组（发起时快照，源频道除外） |
+| `progress` | object | `{running, paused, run_id, from, to, total, done, failed, skipped, started_at, finished_at?, last_error?}`；由最新一次持久化运行合成（从未发起为零视图）。`to` 为目标启用缓存频道 ID 数组（发起时快照，源频道除外）；`paused`/`run_id` 为 v29 新增，旧客户端可忽略 |
 
 ### POST /api/v1/dumpcache/migrate
 
-发起迁移（认证 + CSRF）。请求体：`{"from_channel_id": -100…}`。目标为当前全部启用的缓存频道（源频道除外；源频道仍在启用集合时其条目保留有效）。拒绝条件（受控 400）：无启用缓存频道、源频道即全部启用频道、已有迁移进行中、ID 非法。响应 `{"ok":true,"progress":…}`。审计：`dumpcache.migrate`。
+发起迁移（认证 + CSRF）。请求体：`{"from_channel_id": -100…}`。目标为当前全部启用的缓存频道（源频道除外；源频道仍在启用集合时其条目保留有效）。拒绝条件（受控 400）：无启用缓存频道、源频道即全部启用频道、已有迁移运行（running **或** paused）、ID 非法（DB 唯一活跃索引硬保证同时至多一个活跃运行）。响应 `{"ok":true,"progress":…}`。审计：`dumpcache.migrate_run.create`（与运行行同事务）。
+
+### POST /api/v1/dumpcache/migrate/pause · resume · cancel（v29）
+
+暂停 / 继续 / 取消**当前活跃运行**（认证 + CSRF，无请求体、无 id——同时至多一个活跃运行）。状态即写 DB、执行循环批间生效（暂停最迟一批内停止，恢复从断点继续；取消结束运行、保留已迁移明细，之后可重新发起幂等续跑）。前置状态不符（如无活跃运行、终态后再控制、paused 时暂停）返回受控 409（`CONFLICT`，与重连/重启等状态冲突端点同约定）。响应为转换后的运行行（同 `GET …/runs/{id}`）。各动作审计：`dumpcache.migrate`（`action`=pause/resume/cancel）。
+
+### GET /api/v1/dumpcache/migrate/runs（v29）
+
+分页返回运行历史（认证；`page`/`page_size`，标准 ListEnvelope，新到旧）。运行行字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | int64 | 运行 ID |
+| `status` | string | `running` / `paused` / `completed` / `cancelled` / `interrupted`（重启中断） |
+| `from_channel_id` | int64 | 源缓存频道 ID |
+| `to` | int64[] | 目标启用缓存频道快照 |
+| `total` | int64 | 发起时源频道条目总数 |
+| `done` / `skipped` / `failed` | int64 | 明细聚合：已迁移 / 已跳过（目标均已有现行条目）/ 失败条目数（目标级失败原因在明细 `results`） |
+| `created_at` / `updated_at` / `finished_at` | int64 | 开始 / 最近活动（批间心跳）/ 结束时间（未结束为 0） |
+| `last_error` | string | 结束原因（源频道不可读中止、服务重启中断等；正常完成为空） |
+
+### GET /api/v1/dumpcache/migrate/runs/{id} · GET /api/v1/dumpcache/migrate/runs/{id}/items（v29）
+
+单次运行详情（同上行结构）；及其逐条明细分页（`status` 可选过滤：`migrated`/`skipped`/`failed`，非法值 400）。明细行字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` / `run_id` | int64 | 明细 ID / 归属运行 |
+| `channel_key` / `message_id` | string / int | 来源坐标 |
+| `status` | string | `migrated` / `skipped` / `failed` |
+| `results` | array | 各目标频道落地：`{channel_id, message_ids?}` 成功带新消息 ID，失败带 `error` |
+| `error` | string | 条目级失败摘要（failed 时） |
+| `created_at` | int64 | 处理时间 |
+
+运行不存在返回 404。
 
 ---
 

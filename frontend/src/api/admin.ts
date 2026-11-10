@@ -5,6 +5,7 @@
  * 本模块只做查询（GET）；写操作 API 随后续迁移任务补充。
  */
 import { apiRequest } from "./client";
+import { postJSON } from "./mutations";
 
 /** 列表统一分页信封。 */
 export interface ListEnvelope<T> {
@@ -992,9 +993,12 @@ export function fetchMTProtoStatus(): Promise<MTProtoStatus> {
   return apiRequest<MTProtoStatus>("/api/v1/mtproto/status");
 }
 
-/** 缓存迁移进度（internal/dumpcache MigrateProgress 同构）。 */
+/** 缓存迁移进度（GET /api/v1/dumpcache/migrate 的 progress 形状，
+ * internal/web dumpMigrateProgressView 同构；paused/run_id 为 v29 新增）。 */
 export interface DumpMigrateProgress {
   running: boolean;
+  paused?: boolean;
+  run_id?: number;
   from: number;
   /** 目标启用缓存频道（发起时快照，源频道除外）。 */
   to: number[];
@@ -1018,6 +1022,70 @@ export interface DumpMigrateView {
 /** 查询缓存迁移进度与建议源频道。 */
 export function fetchDumpMigrate(): Promise<DumpMigrateView> {
   return apiRequest<DumpMigrateView>("/api/v1/dumpcache/migrate");
+}
+
+/** 迁移运行状态（internal/store dump_migrate_runs 状态机）。 */
+export type DumpMigrateRunStatus = "running" | "paused" | "completed" | "cancelled" | "interrupted";
+/** 迁移明细条目状态。 */
+export type DumpMigrateItemStatus = "migrated" | "skipped" | "failed";
+
+/** 单条明细中一个目标频道的落地结果：成功带新消息 ID，失败带错误。 */
+export interface DumpMigrateItemResult {
+  channel_id: number;
+  message_ids?: number[];
+  error?: string;
+}
+
+/** 迁移运行（GET /api/v1/dumpcache/migrate/runs 行，含明细聚合计数）。 */
+export interface DumpMigrateRun {
+  id: number;
+  status: DumpMigrateRunStatus;
+  from_channel_id: number;
+  to: number[];
+  total: number;
+  created_at: number;
+  updated_at: number;
+  finished_at: number;
+  last_error: string;
+  done: number;
+  skipped: number;
+  failed: number;
+}
+
+/** 迁移明细（GET /api/v1/dumpcache/migrate/runs/{id}/items 行）。 */
+export interface DumpMigrateItem {
+  id: number;
+  run_id: number;
+  channel_key: string;
+  message_id: number;
+  status: DumpMigrateItemStatus;
+  results: DumpMigrateItemResult[];
+  error: string;
+  created_at: number;
+}
+
+/** 迁移控制动作（作用于当前活跃运行，无 id）。 */
+export type DumpMigrateControl = "pause" | "resume" | "cancel";
+
+/** 分页查询迁移运行历史（新到旧）。 */
+export function fetchDumpMigrateRuns(page = 1, pageSize = 20): Promise<ListEnvelope<DumpMigrateRun>> {
+  return apiRequest<ListEnvelope<DumpMigrateRun>>(`/api/v1/dumpcache/migrate/runs?page=${page}&page_size=${pageSize}`);
+}
+
+/** 查询单次迁移运行详情（含聚合计数）。 */
+export function fetchDumpMigrateRun(id: number): Promise<DumpMigrateRun> {
+  return apiRequest<DumpMigrateRun>(`/api/v1/dumpcache/migrate/runs/${id}`);
+}
+
+/** 分页查询单次运行的明细，status 可选筛选。 */
+export function fetchDumpMigrateItems(id: number, page = 1, pageSize = 20, status?: DumpMigrateItemStatus): Promise<ListEnvelope<DumpMigrateItem>> {
+  return apiRequest<ListEnvelope<DumpMigrateItem>>(
+    `/api/v1/dumpcache/migrate/runs/${id}/items?page=${page}&page_size=${pageSize}${status ? `&status=${status}` : ""}`);
+}
+
+/** 暂停/继续/取消当前活跃的迁移运行。 */
+export function controlDumpMigrate(action: DumpMigrateControl): Promise<DumpMigrateRun> {
+  return postJSON<DumpMigrateRun>(`/api/v1/dumpcache/migrate/${action}`, {});
 }
 
 // ---- 频道绑定（频道绑定管理页） ----
